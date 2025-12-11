@@ -13,8 +13,53 @@ import threading
 import queue
 import re
 import json
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+
+
+# ============================================================
+# 로깅 설정
+# ============================================================
+
+def setup_logging():
+    """로깅 시스템 초기화 - 파일 및 콘솔 출력"""
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    log_file = log_dir / f"subtitle_{datetime.now().strftime('%Y%m%d')}.log"
+    
+    # 로거 설정
+    logger = logging.getLogger("SubtitleExtractor")
+    logger.setLevel(logging.DEBUG)
+    
+    # 이미 핸들러가 있으면 추가하지 않음
+    if logger.handlers:
+        return logger
+    
+    # 파일 핸들러 (DEBUG 레벨)
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_format = logging.Formatter(
+        '%(asctime)s [%(levelname)s] %(funcName)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    file_handler.setFormatter(file_format)
+    
+    # 콘솔 핸들러 (INFO 레벨)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_format = logging.Formatter('[%(levelname)s] %(message)s')
+    console_handler.setFormatter(console_format)
+    
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    return logger
+
+
+# 전역 로거 초기화
+logger = setup_logging()
 
 try:
     from PyQt6.QtWidgets import (
@@ -43,6 +88,36 @@ try:
 except ImportError:
     print("selenium 필요: pip install selenium")
     sys.exit(1)
+
+
+# ============================================================
+# 상수 정의
+# ============================================================
+
+class Config:
+    """프로그램 설정 상수"""
+    VERSION = "10.1"  # 디버깅/리팩토링 버전
+    
+    # 타이밍 상수 (초)
+    SUBTITLE_FINALIZE_DELAY = 2.0      # 자막 확정까지 대기 시간
+    FINALIZE_CHECK_INTERVAL = 500      # 자막 확정 체크 간격 (ms)
+    QUEUE_PROCESS_INTERVAL = 100       # 메시지 큐 처리 간격 (ms)
+    STATS_UPDATE_INTERVAL = 1000       # 통계 업데이트 간격 (ms)
+    SUBTITLE_CHECK_INTERVAL = 0.2      # 자막 확인 간격 (초)
+    THREAD_STOP_TIMEOUT = 3            # 스레드 종료 대기 시간 (초)
+    PAGE_LOAD_WAIT = 3                 # 페이지 로딩 대기 시간 (초)
+    WEBDRIVER_WAIT_TIMEOUT = 20        # WebDriver 대기 타임아웃 (초)
+    SCRIPT_DELAY = 0.5                 # 스크립트 실행 후 대기 (초)
+    
+    # 기본 CSS 선택자
+    DEFAULT_SELECTORS = [
+        "#viewSubtit .incont",
+        "#viewSubtit",
+        ".subtitle_area"
+    ]
+    
+    # 기본 URL
+    DEFAULT_URL = "https://assembly.webcast.go.kr/main/player.asp"
 
 
 # ============================================================
@@ -364,11 +439,10 @@ class SubtitleEntry:
 # ============================================================
 
 class MainWindow(QMainWindow):
-    VERSION = "10.0"
     
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"국회 의사중계 자막 추출기 v{self.VERSION}")
+        self.setWindowTitle(f"국회 의사중계 자막 추출기 v{Config.VERSION}")
         self.setMinimumSize(1100, 750)
         self.resize(1200, 800)
         
@@ -383,6 +457,7 @@ class MainWindow(QMainWindow):
         self.worker = None
         self.driver = None
         self.is_running = False
+        self.stop_event = threading.Event()  # 스레드 안전한 종료 시그널
         self.start_time = None
         self.last_subtitle = ""
         
@@ -406,12 +481,12 @@ class MainWindow(QMainWindow):
         # 타이머
         self.queue_timer = QTimer(self)
         self.queue_timer.timeout.connect(self._process_message_queue)
-        self.queue_timer.start(100)
+        self.queue_timer.start(Config.QUEUE_PROCESS_INTERVAL)
         
         self.stats_timer = QTimer(self)
         self.stats_timer.timeout.connect(self._update_stats)
         
-        # 자막 확정 타이머 (500ms마다 체크, 2초 동안 변경 없으면 확정)
+        # 자막 확정 타이머
         self.finalize_timer = QTimer(self)
         self.finalize_timer.timeout.connect(self._check_finalize)
         
@@ -721,7 +796,7 @@ class MainWindow(QMainWindow):
                     elif isinstance(data, list):
                         return {url: "" for url in data}
         except Exception as e:
-            print(f"URL 히스토리 로드 오류: {e}")
+            logger.warning(f"URL 히스토리 로드 오류: {e}")
         return {}
     
     def _save_url_history(self):
@@ -732,7 +807,7 @@ class MainWindow(QMainWindow):
             with open("url_history.json", 'w', encoding='utf-8') as f:
                 json.dump(self.url_history, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"URL 히스토리 저장 오류: {e}")
+            logger.warning(f"URL 히스토리 저장 오류: {e}")
     
     def _add_to_history(self, url, tag=""):
         """URL 히스토리에 추가"""
@@ -840,10 +915,11 @@ class MainWindow(QMainWindow):
                     self.realtime_file = open(filename, 'w', encoding='utf-8')
                     self.status_label.setText(f"실시간 저장: {filename}")
                 except Exception as e:
-                    print(f"실시간 저장 파일 생성 오류: {e}")
+                    logger.error(f"실시간 저장 파일 생성 오류: {e}")
             
             # UI 업데이트
             self.is_running = True
+            self.stop_event.clear()  # 종료 이벤트 초기화
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             self.url_combo.setEnabled(False)
@@ -852,10 +928,13 @@ class MainWindow(QMainWindow):
             
             self.status_label.setText("Chrome 브라우저 시작 중...")
             
+            # UI 값을 시작 시점에 복사 (스레드 안전성)
+            headless = self.headless_check.isChecked()
+            
             # 워커 시작
             self.worker = threading.Thread(
                 target=self._extraction_worker,
-                args=(url, selector),
+                args=(url, selector, headless),
                 daemon=True
             )
             self.worker.start()
@@ -863,9 +942,7 @@ class MainWindow(QMainWindow):
             self.stats_timer.start(1000)
         
         except Exception as e:
-            print(f"시작 오류: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"시작 오류: {e}")
             self._reset_ui()
             QMessageBox.critical(self, "오류", f"시작 중 오류 발생: {e}")
     
@@ -874,7 +951,14 @@ class MainWindow(QMainWindow):
             return
         
         self.is_running = False
+        self.stop_event.set()  # 워커 스레드에 종료 신호
         self.status_label.setText("중지 중...")
+        
+        # 워커 스레드 종료 대기 (최대 3초)
+        if self.worker and self.worker.is_alive():
+            self.worker.join(timeout=3)
+            if self.worker.is_alive():
+                logger.warning("워커 스레드가 시간 내에 종료되지 않음")
         
         # 마지막 자막 저장
         if self.last_subtitle:
@@ -890,8 +974,8 @@ class MainWindow(QMainWindow):
         if self.driver:
             try:
                 self.driver.quit()
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"WebDriver 종료 중 오류 (무시됨): {e}")
             self.driver = None
         
         self._reset_ui()
@@ -908,9 +992,15 @@ class MainWindow(QMainWindow):
     
     # ========== 워커 스레드 ==========
     
-    def _extraction_worker(self, url, selector):
+    def _extraction_worker(self, url, selector, headless):
+        """자막 추출 워커 스레드
+        
+        Args:
+            url: 대상 웹사이트 URL
+            selector: 자막 요소 CSS 선택자
+            headless: 헤드리스 모드 여부 (시작 시점에 복사됨)
+        """
         driver = None
-        headless = self.headless_check.isChecked()
         
         try:
             options = Options()
@@ -950,7 +1040,7 @@ class MainWindow(QMainWindow):
                     self.message_queue.put(("status", f"자막 요소 찾음: {sel}"))
                     found = True
                     break
-                except:
+                except Exception:
                     continue
             
             if not found:
@@ -960,13 +1050,14 @@ class MainWindow(QMainWindow):
             self.message_queue.put(("status", "자막 모니터링 중"))
             
             last_check = time.time()
-            while self.is_running:
+            # stop_event 사용으로 더 빠른 종료 응답
+            while not self.stop_event.is_set():
                 try:
                     now = time.time()
                     if now - last_check >= 0.2:
                         try:
                             text = driver.find_element(By.CSS_SELECTOR, selector).text.strip()
-                        except:
+                        except (NoSuchElementException, StaleElementReferenceException):
                             text = ""
                         
                         text = self._clean_text(text)
@@ -975,22 +1066,23 @@ class MainWindow(QMainWindow):
                         
                         last_check = now
                     
-                    time.sleep(0.05)
+                    # stop_event 대기 (0.05초, 즉시 응답 가능)
+                    self.stop_event.wait(timeout=0.05)
                 except Exception as e:
-                    if self.is_running:
-                        print(f"오류: {e}")
+                    if not self.stop_event.is_set():
+                        logger.warning(f"모니터링 중 오류: {e}")
                     time.sleep(0.5)
         
         except Exception as e:
-            if self.is_running:
+            if not self.stop_event.is_set():
                 self.message_queue.put(("error", str(e)))
         
         finally:
             if driver:
                 try:
                     driver.quit()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"워커 WebDriver 종료 중 오류: {e}")
                 self.driver = None
             self.message_queue.put(("finished", ""))
     
@@ -1004,8 +1096,8 @@ class MainWindow(QMainWindow):
             try:
                 driver.execute_script(script)
                 time.sleep(0.5)
-            except:
-                pass
+            except Exception:
+                pass  # 자막 활성화 스크립트 실패는 무시
     
     def _clean_text(self, text):
         text = re.sub(r'\b\d{4}년\b', '', text)
@@ -1025,7 +1117,7 @@ class MainWindow(QMainWindow):
                 except queue.Empty:
                     break
         except Exception as e:
-            print(f"큐 처리 오류: {e}")
+            logger.error(f"큐 처리 오류: {e}")
     
     def _handle_message(self, msg_type, data):
         """개별 메시지 처리"""
@@ -1053,7 +1145,7 @@ class MainWindow(QMainWindow):
                 self.status_label.setText(f"완료 - {len(self.subtitles)}문장, {total_chars:,}자")
         
         except Exception as e:
-            print(f"메시지 처리 오류 ({msg_type}): {e}")
+            logger.error(f"메시지 처리 오류 ({msg_type}): {e}")
     
     def _process_raw_text(self, raw):
         if not raw or raw == self.last_subtitle:
@@ -1140,8 +1232,8 @@ class MainWindow(QMainWindow):
                             timestamp = self.subtitles[-1].timestamp.strftime('%H:%M:%S')
                             self.realtime_file.write(f"[{timestamp}] +{new_part}\n")
                             self.realtime_file.flush()
-                        except:
-                            pass
+                        except IOError as e:
+                            logger.warning(f"실시간 저장 쓰기 오류: {e}")
                 return
             
             # 텍스트 겹침 확인 (앞부분이 잘려서 시작하는 경우)
@@ -1158,8 +1250,8 @@ class MainWindow(QMainWindow):
                             try:
                                 self.realtime_file.write(f"+ {new_part}\n")
                                 self.realtime_file.flush()
-                            except:
-                                pass
+                            except IOError as e:
+                                logger.warning(f"실시간 저장 쓰기 오류: {e}")
                     return
         
         # 첫 번째 자막 또는 완전히 새로운 문장
@@ -1175,8 +1267,8 @@ class MainWindow(QMainWindow):
                 timestamp = entry.timestamp.strftime('%H:%M:%S')
                 self.realtime_file.write(f"[{timestamp}] {text}\n")
                 self.realtime_file.flush()
-            except:
-                pass
+            except IOError as e:
+                logger.warning(f"실시간 저장 쓰기 오류: {e}")
         
         self._refresh_text()
     
@@ -1623,15 +1715,24 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         
+        # 타이머 정리
+        self.queue_timer.stop()
+        self.stats_timer.stop()
+        self.finalize_timer.stop()
+        
         self.is_running = False
         if self.realtime_file:
-            self.realtime_file.close()
+            try:
+                self.realtime_file.close()
+            except Exception as e:
+                logger.debug(f"파일 닫기 오류: {e}")
         if self.driver:
             try:
                 self.driver.quit()
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"WebDriver 종료 오류: {e}")
         
+        logger.info("프로그램 종료")
         event.accept()
 
 
@@ -1658,9 +1759,7 @@ def main():
             sys.exit(app.exec())
     
     except Exception as e:
-        print(f"프로그램 오류: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"프로그램 오류: {e}")
         QMessageBox.critical(None, "오류", f"프로그램 실행 중 오류 발생:\n{e}")
 
 
