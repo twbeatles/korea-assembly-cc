@@ -1042,9 +1042,11 @@ class StatCard(QFrame):
     def __init__(self, label, value="0", parent=None):
         super().__init__(parent)
         self.setObjectName("statCard")
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(85)
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(4)
         
         self.value_label = QLabel(value)
@@ -1055,8 +1057,10 @@ class StatCard(QFrame):
         self.name_label.setProperty("class", "stat-label")
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
+        layout.addStretch()
         layout.addWidget(self.value_label)
         layout.addWidget(self.name_label)
+        layout.addStretch()
     
     def set_value(self, value):
         self.value_label.setText(str(value))
@@ -1319,7 +1323,7 @@ class MainWindow(QMainWindow):
         # 왼쪽: 자막 영역
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setContentsMargins(0, 0, 8, 0)
         left_layout.setSpacing(12)
         
         # 검색 바
@@ -1371,17 +1375,23 @@ class MainWindow(QMainWindow):
         
         splitter.addWidget(left_widget)
         
-        # 오른쪽: 사이드바
+        # 오른쪽: 사이드바 (스크롤 영역 추가)
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setMinimumWidth(340)
+        
         right_widget = QWidget()
-        right_widget.setFixedWidth(340)
         right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(8, 0, 0, 0)
         right_layout.setSpacing(16)
         
         # 통계 카드들
         stats_frame = QFrame()
         stats_layout = QGridLayout(stats_frame)
         stats_layout.setSpacing(12)
+        stats_layout.setContentsMargins(0, 0, 0, 0)
         
         self.stat_time = StatCard("실행 시간", "--:--:--")
         self.stat_chars = StatCard("글자 수", "0")
@@ -1401,7 +1411,8 @@ class MainWindow(QMainWindow):
         
         self.preview_text = QTextEdit()
         self.preview_text.setReadOnly(True)
-        self.preview_text.setMaximumHeight(120)
+        self.preview_text.setMinimumHeight(100)
+        self.preview_text.setMaximumHeight(150)
         self.preview_text.setFont(QFont("Malgun Gothic", 12))
         
         preview_layout.addWidget(self.preview_text)
@@ -1412,7 +1423,8 @@ class MainWindow(QMainWindow):
         speaker_layout = QVBoxLayout(speaker_group)
         
         self.speaker_list = QListWidget()
-        self.speaker_list.setMaximumHeight(150)
+        self.speaker_list.setMinimumHeight(120)
+        self.speaker_list.setMaximumHeight(200)
         
         speaker_layout.addWidget(self.speaker_list)
         right_layout.addWidget(speaker_group)
@@ -1445,8 +1457,11 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(action_group)
         right_layout.addStretch()
         
-        splitter.addWidget(right_widget)
-        splitter.setSizes([900, 340])
+        right_scroll.setWidget(right_widget)
+        splitter.addWidget(right_scroll)
+        
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
         
         return splitter
     
