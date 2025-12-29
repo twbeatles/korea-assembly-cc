@@ -1,12 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-국회 의사중계 자막 추출기 v14.0 - PyInstaller Spec File
+국회 의사중계 자막 추출기 v15.1 - PyInstaller Spec File (Onefile Edition)
 
 빌드 명령어:
     pyinstaller subtitle_extractor.spec
 
 생성되는 파일:
-    dist/subtitle_extractor/subtitle_extractor.exe
+    dist/subtitle_extractor.exe (단일 실행 파일)
 """
 
 import sys
@@ -55,6 +55,12 @@ try:
 except Exception:
     pass
 
+# PyQt6 서브모듈 자동 수집
+try:
+    hiddenimports += collect_submodules('PyQt6')
+except Exception:
+    pass
+
 # 제외할 모듈 (용량 최적화)
 excludes = [
     'tkinter',
@@ -76,7 +82,7 @@ excludes = [
 
 # Analysis 설정
 a = Analysis(
-    ['251214 국회의사중계 자막.py'],
+    ['251226 국회의사중계 자막.py'],
     pathex=[],
     binaries=[],
     datas=[],
@@ -94,37 +100,32 @@ a = Analysis(
 # PYZ 설정
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
-# EXE 설정
+# EXE 설정 (Onefile 모드)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='subtitle_extractor',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=False,  # GUI 앱이므로 콘솔 숨김
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # 아이콘 파일이 있으면 경로 지정: icon='icon.ico'
+    icon=None,
 )
 
-# COLLECT 설정 (폴더 모드)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='subtitle_extractor',
-)
+# COLLECT 설정 제거 (Onefile 모드에서는 사용하지 않음)
+# coll = COLLECT(...)
 
 # ============================================================
 # 빌드 후 추가 작업 안내
@@ -132,26 +133,18 @@ coll = COLLECT(
 """
 빌드 완료 후:
 
-1. dist/subtitle_extractor/ 폴더에 실행 파일이 생성됩니다.
+1. dist/subtitle_extractor.exe (단일 파일)이 생성됩니다.
 
-2. Chrome WebDriver는 Selenium 4.x에서 자동 관리됩니다.
-   별도의 chromedriver.exe 파일이 필요하지 않습니다.
+2. 이 파일 하나만 배포하면 됩니다.
 
-3. 배포 시 필요한 파일:
-   - dist/subtitle_extractor/ 폴더 전체
-   
-4. 선택적 파일 (사용자 설정):
-   - committee_presets.json (상임위 프리셋)
-   - url_history.json (URL 히스토리)
+3. 실행 시 주의사항:
+   - 처음 실행 시 임시 폴더에 압축을 풀기 때문에 실행 시간이 조금 더 걸릴 수 있습니다.
+   - 일부 백신 프로그램이 오탐지할 수 있습니다.
+   - 로그 파일(logs), 프리셋(presets) 등은 실행 파일과 같은 위치에 생성됩니다.
 
-5. 자동 생성되는 폴더:
-   - logs/ (로그 파일)
-   - sessions/ (세션 저장)
-   - backups/ (자동 백업)
-   - realtime_output/ (실시간 저장)
+4. 디버깅 시:
+   - console=True 로 변경하여 빌드 후 에러 메시지를 확인하세요.
 
-문제 해결:
-- PyQt6 관련 오류: pip install PyQt6 --upgrade
-- Selenium 관련 오류: pip install selenium --upgrade
-- 빌드 오류: pip install pyinstaller --upgrade
+5. 버전 정보:
+   - v15.1: UI/UX 리팩토링, 테마 호환성 개선, UI 클리핑 수정
 """

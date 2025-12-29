@@ -99,7 +99,7 @@ except ImportError:
 
 class Config:
     """프로그램 설정 상수"""
-    VERSION = "14.0"  # UI/UX 리팩토링, 통계 내보내기, 안정성 개선
+    VERSION = "15.1"  # UI 클리핑 수정, 테마 호환성 개선
     APP_NAME = "국회 의사중계 자막 추출기"
     
     # 타이밍 상수 (초)
@@ -165,324 +165,548 @@ class Config:
 # ============================================================
 
 DARK_THEME = """
+/* ===== 다크 테마 - 프리미엄 모던 디자인 ===== */
 QMainWindow, QWidget {
-    background-color: #1a1a2e;
-    color: #eaeaea;
-    font-family: '맑은 고딕', 'Malgun Gothic', sans-serif;
+    background-color: #0d1117;
+    color: #e6edf3;
+    font-family: '맑은 고딕', 'Malgun Gothic', 'Segoe UI', sans-serif;
 }
+
+/* 라벨 */
 QLabel { 
-    color: #eaeaea; 
+    color: #e6edf3; 
 }
 QLabel#headerLabel {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: bold;
-    color: #4fc3f7;
-    padding: 10px;
+    color: #58a6ff;
+    padding: 12px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(88, 166, 255, 0.1), stop:1 rgba(136, 146, 255, 0.1));
+    border-radius: 10px;
 }
+
+/* 버튼 기본 스타일 */
 QPushButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0f3460, stop:1 #0a2540);
-    color: white;
-    border: none;
-    padding: 10px 20px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #21262d, stop:1 #161b22);
+    color: #e6edf3;
+    border: 1px solid #30363d;
+    padding: 10px 22px;
     border-radius: 8px;
     font-weight: bold;
     font-size: 12px;
 }
 QPushButton:hover { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1a4a7a, stop:1 #0f3460);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #30363d, stop:1 #21262d);
+    border-color: #58a6ff;
 }
 QPushButton:pressed {
-    background: #0a2540;
+    background: #161b22;
+    border-color: #58a6ff;
 }
 QPushButton:disabled { 
-    background-color: #333; 
-    color: #666; 
+    background-color: #21262d; 
+    color: #484f58;
+    border-color: #21262d;
 }
+
+/* 시작 버튼 - 그린 그라데이션 */
 QPushButton#startBtn { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00c853, stop:1 #00a86b);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #238636, stop:1 #1a7f37);
+    border: 1px solid #2ea043;
     font-size: 14px;
-    min-width: 120px;
+    min-width: 130px;
+    padding: 12px 24px;
 }
 QPushButton#startBtn:hover { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00e676, stop:1 #00c853);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2ea043, stop:1 #238636);
+    border-color: #3fb950;
 }
+QPushButton#startBtn:pressed {
+    background: #1a7f37;
+}
+
+/* 중지 버튼 - 레드 그라데이션 */
 QPushButton#stopBtn { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff5252, stop:1 #e94560);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #da3633, stop:1 #b62324);
+    border: 1px solid #f85149;
     font-size: 14px;
-    min-width: 120px;
+    min-width: 130px;
+    padding: 12px 24px;
 }
 QPushButton#stopBtn:hover { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff8a80, stop:1 #ff5252);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f85149, stop:1 #da3633);
+    border-color: #ff7b72;
 }
+QPushButton#stopBtn:pressed {
+    background: #b62324;
+}
+
+/* 입력 필드 */
 QLineEdit, QComboBox {
-    background-color: #16213e;
-    border: 2px solid #0f3460;
+    background-color: #161b22;
+    border: 1px solid #30363d;
     border-radius: 8px;
-    padding: 10px;
-    color: #eaeaea;
+    padding: 10px 14px;
+    color: #e6edf3;
     font-size: 13px;
+    selection-background-color: #264f78;
 }
 QLineEdit:focus, QComboBox:focus {
-    border: 2px solid #4fc3f7;
+    border: 1px solid #58a6ff;
+    background-color: #0d1117;
+}
+QLineEdit:hover, QComboBox:hover {
+    border-color: #484f58;
 }
 QComboBox::drop-down {
     border: none;
-    padding-right: 8px;
+    padding-right: 10px;
+}
+QComboBox::down-arrow {
+    width: 12px;
+    height: 12px;
 }
 QComboBox QAbstractItemView {
-    background-color: #16213e;
-    color: #eaeaea;
-    border: 2px solid #0f3460;
-    border-radius: 5px;
-    selection-background-color: #0f3460;
-    selection-color: #eaeaea;
+    background-color: #161b22;
+    color: #e6edf3;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    selection-background-color: #21262d;
+    selection-color: #58a6ff;
     padding: 5px;
+    outline: none;
 }
+
+/* 텍스트 편집 영역 */
 QTextEdit {
-    background-color: #0d1421;
-    border: 2px solid #0f3460;
-    border-radius: 10px;
-    padding: 15px;
-    color: #eaeaea;
+    background-color: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 16px;
+    color: #e6edf3;
     font-size: 14px;
-    line-height: 1.5;
+    line-height: 1.6;
+    selection-background-color: #264f78;
 }
+QTextEdit:focus {
+    border-color: #58a6ff;
+}
+
+/* 그룹박스 - 카드 스타일 */
 QGroupBox {
-    border: 2px solid #0f3460;
-    border-radius: 10px;
-    margin-top: 15px;
-    padding-top: 15px;
-    color: #4fc3f7;
+    background-color: rgba(22, 27, 34, 0.6);
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    margin-top: 20px;
+    padding: 20px 15px 15px 15px;
     font-weight: bold;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
-    left: 15px;
-    padding: 0 8px;
-    color: #4fc3f7;
+    left: 18px;
+    padding: 0 10px;
+    color: #58a6ff;
+    font-size: 13px;
+    background-color: #0d1117;
+    border-radius: 4px;
 }
+
+/* 체크박스 */
 QCheckBox {
-    spacing: 8px;
-    color: #eaeaea;
+    spacing: 10px;
+    color: #e6edf3;
 }
 QCheckBox::indicator {
     width: 18px;
     height: 18px;
     border-radius: 4px;
-    border: 2px solid #0f3460;
-    background: #16213e;
+    border: 1px solid #30363d;
+    background: #161b22;
 }
 QCheckBox::indicator:checked {
-    background: #4fc3f7;
-    border-color: #4fc3f7;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #58a6ff, stop:1 #8892ff);
+    border-color: #58a6ff;
 }
 QCheckBox::indicator:hover {
-    border-color: #4fc3f7;
+    border-color: #58a6ff;
 }
+QCheckBox::indicator:checked:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #79b8ff, stop:1 #a0aaff);
+}
+
+/* 프로그레스바 */
 QProgressBar {
-    background-color: #16213e;
+    background-color: #21262d;
     border-radius: 6px;
     height: 8px;
     text-align: center;
+    border: none;
 }
 QProgressBar::chunk { 
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4fc3f7, stop:1 #e94560);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #58a6ff, stop:0.5 #8892ff, stop:1 #a371f7);
     border-radius: 6px; 
 }
+
+/* 메뉴바 */
 QMenuBar { 
-    background-color: #16213e; 
-    color: #eaeaea; 
-    padding: 5px;
+    background-color: #161b22; 
+    color: #e6edf3;
+    padding: 6px;
+    border-bottom: 1px solid #21262d;
 }
 QMenuBar::item { 
-    padding: 8px 15px;
-    border-radius: 5px;
+    padding: 8px 16px;
+    border-radius: 6px;
 }
 QMenuBar::item:selected { 
-    background-color: #0f3460; 
+    background-color: #21262d; 
 }
+
+/* 메뉴 */
 QMenu { 
-    background-color: #16213e; 
-    color: #eaeaea; 
-    border: 2px solid #0f3460;
-    border-radius: 8px;
-    padding: 5px;
+    background-color: #161b22; 
+    color: #e6edf3; 
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 6px;
 }
 QMenu::item { 
-    padding: 8px 25px;
-    border-radius: 5px;
+    padding: 10px 28px;
+    border-radius: 6px;
 }
 QMenu::item:selected { 
-    background-color: #0f3460; 
+    background-color: #21262d;
+    color: #58a6ff;
 }
+QMenu::separator {
+    height: 1px;
+    background-color: #30363d;
+    margin: 6px 10px;
+}
+
+/* 스크롤바 */
 QScrollBar:vertical {
-    background: #0d1421;
+    background: #0d1117;
     width: 12px;
     border-radius: 6px;
+    margin: 4px 2px;
 }
 QScrollBar::handle:vertical {
-    background: #0f3460;
-    border-radius: 6px;
-    min-height: 30px;
+    background: #30363d;
+    border-radius: 5px;
+    min-height: 40px;
 }
 QScrollBar::handle:vertical:hover {
-    background: #1a4a7a;
+    background: #484f58;
 }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QScrollBar:horizontal {
+    background: #0d1117;
+    height: 12px;
+    border-radius: 6px;
+    margin: 2px 4px;
+}
+QScrollBar::handle:horizontal {
+    background: #30363d;
+    border-radius: 5px;
+    min-width: 40px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #484f58;
+}
+
+/* 스플리터 */
 QSplitter::handle {
-    background: #0f3460;
+    background: #30363d;
+    border-radius: 2px;
+}
+QSplitter::handle:hover {
+    background: #58a6ff;
+}
+
+/* 프레임 */
+QFrame {
+    border: none;
 }
 """
 
 LIGHT_THEME = """
+/* ===== 라이트 테마 - 클린 모던 디자인 ===== */
 QMainWindow, QWidget {
-    background-color: #f8f9fa;
-    color: #333333;
-    font-family: '맑은 고딕', 'Malgun Gothic', sans-serif;
+    background-color: #ffffff;
+    color: #24292f;
+    font-family: '맑은 고딕', 'Malgun Gothic', 'Segoe UI', sans-serif;
 }
+
+/* 라벨 */
 QLabel { 
-    color: #333333; 
+    color: #24292f; 
 }
 QLabel#headerLabel {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: bold;
-    color: #1976d2;
-    padding: 10px;
+    color: #0969da;
+    padding: 12px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(9, 105, 218, 0.08), stop:1 rgba(130, 80, 223, 0.08));
+    border-radius: 10px;
 }
+
+/* 버튼 기본 스타일 */
 QPushButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #5a9fd4, stop:1 #4a90d9);
-    color: white;
-    border: none;
-    padding: 10px 20px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f6f8fa, stop:1 #eaeef2);
+    color: #24292f;
+    border: 1px solid #d0d7de;
+    padding: 10px 22px;
     border-radius: 8px;
     font-weight: bold;
     font-size: 12px;
 }
 QPushButton:hover { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #6ab0e5, stop:1 #5a9fd4);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f3f4f6, stop:1 #ebecf0);
+    border-color: #afb8c1;
+}
+QPushButton:pressed {
+    background: #eaeef2;
+    border-color: #afb8c1;
 }
 QPushButton:disabled { 
-    background-color: #cccccc; 
-    color: #888888; 
+    background-color: #f6f8fa; 
+    color: #8c959f;
+    border-color: #d0d7de;
 }
+
+/* 시작 버튼 - 그린 그라데이션 */
 QPushButton#startBtn { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4caf50, stop:1 #27ae60);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2da44e, stop:1 #1a7f37);
+    color: white;
+    border: 1px solid #1a7f37;
     font-size: 14px;
-    min-width: 120px;
+    min-width: 130px;
+    padding: 12px 24px;
 }
 QPushButton#startBtn:hover { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #66bb6a, stop:1 #4caf50);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3fb950, stop:1 #2da44e);
+    border-color: #2da44e;
 }
+QPushButton#startBtn:pressed {
+    background: #1a7f37;
+}
+
+/* 중지 버튼 - 레드 그라데이션 */
 QPushButton#stopBtn { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ef5350, stop:1 #e74c3c);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #cf222e, stop:1 #a40e26);
+    color: white;
+    border: 1px solid #a40e26;
     font-size: 14px;
-    min-width: 120px;
+    min-width: 130px;
+    padding: 12px 24px;
 }
 QPushButton#stopBtn:hover { 
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff7043, stop:1 #ef5350);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #fa4549, stop:1 #cf222e);
+    border-color: #cf222e;
 }
+QPushButton#stopBtn:pressed {
+    background: #a40e26;
+}
+
+/* 입력 필드 */
 QLineEdit, QComboBox {
     background-color: #ffffff;
-    border: 2px solid #e0e0e0;
+    border: 1px solid #d0d7de;
     border-radius: 8px;
-    padding: 10px;
-    color: #333333;
+    padding: 10px 14px;
+    color: #24292f;
     font-size: 13px;
+    selection-background-color: #ddf4ff;
 }
 QLineEdit:focus, QComboBox:focus {
-    border: 2px solid #1976d2;
+    border: 1px solid #0969da;
+    background-color: #ffffff;
+}
+QLineEdit:hover, QComboBox:hover {
+    border-color: #afb8c1;
 }
 QComboBox::drop-down {
     border: none;
-    padding-right: 8px;
+    padding-right: 10px;
+}
+QComboBox::down-arrow {
+    width: 12px;
+    height: 12px;
 }
 QComboBox QAbstractItemView {
     background-color: #ffffff;
-    color: #333333;
-    border: 2px solid #e0e0e0;
-    border-radius: 5px;
-    selection-background-color: #e3f2fd;
-    selection-color: #333333;
+    color: #24292f;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    selection-background-color: #ddf4ff;
+    selection-color: #0969da;
     padding: 5px;
+    outline: none;
 }
+
+/* 텍스트 편집 영역 */
 QTextEdit {
     background-color: #ffffff;
-    border: 2px solid #e0e0e0;
-    border-radius: 10px;
-    padding: 15px;
-    color: #333333;
+    border: 1px solid #d0d7de;
+    border-radius: 12px;
+    padding: 16px;
+    color: #24292f;
     font-size: 14px;
+    line-height: 1.6;
+    selection-background-color: #ddf4ff;
 }
+QTextEdit:focus {
+    border-color: #0969da;
+}
+
+/* 그룹박스 - 카드 스타일 */
 QGroupBox {
-    border: 2px solid #e0e0e0;
-    border-radius: 10px;
-    margin-top: 15px;
-    padding-top: 15px;
-    color: #1976d2;
+    background-color: #f6f8fa;
+    border: 1px solid #d0d7de;
+    border-radius: 12px;
+    margin-top: 20px;
+    padding: 20px 15px 15px 15px;
     font-weight: bold;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
-    left: 15px;
-    padding: 0 8px;
-    color: #1976d2;
+    left: 18px;
+    padding: 0 10px;
+    color: #0969da;
+    font-size: 13px;
+    background-color: #ffffff;
+    border-radius: 4px;
+}
+
+/* 체크박스 */
+QCheckBox {
+    spacing: 10px;
+    color: #24292f;
 }
 QCheckBox::indicator {
     width: 18px;
     height: 18px;
     border-radius: 4px;
-    border: 2px solid #e0e0e0;
+    border: 1px solid #d0d7de;
     background: #ffffff;
 }
 QCheckBox::indicator:checked {
-    background: #1976d2;
-    border-color: #1976d2;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0969da, stop:1 #8250df);
+    border-color: #0969da;
 }
+QCheckBox::indicator:hover {
+    border-color: #0969da;
+}
+QCheckBox::indicator:checked:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #218bff, stop:1 #a475f9);
+}
+
+/* 프로그레스바 */
 QProgressBar {
-    background-color: #e0e0e0;
+    background-color: #eaeef2;
     border-radius: 6px;
     height: 8px;
+    text-align: center;
+    border: none;
 }
 QProgressBar::chunk { 
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1976d2, stop:1 #4caf50);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0969da, stop:0.5 #8250df, stop:1 #bf3989);
     border-radius: 6px; 
 }
+
+/* 메뉴바 */
 QMenuBar { 
-    background-color: #ffffff; 
-    color: #333333;
-    padding: 5px;
+    background-color: #f6f8fa; 
+    color: #24292f;
+    padding: 6px;
+    border-bottom: 1px solid #d0d7de;
 }
 QMenuBar::item { 
-    padding: 8px 15px;
-    border-radius: 5px;
+    padding: 8px 16px;
+    border-radius: 6px;
 }
 QMenuBar::item:selected { 
-    background-color: #e3f2fd; 
+    background-color: #eaeef2; 
 }
+
+/* 메뉴 */
 QMenu { 
     background-color: #ffffff; 
-    color: #333333;
-    border: 2px solid #e0e0e0;
-    border-radius: 8px;
+    color: #24292f; 
+    border: 1px solid #d0d7de;
+    border-radius: 10px;
+    padding: 6px;
 }
 QMenu::item { 
-    padding: 8px 25px;
-    border-radius: 5px;
+    padding: 10px 28px;
+    border-radius: 6px;
 }
 QMenu::item:selected { 
-    background-color: #e3f2fd; 
+    background-color: #ddf4ff;
+    color: #0969da;
 }
+QMenu::separator {
+    height: 1px;
+    background-color: #d0d7de;
+    margin: 6px 10px;
+}
+
+/* 스크롤바 */
 QScrollBar:vertical {
-    background: #f0f0f0;
+    background: #f6f8fa;
     width: 12px;
     border-radius: 6px;
+    margin: 4px 2px;
 }
 QScrollBar::handle:vertical {
-    background: #c0c0c0;
-    border-radius: 6px;
-    min-height: 30px;
+    background: #afb8c1;
+    border-radius: 5px;
+    min-height: 40px;
 }
 QScrollBar::handle:vertical:hover {
-    background: #a0a0a0;
+    background: #8c959f;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QScrollBar:horizontal {
+    background: #f6f8fa;
+    height: 12px;
+    border-radius: 6px;
+    margin: 2px 4px;
+}
+QScrollBar::handle:horizontal {
+    background: #afb8c1;
+    border-radius: 5px;
+    min-width: 40px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #8c959f;
+}
+
+/* 스플리터 */
+QSplitter::handle {
+    background: #d0d7de;
+    border-radius: 2px;
+}
+QSplitter::handle:hover {
+    background: #0969da;
+}
+
+/* 프레임 */
+QFrame {
+    border: none;
 }
 """
 
@@ -492,7 +716,7 @@ QScrollBar::handle:vertical:hover {
 # ============================================================
 
 class ToastWidget(QFrame):
-    """비차단 토스트 알림 위젯 - 스택 처리 지원"""
+    """비차단 토스트 알림 위젯 - 스택 처리 지원, 모던 디자인"""
     
     def __init__(self, parent, message: str, duration: int = 3000, 
                  toast_type: str = "info", y_offset: int = 10, on_close=None):
@@ -500,38 +724,52 @@ class ToastWidget(QFrame):
         self.setObjectName("toastWidget")
         self.on_close = on_close
         
-        # 스타일 설정
+        # 개선된 색상 팔레트 (더 세련된 컬러)
         colors = {
-            "info": ("#4fc3f7", "#1a1a2e"),
-            "success": ("#4caf50", "#1a2e1a"),
-            "warning": ("#ff9800", "#2e2a1a"),
-            "error": ("#f44336", "#2e1a1a")
+            "info": ("#58a6ff", "#161b22", "#21262d"),      # 블루 - 정보
+            "success": ("#3fb950", "#0d1117", "#1c2128"),   # 그린 - 성공
+            "warning": ("#d29922", "#1c1a14", "#2d2a21"),   # 옐로우 - 경고
+            "error": ("#f85149", "#1c1418", "#2d2128")      # 레드 - 오류
         }
-        bg_color, border_color = colors.get(toast_type, colors["info"])
+        accent_color, bg_color, border_bg = colors.get(toast_type, colors["info"])
         
         self.setStyleSheet(f"""
             QFrame#toastWidget {{
-                background-color: {border_color};
-                border: 2px solid {bg_color};
-                border-radius: 8px;
-                padding: 10px;
+                background-color: {bg_color};
+                border: 1px solid {accent_color};
+                border-left: 4px solid {accent_color};
+                border-radius: 10px;
+                padding: 12px;
             }}
             QLabel {{
-                color: {bg_color};
+                color: #e6edf3;
                 font-size: 13px;
+                font-weight: 500;
+                background: transparent;
+            }}
+            QLabel#toastIcon {{
+                font-size: 16px;
+                min-width: 24px;
+            }}
+            QLabel#toastMessage {{
+                color: #e6edf3;
+                padding-left: 8px;
             }}
         """)
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(15, 10, 15, 10)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
         
-        # 아이콘
+        # 아이콘 (개선된 이모지)
         icons = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}
         icon_label = QLabel(icons.get(toast_type, "ℹ️"))
+        icon_label.setObjectName("toastIcon")
         layout.addWidget(icon_label)
         
         # 메시지
         msg_label = QLabel(message)
+        msg_label.setObjectName("toastMessage")
         msg_label.setWordWrap(True)
         layout.addWidget(msg_label, 1)
         
@@ -850,14 +1088,14 @@ class MainWindow(QMainWindow):
         # 태그 버튼
         self.tag_btn = QPushButton("🏷️ 태그")
         self.tag_btn.setToolTip("현재 URL에 태그 추가/편집\n예: 본회의, 법사위, 상임위")
-        self.tag_btn.setFixedWidth(80)
+        self.tag_btn.setFixedWidth(85)
         self.tag_btn.clicked.connect(self._edit_url_tag)
         url_layout.addWidget(self.tag_btn)
         
         # 상임위원회 프리셋 버튼
         self.preset_btn = QPushButton("📋 상임위")
         self.preset_btn.setToolTip("상임위원회 프리셋 선택\n빠른 URL 입력을 위한 기능")
-        self.preset_btn.setFixedWidth(100)
+        self.preset_btn.setFixedWidth(110)
         
         # 프리셋 메뉴 생성
         self.preset_menu = QMenu(self)
@@ -932,9 +1170,11 @@ class MainWindow(QMainWindow):
         self.subtitle_text.setReadOnly(True)
         splitter.addWidget(self.subtitle_text)
         
-        # 통계 패널
-        stats_group = QGroupBox("통계")
+        # 통계 패널 - 모던 디자인
+        stats_group = QGroupBox("📊 통계")
         stats_layout = QVBoxLayout(stats_group)
+        stats_layout.setSpacing(12)
+        stats_layout.setContentsMargins(12, 20, 12, 12)
         
         self.stat_time = QLabel("⏱️ 실행 시간: 00:00:00")
         self.stat_chars = QLabel("📝 글자 수: 0")
@@ -942,42 +1182,109 @@ class MainWindow(QMainWindow):
         self.stat_sents = QLabel("💬 문장 수: 0")
         self.stat_cpm = QLabel("⚡ 분당 글자: 0")
         
-        for label in [self.stat_time, self.stat_chars, self.stat_words, self.stat_sents, self.stat_cpm]:
+        stat_labels = [self.stat_time, self.stat_chars, self.stat_words, self.stat_sents, self.stat_cpm]
+        for label in stat_labels:
             label.setFont(QFont("맑은 고딕", 10))
+            label.setStyleSheet("""
+                padding: 6px 8px;
+                border-radius: 6px;
+                background-color: rgba(88, 166, 255, 0.08);
+            """)
             stats_layout.addWidget(label)
         
         stats_layout.addStretch()
-        stats_group.setFixedWidth(180)
+        stats_group.setFixedWidth(220)
         splitter.addWidget(stats_group)
         
-        splitter.setSizes([900, 180])
+        splitter.setSizes([860, 220])
         layout.addWidget(splitter)
         
-        # === 검색바 (숨김) ===
+        # === 검색바 (숨김) - 개선된 디자인 ===
         self.search_frame = QFrame()
+        self.search_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(88, 166, 255, 0.05);
+                border: 1px solid rgba(88, 166, 255, 0.2);
+                border-radius: 10px;
+                padding: 5px;
+            }
+        """)
         search_layout = QHBoxLayout(self.search_frame)
-        search_layout.setContentsMargins(0, 0, 0, 0)
+        search_layout.setContentsMargins(12, 8, 12, 8)
+        search_layout.setSpacing(8)
+        
+        # 검색 아이콘 라벨
+        search_icon = QLabel("🔍")
+        search_icon.setStyleSheet("background: transparent; border: none;")
+        search_layout.addWidget(search_icon)
         
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("검색어 입력...")
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                background-color: transparent;
+                border: none;
+                padding: 6px;
+                font-size: 13px;
+            }
+        """)
         self.search_input.returnPressed.connect(self._do_search)
+        search_layout.addWidget(self.search_input, 1)
+        
+        self.search_count = QLabel("")
+        self.search_count.setStyleSheet("""
+            color: #8b949e;
+            font-size: 12px;
+            background: transparent;
+            border: none;
+            padding: 0 8px;
+        """)
+        search_layout.addWidget(self.search_count)
+        
+        # 검색 버튼 스타일
+        search_btn_style = """
+            QPushButton {
+                background-color: rgba(88, 166, 255, 0.1);
+                border: 1px solid rgba(88, 166, 255, 0.3);
+                border-radius: 6px;
+                padding: 6px;
+                font-size: 12px;
+                min-width: 32px;
+            }
+            QPushButton:hover {
+                background-color: rgba(88, 166, 255, 0.2);
+                border-color: #58a6ff;
+            }
+        """
         
         search_prev = QPushButton("◀")
-        search_prev.setFixedWidth(40)
+        search_prev.setStyleSheet(search_btn_style)
+        search_prev.setFixedWidth(36)
         search_prev.clicked.connect(lambda: self._nav_search(-1))
         
         search_next = QPushButton("▶")
-        search_next.setFixedWidth(40)
+        search_next.setStyleSheet(search_btn_style)
+        search_next.setFixedWidth(36)
         search_next.clicked.connect(lambda: self._nav_search(1))
         
         search_close = QPushButton("✕")
-        search_close.setFixedWidth(40)
+        search_close.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(248, 81, 73, 0.1);
+                border: 1px solid rgba(248, 81, 73, 0.3);
+                border-radius: 6px;
+                padding: 6px;
+                font-size: 12px;
+                min-width: 32px;
+            }
+            QPushButton:hover {
+                background-color: rgba(248, 81, 73, 0.2);
+                border-color: #f85149;
+            }
+        """)
+        search_close.setFixedWidth(36)
         search_close.clicked.connect(self._hide_search)
         
-        self.search_count = QLabel("")
-        
-        search_layout.addWidget(self.search_input)
-        search_layout.addWidget(self.search_count)
         search_layout.addWidget(search_prev)
         search_layout.addWidget(search_next)
         search_layout.addWidget(search_close)
@@ -986,14 +1293,23 @@ class MainWindow(QMainWindow):
         self.search_frame.hide()
         layout.addWidget(self.search_frame)
         
-        # === 상태바 (개선됨) ===
+        # === 상태바 - 모던 디자인 ===
         status_frame = QFrame()
+        status_frame.setStyleSheet("""
+            QFrame {
+                background-color: rgba(48, 54, 61, 0.3);
+                border-radius: 8px;
+                padding: 4px;
+            }
+        """)
         status_layout = QHBoxLayout(status_frame)
-        status_layout.setContentsMargins(0, 5, 0, 0)
+        status_layout.setContentsMargins(12, 8, 12, 8)
         
-        self.status_label = QLabel("대기 중")
+        self.status_label = QLabel("⚪ 대기 중")
+        self.status_label.setStyleSheet("background: transparent; border: none; font-weight: 500;")
+        
         self.count_label = QLabel("📝 0문장 | 0자")
-        self.count_label.setStyleSheet("color: #888888;")
+        self.count_label.setStyleSheet("color: #8b949e; background: transparent; border: none;")
         
         status_layout.addWidget(self.status_label)
         status_layout.addStretch()
@@ -1011,6 +1327,46 @@ class MainWindow(QMainWindow):
     def _apply_theme(self):
         self.setStyleSheet(DARK_THEME if self.is_dark_theme else LIGHT_THEME)
         self.theme_action.setText("라이트 테마" if self.is_dark_theme else "다크 테마")
+        
+        # 테마에 따른 동적 스타일 업데이트
+        if self.is_dark_theme:
+            stat_bg = "rgba(88, 166, 255, 0.08)"
+            search_bg = "rgba(88, 166, 255, 0.05)"
+            search_border = "rgba(88, 166, 255, 0.2)"
+            status_bg = "rgba(48, 54, 61, 0.3)"
+            count_color = "#8b949e"
+        else:
+            stat_bg = "rgba(9, 105, 218, 0.06)"
+            search_bg = "rgba(9, 105, 218, 0.04)"
+            search_border = "rgba(9, 105, 218, 0.15)"
+            status_bg = "rgba(208, 215, 222, 0.4)"
+            count_color = "#57606a"
+        
+        # 통계 라벨 스타일 업데이트
+        try:
+            stat_labels = [self.stat_time, self.stat_chars, self.stat_words, self.stat_sents, self.stat_cpm]
+            for label in stat_labels:
+                label.setStyleSheet(f"""
+                    padding: 6px 8px;
+                    border-radius: 6px;
+                    background-color: {stat_bg};
+                """)
+            
+            # 검색바 스타일 업데이트
+            self.search_frame.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {search_bg};
+                    border: 1px solid {search_border};
+                    border-radius: 10px;
+                    padding: 5px;
+                }}
+            """)
+            
+            # 상태바 카운트 라벨 색상 업데이트
+            self.count_label.setStyleSheet(f"color: {count_color}; background: transparent; border: none;")
+        except AttributeError:
+            # UI가 아직 완전히 초기화되지 않은 경우
+            pass
     
     def _toggle_theme(self):
         self.is_dark_theme = not self.is_dark_theme
