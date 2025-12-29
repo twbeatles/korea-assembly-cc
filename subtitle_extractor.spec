@@ -1,12 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-국회 의사중계 자막 추출기 v15.1 - PyInstaller Spec File (Onefile Edition)
+국회 의사중계 자막 추출기 v16.0 - PyInstaller Spec File (Onefile Edition)
 
 빌드 명령어:
     pyinstaller subtitle_extractor.spec
 
 생성되는 파일:
     dist/subtitle_extractor.exe (단일 실행 파일)
+
+새 기능 (v16.0):
+    - 시스템 트레이 통합
+    - 자막 편집/삭제 기능
+    - 키보드 단축키 다이얼로그
+    - HWP 저장 오류 수정
 """
 
 import sys
@@ -41,6 +47,7 @@ hiddenimports = [
     'time',
     'datetime',
     'pathlib',
+    'shutil',
     
     # 선택적 라이브러리 (있으면 포함)
     'docx',
@@ -124,9 +131,6 @@ exe = EXE(
     icon=None,
 )
 
-# COLLECT 설정 제거 (Onefile 모드에서는 사용하지 않음)
-# coll = COLLECT(...)
-
 # ============================================================
 # 빌드 후 추가 작업 안내
 # ============================================================
@@ -146,5 +150,5 @@ exe = EXE(
    - console=True 로 변경하여 빌드 후 에러 메시지를 확인하세요.
 
 5. 버전 정보:
-   - v15.1: UI/UX 리팩토링, 테마 호환성 개선, UI 클리핑 수정
+   - v16.0: 시스템 트레이, 자막 편집, 키보드 단축키 다이얼로그, HWP 저장 버그 수정
 """

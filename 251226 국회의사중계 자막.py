@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-국회 의사중계 자막 추출기 v10.0
+국회 의사중계 자막 추출기 v16.0
 - 참조 코드 기반 안정적 구조
 - PyQt6 모던 UI
 - 추가 기능: 타임스탬프, 실시간 저장, 검색, 테마, URL 히스토리, SRT/VTT 내보내기, 통계, 키워드 하이라이트, 세션 저장
@@ -68,14 +68,14 @@ try:
     from PyQt6.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QCheckBox,
-        QFrame, QProgressBar, QMessageBox, QFileDialog, QSizePolicy,
+        QFrame, QProgressBar, QMessageBox, QFileDialog,
         QGroupBox, QGridLayout, QDialog, QDialogButtonBox, QListWidget,
-        QSplitter, QMenu, QMenuBar, QInputDialog
+        QSplitter, QMenu, QMenuBar, QInputDialog, QSystemTrayIcon
     )
     from PyQt6.QtCore import Qt, QTimer, QSettings
     from PyQt6.QtGui import (
         QFont, QColor, QTextCursor, QTextCharFormat, QAction,
-        QShortcut, QKeySequence, QPalette
+        QShortcut, QKeySequence, QIcon
     )
 except ImportError:
     print("PyQt6 필요: pip install PyQt6")
@@ -86,7 +86,7 @@ try:
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import WebDriverException, NoSuchElementException, StaleElementReferenceException
+    from selenium.common.exceptions import WebDriverException, NoSuchElementException
     from selenium.webdriver.chrome.options import Options
 except ImportError:
     print("selenium 필요: pip install selenium")
@@ -99,7 +99,7 @@ except ImportError:
 
 class Config:
     """프로그램 설정 상수"""
-    VERSION = "15.1"  # UI 클리핑 수정, 테마 호환성 개선
+    VERSION = "16.0"  # 리팩토링, 코드 품질 개선, UI/UX 개선
     APP_NAME = "국회 의사중계 자막 추출기"
     
     # 타이밍 상수 (초)
@@ -905,6 +905,78 @@ class MainWindow(QMainWindow):
         state = self.settings.value("windowState")
         if state:
             self.restoreState(state)
+        
+        # 시스템 트레이 설정
+        self.minimize_to_tray = self.settings.value("minimize_to_tray", False, type=bool)
+        self._setup_tray()
+    
+    def _setup_tray(self):
+        """시스템 트레이 아이콘 설정"""
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setToolTip(f"{Config.APP_NAME} v{Config.VERSION}")
+        
+        # 기본 아이콘 (앱 아이콘이 없으면 기본 아이콘 사용)
+        app_icon = self.windowIcon()
+        if not app_icon.isNull():
+            self.tray_icon.setIcon(app_icon)
+        else:
+            # 기본 아이콘 사용
+            self.tray_icon.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon))
+        
+        # 트레이 메뉴
+        tray_menu = QMenu()
+        
+        show_action = QAction("🏛️ 창 보이기", self)
+        show_action.triggered.connect(self._show_from_tray)
+        tray_menu.addAction(show_action)
+        
+        tray_menu.addSeparator()
+        
+        # 추출 상태 표시
+        self.tray_status_action = QAction("⚪ 대기 중", self)
+        self.tray_status_action.setEnabled(False)
+        tray_menu.addAction(self.tray_status_action)
+        
+        tray_menu.addSeparator()
+        
+        start_action = QAction("▶ 시작", self)
+        start_action.triggered.connect(self._start)
+        tray_menu.addAction(start_action)
+        
+        stop_action = QAction("⏹ 중지", self)
+        stop_action.triggered.connect(self._stop)
+        tray_menu.addAction(stop_action)
+        
+        tray_menu.addSeparator()
+        
+        quit_action = QAction("❌ 종료", self)
+        quit_action.triggered.connect(self._quit_from_tray)
+        tray_menu.addAction(quit_action)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._tray_activated)
+        self.tray_icon.show()
+    
+    def _show_from_tray(self):
+        """트레이에서 창 복원"""
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+    
+    def _quit_from_tray(self):
+        """트레이에서 완전 종료"""
+        self.minimize_to_tray = False  # 트레이 최소화 비활성화
+        self.close()
+    
+    def _tray_activated(self, reason):
+        """트레이 아이콘 클릭 처리"""
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._show_from_tray()
+    
+    def _update_tray_status(self, status: str):
+        """트레이 상태 업데이트"""
+        if hasattr(self, 'tray_status_action'):
+            self.tray_status_action.setText(status)
     
     def _create_menu(self):
         menubar = self.menuBar()
@@ -981,12 +1053,28 @@ class MainWindow(QMainWindow):
         
         edit_menu.addSeparator()
         
+        edit_subtitle_action = QAction("✏️ 자막 편집", self)
+        edit_subtitle_action.setShortcut("Ctrl+E")
+        edit_subtitle_action.setToolTip("선택한 자막을 편집합니다")
+        edit_subtitle_action.triggered.connect(self._edit_subtitle)
+        edit_menu.addAction(edit_subtitle_action)
+        
+        delete_subtitle_action = QAction("🗑️ 자막 삭제", self)
+        delete_subtitle_action.setShortcut("Delete")
+        delete_subtitle_action.setToolTip("선택한 자막을 삭제합니다")
+        delete_subtitle_action.triggered.connect(self._delete_subtitle)
+        edit_menu.addAction(delete_subtitle_action)
+        
+        edit_menu.addSeparator()
+        
         copy_action = QAction("클립보드 복사", self)
         copy_action.setShortcut("Ctrl+C")
+        copy_action.setToolTip("전체 자막을 클립보드에 복사합니다")
         copy_action.triggered.connect(self._copy_to_clipboard)
         edit_menu.addAction(copy_action)
         
         clear_action = QAction("내용 지우기", self)
+        clear_action.setToolTip("모든 자막 내용을 삭제합니다")
         clear_action.triggered.connect(self._clear_text)
         edit_menu.addAction(clear_action)
         
@@ -1003,6 +1091,13 @@ class MainWindow(QMainWindow):
         self.timestamp_action.setChecked(True)
         self.timestamp_action.triggered.connect(self._refresh_text)
         view_menu.addAction(self.timestamp_action)
+        
+        self.tray_action = QAction("🔽 트레이로 최소화", self)
+        self.tray_action.setCheckable(True)
+        self.tray_action.setChecked(self.minimize_to_tray)
+        self.tray_action.setToolTip("활성화 시 창을 닫으면 트레이로 최소화됩니다")
+        self.tray_action.triggered.connect(self._toggle_tray_option)
+        view_menu.addAction(self.tray_action)
         
         view_menu.addSeparator()
         
@@ -1030,16 +1125,24 @@ class MainWindow(QMainWindow):
         
         guide_action = QAction("사용법 가이드", self)
         guide_action.setShortcut("F1")
+        guide_action.setToolTip("프로그램 사용법 안내")
         guide_action.triggered.connect(self._show_guide)
         help_menu.addAction(guide_action)
         
         features_action = QAction("기능 소개", self)
+        features_action.setToolTip("프로그램의 주요 기능 소개")
         features_action.triggered.connect(self._show_features)
         help_menu.addAction(features_action)
+        
+        shortcuts_action = QAction("⌨️ 키보드 단축키", self)
+        shortcuts_action.setToolTip("사용 가능한 키보드 단축키 목록")
+        shortcuts_action.triggered.connect(self._show_shortcuts)
+        help_menu.addAction(shortcuts_action)
         
         help_menu.addSeparator()
         
         about_action = QAction("정보", self)
+        about_action.setToolTip("프로그램 정보 및 버전")
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
     
@@ -1372,6 +1475,15 @@ class MainWindow(QMainWindow):
         self.is_dark_theme = not self.is_dark_theme
         self.settings.setValue("dark_theme", self.is_dark_theme)
         self._apply_theme()
+    
+    def _toggle_tray_option(self):
+        """트레이 최소화 옵션 토글"""
+        self.minimize_to_tray = self.tray_action.isChecked()
+        self.settings.setValue("minimize_to_tray", self.minimize_to_tray)
+        if self.minimize_to_tray:
+            self._show_toast("창을 닫으면 트레이로 최소화됩니다.", "info")
+        else:
+            self._show_toast("창을 닫으면 프로그램이 종료됩니다.", "info")
     
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("F5"), self, self._start)
@@ -2593,9 +2705,26 @@ class MainWindow(QMainWindow):
             self._save_rtf()
             return
         
+        # COM 캐시 손상 시 정리 시도
+        def _clear_com_cache():
+            """손상된 win32com gen_py 캐시 정리"""
+            try:
+                import shutil
+                import win32com
+                cache_dir = os.path.join(os.path.dirname(win32com.__file__), 'gen_py')
+                if os.path.exists(cache_dir):
+                    shutil.rmtree(cache_dir)
+                    logger.info("win32com gen_py 캐시 정리 완료")
+                    return True
+            except Exception as e:
+                logger.warning(f"캐시 정리 실패: {e}")
+            return False
+        
+        hwp = None
+        
         try:
-            # Hancom Office 연결 시도
-            hwp = win32com.client.gencache.EnsureDispatch("HWPFrame.HwpObject")
+            # Late binding 사용 (캐시 손상 문제 방지)
+            hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
             hwp.XHwpWindows.Item(0).Visible = True
             
             # 새 문서 생성
@@ -2644,13 +2773,64 @@ class MainWindow(QMainWindow):
                     hwp.Quit()
                 except Exception:
                     pass
+        
+        except AttributeError as e:
+            # CLSIDToClassMap 등 캐시 손상 오류
+            error_msg = str(e)
+            if 'CLSIDToClassMap' in error_msg or 'gen_py' in error_msg:
+                logger.warning(f"COM 캐시 손상 감지: {e}")
+                if _clear_com_cache():
+                    QMessageBox.warning(
+                        self, "캐시 정리 완료",
+                        "win32com 캐시가 손상되어 정리했습니다.\n\n"
+                        "프로그램을 재시작한 후 다시 시도해 주세요.\n\n"
+                        "지금은 RTF 형식으로 저장합니다."
+                    )
+                else:
+                    QMessageBox.warning(
+                        self, "HWP 저장 실패",
+                        f"COM 캐시 손상 오류: {e}\n\n"
+                        "수동으로 다음 폴더를 삭제해 주세요:\n"
+                        f"%LOCALAPPDATA%\\Temp\\gen_py\n\n"
+                        "RTF 형식으로 저장합니다."
+                    )
+            else:
+                QMessageBox.warning(
+                    self, "HWP 저장 실패", 
+                    f"속성 오류: {e}\n\nRTF 형식으로 저장합니다."
+                )
+            
+            if hwp:
+                try:
+                    hwp.Quit()
+                except Exception:
+                    pass
+            self._save_rtf()
             
         except Exception as e:
-            logger.warning(f"HWP 저장 실패: {e}")
-            QMessageBox.warning(
-                self, "HWP 저장 실패", 
-                f"Hancom Office 연결 실패: {e}\n\nRTF 형식으로 저장을 시도합니다."
-            )
+            error_msg = str(e).lower()
+            
+            # 한글 Office 미설치 감지
+            if 'invalid class string' in error_msg or 'class not registered' in error_msg:
+                QMessageBox.warning(
+                    self, "한글 Office 필요",
+                    "HWP 저장을 위해 한글 Office가 설치되어 있어야 합니다.\n\n"
+                    "한글 Office가 설치되어 있지 않으면 RTF 형식을 사용해 주세요.\n"
+                    "(RTF 파일은 한글에서 열 수 있습니다)\n\n"
+                    "RTF 형식으로 저장합니다."
+                )
+            else:
+                logger.warning(f"HWP 저장 실패: {e}")
+                QMessageBox.warning(
+                    self, "HWP 저장 실패", 
+                    f"Hancom Office 연결 실패: {e}\n\nRTF 형식으로 저장합니다."
+                )
+            
+            if hwp:
+                try:
+                    hwp.Quit()
+                except Exception:
+                    pass
             self._save_rtf()
     
     def _save_rtf(self):
@@ -2770,6 +2950,134 @@ class MainWindow(QMainWindow):
             self.subtitle_text.clear()
             self.status_label.setText("내용 삭제됨")
     
+    def _edit_subtitle(self):
+        """선택한 자막 편집"""
+        if not self.subtitles:
+            self._show_toast("편집할 자막이 없습니다.", "warning")
+            return
+        
+        # 자막 목록 다이얼로그
+        dialog = QDialog(self)
+        dialog.setWindowTitle("자막 편집")
+        dialog.setMinimumSize(600, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # 안내 라벨
+        info_label = QLabel("편집할 자막을 선택하세요:")
+        layout.addWidget(info_label)
+        
+        # 자막 목록
+        list_widget = QListWidget()
+        for i, entry in enumerate(self.subtitles):
+            timestamp = entry.timestamp.strftime('%H:%M:%S')
+            text_preview = entry.text[:50] + "..." if len(entry.text) > 50 else entry.text
+            list_widget.addItem(f"[{timestamp}] {text_preview}")
+        layout.addWidget(list_widget)
+        
+        # 편집 영역
+        edit_label = QLabel("자막 내용:")
+        layout.addWidget(edit_label)
+        
+        edit_text = QTextEdit()
+        edit_text.setMaximumHeight(100)
+        layout.addWidget(edit_text)
+        
+        # 선택 시 내용 로드
+        def on_selection_changed():
+            idx = list_widget.currentRow()
+            if 0 <= idx < len(self.subtitles):
+                edit_text.setText(self.subtitles[idx].text)
+        
+        list_widget.currentRowChanged.connect(on_selection_changed)
+        
+        # 버튼
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        
+        def save_edit():
+            idx = list_widget.currentRow()
+            if 0 <= idx < len(self.subtitles):
+                new_text = edit_text.toPlainText().strip()
+                if new_text:
+                    self.subtitles[idx].text = new_text
+                    self._refresh_text()
+                    self._show_toast("자막이 수정되었습니다.", "success")
+                    dialog.accept()
+                else:
+                    QMessageBox.warning(dialog, "알림", "자막 내용을 입력해주세요.")
+            else:
+                QMessageBox.warning(dialog, "알림", "편집할 자막을 선택해주세요.")
+        
+        buttons.accepted.connect(save_edit)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        # 첫 번째 항목 선택
+        if list_widget.count() > 0:
+            list_widget.setCurrentRow(0)
+        
+        dialog.exec()
+    
+    def _delete_subtitle(self):
+        """선택한 자막 삭제"""
+        if not self.subtitles:
+            self._show_toast("삭제할 자막이 없습니다.", "warning")
+            return
+        
+        # 자막 목록 다이얼로그
+        dialog = QDialog(self)
+        dialog.setWindowTitle("자막 삭제")
+        dialog.setMinimumSize(600, 400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # 안내 라벨
+        info_label = QLabel("삭제할 자막을 선택하세요 (다중 선택 가능):")
+        layout.addWidget(info_label)
+        
+        # 자막 목록 (다중 선택 가능)
+        from PyQt6.QtWidgets import QAbstractItemView
+        list_widget = QListWidget()
+        list_widget.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        
+        for i, entry in enumerate(self.subtitles):
+            timestamp = entry.timestamp.strftime('%H:%M:%S')
+            text_preview = entry.text[:50] + "..." if len(entry.text) > 50 else entry.text
+            list_widget.addItem(f"[{timestamp}] {text_preview}")
+        layout.addWidget(list_widget)
+        
+        # 버튼
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("삭제")
+        
+        def delete_selected():
+            selected_rows = sorted([i.row() for i in list_widget.selectedIndexes()], reverse=True)
+            if not selected_rows:
+                QMessageBox.warning(dialog, "알림", "삭제할 자막을 선택해주세요.")
+                return
+            
+            reply = QMessageBox.question(
+                dialog, "확인",
+                f"선택한 {len(selected_rows)}개의 자막을 삭제하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                for row in selected_rows:
+                    del self.subtitles[row]
+                self._refresh_text()
+                self._update_count_label()
+                self._show_toast(f"{len(selected_rows)}개 자막이 삭제되었습니다.", "success")
+                dialog.accept()
+        
+        buttons.accepted.connect(delete_selected)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+    
     # ========== 도움말 ==========
     
     def _show_guide(self):
@@ -2806,6 +3114,54 @@ class MainWindow(QMainWindow):
         msg.setWindowTitle("사용법 가이드")
         msg.setTextFormat(Qt.TextFormat.RichText)
         msg.setText(guide)
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.exec()
+    
+    def _show_shortcuts(self):
+        """키보드 단축키 목록 표시"""
+        shortcuts = """
+<h2>⌨️ 키보드 단축키</h2>
+
+<h3>📋 기본 조작</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
+<tr style="background-color: #f0f0f0;"><th>단축키</th><th>기능</th></tr>
+<tr><td><b>F5</b></td><td>추출 시작</td></tr>
+<tr><td><b>Escape</b></td><td>추출 중지</td></tr>
+<tr><td><b>Ctrl+Q</b></td><td>프로그램 종료</td></tr>
+</table>
+
+<h3>🔍 검색 및 편집</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
+<tr style="background-color: #f0f0f0;"><th>단축키</th><th>기능</th></tr>
+<tr><td><b>Ctrl+F</b></td><td>검색창 열기</td></tr>
+<tr><td><b>F3</b></td><td>다음 검색 결과</td></tr>
+<tr><td><b>Shift+F3</b></td><td>이전 검색 결과</td></tr>
+<tr><td><b>Ctrl+E</b></td><td>자막 편집</td></tr>
+<tr><td><b>Delete</b></td><td>자막 삭제</td></tr>
+<tr><td><b>Ctrl+C</b></td><td>클립보드 복사</td></tr>
+</table>
+
+<h3>💾 저장</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
+<tr style="background-color: #f0f0f0;"><th>단축키</th><th>기능</th></tr>
+<tr><td><b>Ctrl+S</b></td><td>TXT 저장</td></tr>
+<tr><td><b>Ctrl+Shift+S</b></td><td>세션 저장</td></tr>
+<tr><td><b>Ctrl+O</b></td><td>세션 불러오기</td></tr>
+</table>
+
+<h3>🎨 보기</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
+<tr style="background-color: #f0f0f0;"><th>단축키</th><th>기능</th></tr>
+<tr><td><b>Ctrl+T</b></td><td>테마 전환</td></tr>
+<tr><td><b>Ctrl++</b></td><td>글자 크기 키우기</td></tr>
+<tr><td><b>Ctrl+-</b></td><td>글자 크기 줄이기</td></tr>
+<tr><td><b>F1</b></td><td>사용법 가이드</td></tr>
+</table>
+"""
+        msg = QMessageBox(self)
+        msg.setWindowTitle("키보드 단축키")
+        msg.setTextFormat(Qt.TextFormat.RichText)
+        msg.setText(shortcuts)
         msg.setIcon(QMessageBox.Icon.Information)
         msg.exec()
     
@@ -2861,7 +3217,7 @@ class MainWindow(QMainWindow):
 <li>python-docx (DOCX 저장용)</li>
 </ul>
 
-<p><b>© 2024</b></p>
+<p><b>© 2024-2025</b></p>
 """
         msg = QMessageBox(self)
         msg.setWindowTitle("정보")
@@ -2871,6 +3227,18 @@ class MainWindow(QMainWindow):
         msg.exec()
     
     def closeEvent(self, event):
+        # 트레이 최소화 모드
+        if self.minimize_to_tray and self.tray_icon.isVisible():
+            self.hide()
+            self.tray_icon.showMessage(
+                Config.APP_NAME,
+                "프로그램이 트레이로 최소화되었습니다.\n트레이 아이콘을 더블클릭하여 다시 열 수 있습니다.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000
+            )
+            event.ignore()
+            return
+        
         # 저장하지 않은 자막이 있으면 확인
         if self.subtitles:
             reply = QMessageBox.question(
