@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-국회 의사중계 자막 추출기 v16.0 - PyInstaller Spec File (Onefile Edition)
+국회 의사중계 자막 추출기 v16.1 - PyInstaller Spec File (Onefile Edition)
 
 빌드 명령어:
     pyinstaller subtitle_extractor.spec
@@ -8,11 +8,10 @@
 생성되는 파일:
     dist/subtitle_extractor.exe (단일 실행 파일)
 
-새 기능 (v16.0):
-    - 시스템 트레이 통합
-    - 자막 편집/삭제 기능
-    - 키보드 단축키 다이얼로그
-    - HWP 저장 오류 수정
+새 기능 (v16.1):
+    - HWP 저장 오류 완전 해결 (Dynamic Dispatch)
+    - 상임위원회 링크 최신화 및 약칭 지원
+    - 관리자 권한 안내 메시지 추가
 """
 
 import sys
@@ -54,6 +53,9 @@ hiddenimports = [
     'docx.shared',
     'docx.enum.text',
     'win32com.client',
+    'win32com.client.dynamic',
+    'pywintypes',
+    'pythoncom',
 ]
 
 # Selenium 서브모듈 자동 수집

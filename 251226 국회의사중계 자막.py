@@ -137,21 +137,47 @@ class Config:
     # 상임위원회 기본 프리셋
     DEFAULT_COMMITTEE_PRESETS = {
         "본회의": "https://assembly.webcast.go.kr/main/player.asp",
-        "법제사법위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AA",
-        "기획재정위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AB",
-        "외교통일위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AC",
-        "국방위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AD",
-        "행정안전위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AE",
-        "교육위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AF",
-        "과학기술정보방송통신위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AG",
-        "문화체육관광위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AH",
-        "농림축산식품해양수산위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AI",
-        "산업통상자원중소벤처기업위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AJ",
-        "보건복지위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AK",
-        "환경노동위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AL",
-        "국토교통위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AM",
-        "정보위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AN",
-        "여성가족위원회": "https://assembly.webcast.go.kr/main/player.asp?commitee=AO",
+        "법제사법위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=25",
+        "기획재정위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=38",
+        "외교통일위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=48",
+        "국방위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=37",
+        "행정안전위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=45",
+        "교육위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=58",
+        "과학기술정보방송통신위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=56",
+        "문화체육관광위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=59",
+        "농림축산식품해양수산위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=53",
+        "산업통상자원중소벤처기업위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=55",
+        "보건복지위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=33",
+        "환경노동위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=62",
+        "국토교통위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=54",
+        "정보위원회": "https://assembly.webcast.go.kr/main/player.asp",
+        "여성가족위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=36",
+        "예산결산특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=21",
+        "국회운영위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=24",
+    }
+    
+    # 상임위원회 약칭 매핑
+    COMMITTEE_ABBREVIATIONS = {
+        "법사위": "법제사법위원회",
+        "기재위": "기획재정위원회",
+        "외통위": "외교통일위원회",
+        "국방위": "국방위원회",
+        "행안위": "행정안전위원회",
+        "교육위": "교육위원회",
+        "과방위": "과학기술정보방송통신위원회",
+        "문체위": "문화체육관광위원회",
+        "농해수위": "농림축산식품해양수산위원회",
+        "산자위": "산업통상자원중소벤처기업위원회",
+        "산자중기위": "산업통상자원중소벤처기업위원회",
+        "복지위": "보건복지위원회",
+        "환노위": "환경노동위원회",
+        "기후노동위": "환경노동위원회",
+        "국토위": "국토교통위원회",
+        "정보위": "정보위원회",
+        "여가위": "여성가족위원회",
+        "성평등가족위": "여성가족위원회",
+        "예결위": "예산결산특별위원회",
+        "운영위": "국회운영위원회",
     }
     
     # 폰트 설정
@@ -844,6 +870,7 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("AssemblySubtitle", "Extractor")
         self.is_dark_theme = self.settings.value("dark_theme", True, type=bool)
         self.font_size = self.settings.value("font_size", Config.DEFAULT_FONT_SIZE, type=int)
+        self.minimize_to_tray = self.settings.value("minimize_to_tray", False, type=bool)
         
         # 메시지 큐
         self.message_queue = queue.Queue()
@@ -907,7 +934,6 @@ class MainWindow(QMainWindow):
             self.restoreState(state)
         
         # 시스템 트레이 설정
-        self.minimize_to_tray = self.settings.value("minimize_to_tray", False, type=bool)
         self._setup_tray()
     
     def _setup_tray(self):
@@ -1586,17 +1612,49 @@ class MainWindow(QMainWindow):
             logger.warning(f"URL 히스토리 저장 오류: {e}")
     
     def _add_to_history(self, url, tag=""):
-        """URL 히스토리에 추가"""
+        """URL 히스토리에 추가 (자동 태그 매칭)"""
         if not isinstance(self.url_history, dict):
             self.url_history = {}
         
-        # 기존 태그가 있으면 유지
-        if url in self.url_history and not tag:
-            tag = self.url_history[url]
+        # 태그가 없으면 자동 감지
+        if not tag:
+            # 1. 이미 저장된 태그가 있는지 확인
+            if url in self.url_history and self.url_history[url]:
+                tag = self.url_history[url]
+            else:
+                # 2. 프리셋/약칭에서 매칭 확인
+                tag = self._autodetect_tag(url)
         
         self.url_history[url] = tag
         self._save_url_history()
         self._refresh_url_combo()
+
+    def _autodetect_tag(self, url):
+        """URL을 기반으로 위원회 이름/약칭 자동 감지"""
+        # 1. 정확한 URL 매칭 확인 (프리셋)
+        for name, preset_url in self.committee_presets.items():
+            if url == preset_url:
+                # 약칭이 있으면 약칭 사용 (더 짧고 보기 좋음)
+                for abbr, full_name in Config.COMMITTEE_ABBREVIATIONS.items():
+                    if full_name == name:
+                        return abbr
+                return name
+        
+        # 2. xcode 파라미터 매칭
+        import re
+        match = re.search(r'xcode=(\d+)', url)
+        if match:
+            xcode = match.group(1)
+            # 프리셋에서 해당 xcode를 가진 URL 찾기
+            for name, preset_url in self.committee_presets.items():
+                if f"xcode={xcode}" in preset_url:
+                    # 약칭 리턴
+                    for abbr, full_name in Config.COMMITTEE_ABBREVIATIONS.items():
+                        if full_name == name:
+                            return abbr
+                    return name
+                    
+        return ""
     
     def _refresh_url_combo(self):
         """URL 콤보박스 새로고침"""
@@ -2705,27 +2763,13 @@ class MainWindow(QMainWindow):
             self._save_rtf()
             return
         
-        # COM 캐시 손상 시 정리 시도
-        def _clear_com_cache():
-            """손상된 win32com gen_py 캐시 정리"""
-            try:
-                import shutil
-                import win32com
-                cache_dir = os.path.join(os.path.dirname(win32com.__file__), 'gen_py')
-                if os.path.exists(cache_dir):
-                    shutil.rmtree(cache_dir)
-                    logger.info("win32com gen_py 캐시 정리 완료")
-                    return True
-            except Exception as e:
-                logger.warning(f"캐시 정리 실패: {e}")
-            return False
-        
         hwp = None
         
         try:
-            # Late binding 사용 (캐시 손상 문제 방지)
-            hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
+            # win32com.client.dynamic.Dispatch 사용으로 캐시 문제 회피
+            hwp = win32com.client.dynamic.Dispatch("HWPFrame.HwpObject")
             hwp.XHwpWindows.Item(0).Visible = True
+            hwp.RegisterModule("FilePathCheckDLL", "SecurityModule")  # 보안 모듈 등록 시도
             
             # 새 문서 생성
             hwp.HAction.Run("FileNew")
@@ -2760,78 +2804,39 @@ class MainWindow(QMainWindow):
             path, _ = QFileDialog.getSaveFileName(self, "HWP 저장", filename, "HWP 문서 (*.hwp)")
             
             if path:
+                # FileSaveAs_S 액션 사용
                 hwp.HAction.GetDefault("FileSaveAs_S", hwp.HParameterSet.HFileOpenSave.HSet)
                 hwp.HParameterSet.HFileOpenSave.filename = path
                 hwp.HParameterSet.HFileOpenSave.Format = "HWP"
                 hwp.HAction.Execute("FileSaveAs_S", hwp.HParameterSet.HFileOpenSave.HSet)
                 
                 QMessageBox.information(self, "성공", f"HWP 저장 완료!\n\n파일: {path}")
-                hwp.Quit()
-            else:
-                # 사용자가 저장 취소한 경우 문서 닫기 (저장 없이)
-                try:
-                    hwp.Quit()
-                except Exception:
-                    pass
-        
-        except AttributeError as e:
-            # CLSIDToClassMap 등 캐시 손상 오류
-            error_msg = str(e)
-            if 'CLSIDToClassMap' in error_msg or 'gen_py' in error_msg:
-                logger.warning(f"COM 캐시 손상 감지: {e}")
-                if _clear_com_cache():
-                    QMessageBox.warning(
-                        self, "캐시 정리 완료",
-                        "win32com 캐시가 손상되어 정리했습니다.\n\n"
-                        "프로그램을 재시작한 후 다시 시도해 주세요.\n\n"
-                        "지금은 RTF 형식으로 저장합니다."
-                    )
-                else:
-                    QMessageBox.warning(
-                        self, "HWP 저장 실패",
-                        f"COM 캐시 손상 오류: {e}\n\n"
-                        "수동으로 다음 폴더를 삭제해 주세요:\n"
-                        f"%LOCALAPPDATA%\\Temp\\gen_py\n\n"
-                        "RTF 형식으로 저장합니다."
-                    )
-            else:
-                QMessageBox.warning(
-                    self, "HWP 저장 실패", 
-                    f"속성 오류: {e}\n\nRTF 형식으로 저장합니다."
-                )
-            
-            if hwp:
-                try:
-                    hwp.Quit()
-                except Exception:
-                    pass
-            self._save_rtf()
             
         except Exception as e:
             error_msg = str(e).lower()
+            logger.error(f"HWP 저장 실패: {e}")
             
-            # 한글 Office 미설치 감지
-            if 'invalid class string' in error_msg or 'class not registered' in error_msg:
-                QMessageBox.warning(
-                    self, "한글 Office 필요",
-                    "HWP 저장을 위해 한글 Office가 설치되어 있어야 합니다.\n\n"
-                    "한글 Office가 설치되어 있지 않으면 RTF 형식을 사용해 주세요.\n"
-                    "(RTF 파일은 한글에서 열 수 있습니다)\n\n"
-                    "RTF 형식으로 저장합니다."
-                )
+            # 권한 문제 힌트 제공
+            if "access denied" in error_msg or "권한" in str(e):
+                advice = "\n\n관리자 권한으로 실행하거나 한글 프로그램을 먼저 실행해 보세요."
+            elif "server execution failed" in error_msg:
+                advice = "\n\n한글 프로그램이 응답하지 않습니다. 한글을 종료하고 다시 시도하세요."
             else:
-                logger.warning(f"HWP 저장 실패: {e}")
-                QMessageBox.warning(
-                    self, "HWP 저장 실패", 
-                    f"Hancom Office 연결 실패: {e}\n\nRTF 형식으로 저장합니다."
-                )
+                advice = ""
+                
+            QMessageBox.warning(
+                self, "HWP 저장 실패", 
+                f"한글 파일 저장 중 오류가 발생했습니다: {e}{advice}\n\n"
+                "대신 RTF 형식으로 저장을 시도합니다."
+            )
+            self._save_rtf()
             
+        finally:
             if hwp:
                 try:
                     hwp.Quit()
                 except Exception:
                     pass
-            self._save_rtf()
     
     def _save_rtf(self):
         """RTF 파일로 저장 (HWP에서 열기 가능)"""
