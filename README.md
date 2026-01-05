@@ -1,28 +1,45 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.1
+# 🏛️ 국회 의사중계 자막 추출기 v17.1
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 프로그램입니다.
 
 ---
 
-## ✨ v16.1 새 기능
+## ✨ v17.1 새 기능
 
-### 🖥️ 시스템 트레이 통합
-- **트레이 최소화** - 창을 닫으면 트레이로 최소화 (옵션)
-- **트레이 메뉴** - 시작/중지/종료 빠른 접근
-- **트레이 알림** - 상태 변경 시 알림 표시
+### 🎨 UI/UX 전면 개선
+- **모던 다크 테마** - 그림자, 호버 효과, pressed 상태
+- **Empty State** - 자막 영역 안내 메시지
+- **통계 패널 카드 스타일** - 시각적 분리, 값 강조
+- **상태 배지** - 둥근 모서리 배지 스타일
 
-### ✏️ 자막 편집 기능
-- **자막 편집** (Ctrl+E) - 기존 자막 수정
-- **자막 삭제** (Delete) - 선택한 자막 삭제 (다중 선택 지원)
+### ⚡ 성능 최적화
+- **증분 렌더링** - 자막 수 증가 시에도 부드러운 UI
+- **글자 수 캐싱** - 중복 계산 제거
+- **타이머 Cleanup** - 메모리 누수 방지
 
-### ⌨️ 키보드 단축키 다이얼로그
-- 도움말 메뉴에서 모든 단축키 확인 가능
+---
 
-### 🔧 코드 품질 개선
-- 사용하지 않는 import 정리
-- HWP 저장 오류 완전 해결 (Dynamic Dispatch 적용)
-- 상임위원회 링크 최신화 (2025년 기준 xcode 적용)
-- 상임위원회 약칭 지원 (예: '법사위', '과방위')
+## ✨ v17.0 기능
+
+### 📑 다중 위원회 동시 모니터링
+- **탭 기반 다중 세션** - 여러 상임위원회를 동시에 모니터링
+- **독립적인 세션 관리** - 각 탭이 독립적인 브라우저와 자막 데이터 보유
+- **전체 세션 검색** (Ctrl+Shift+F) - 모든 세션에서 키워드 검색
+- **일괄 시작/중지** - 모든 세션 한 번에 제어
+
+### 🌐 다중 브라우저 지원
+- **Selenium 기반**: Chrome, Firefox, Edge
+- **Playwright 기반**: Chromium, Firefox, WebKit (Safari 호환)
+- 설치된 브라우저 **자동 감지**
+- 세션별 **브라우저 개별 선택** 가능
+
+### 📂 파일 구조
+| 파일 | 설명 |
+|------|------|
+| `multi_session_launcher.py` | 다중 세션 버전 실행 파일 |
+| `browser_drivers.py` | 브라우저 추상화 모듈 |
+| `subtitle_session.py` | 세션 관리 모듈 |
+| `session_tab_widget.py` | 탭 UI 위젯 |
 
 ---
 
@@ -36,7 +53,7 @@
 ### 💾 다양한 저장 형식
 
 | 형식 | 설명 | 단축키/라이브러리 |
-|------|------|--------------------|
+|------|------|-------------------|
 | **TXT** | 일반 텍스트 | Ctrl+S |
 | **SRT** | 자막 파일 형식 | - |
 | **VTT** | WebVTT 자막 형식 | - |
@@ -86,23 +103,33 @@ pip install PyQt6 selenium
 ```bash
 pip install python-docx  # DOCX 저장용
 pip install pywin32      # HWP 저장용 (Windows)
+
+# Playwright (다중 브라우저 지원)
+pip install playwright
+playwright install  # 브라우저 설치
 ```
 
-### Chrome WebDriver
-- Chrome 브라우저가 설치되어 있어야 합니다
-- Selenium 4.x는 자동으로 WebDriver를 관리합니다
+### 브라우저 요구사항
+- **Selenium**: Chrome, Firefox 또는 Edge 중 하나 설치 필요
+- **Playwright**: 자동으로 브라우저 설치 (`playwright install`)
 
 ---
 
 ## 🚀 실행
 
-### Python으로 실행
+### 다중 세션 버전 (권장)
+
+```bash
+python multi_session_launcher.py
+```
+
+### 기본 버전 (단일 세션)
 
 ```bash
 python "251226 국회의사중계 자막.py"
 ```
 
-### EXE 빌드 후 실행
+### EXE 빌드 및 실행
 
 ```bash
 # 빌드 (단일 실행 파일 생성)
@@ -123,16 +150,14 @@ dist\subtitle_extractor.exe
 | **Ctrl+F** | 검색창 열기 |
 | **F3** | 다음 검색 결과 |
 | **Shift+F3** | 이전 검색 결과 |
-| **Ctrl+E** | 자막 편집 |
-| **Delete** | 자막 삭제 |
+| **Ctrl+N** | 새 세션 추가 |
+| **Ctrl+Shift+F** | 전체 세션 검색 |
 | **Ctrl+C** | 자막 전체 복사 |
 | **Ctrl+T** | 테마 전환 |
 | **Ctrl+S** | TXT 저장 |
-| **Ctrl+Shift+S** | 세션 저장 |
-| **Ctrl+O** | 세션 불러오기 |
+| **Ctrl+Shift+S** | 모든 세션 저장 |
 | **Ctrl++** | 글자 크기 키우기 |
 | **Ctrl+-** | 글자 크기 줄이기 |
-| **F1** | 사용법 가이드 |
 | **Ctrl+Q** | 종료 |
 
 ---
@@ -141,12 +166,15 @@ dist\subtitle_extractor.exe
 
 ```
 korea-assembly-cc/
-├── 251226 국회의사중계 자막.py  # 메인 프로그램
+├── multi_session_launcher.py    # 다중 세션 메인 프로그램
+├── browser_drivers.py           # 브라우저 추상화 모듈
+├── subtitle_session.py          # 세션 관리 모듈
+├── session_tab_widget.py        # 탭 UI 위젯
+├── 251226 국회의사중계 자막.py  # 단일 세션 버전
 ├── subtitle_extractor.spec      # PyInstaller 빌드 설정
 ├── README.md                    # 이 문서
-├── committee_presets.json       # 상임위 프리셋 (자동 생성)
-├── url_history.json             # URL 히스토리 (자동 생성)
 ├── subtitle_config.json         # 프로그램 설정
+├── url_history.json             # URL 히스토리 (자동 생성)
 ├── logs/                        # 로그 파일
 ├── sessions/                    # 세션 저장 파일
 ├── backups/                     # 자동 백업 파일
@@ -169,37 +197,28 @@ korea-assembly-cc/
 - 한글 Office가 설치되어 있어야 합니다
 - COM 캐시 오류 시 자동으로 캐시 정리 후 RTF로 저장됩니다
 
-### HiDPI 디스플레이 문제
-- HiDPI 지원이 자동으로 활성화됩니다
-- 문제가 지속되면 Windows 디스플레이 설정을 확인하세요
+### Playwright 관련
+- PyInstaller로 패키징된 EXE에서는 Playwright가 지원되지 않습니다
+- Playwright는 Python 스크립트 실행 시에만 사용 가능합니다
 
 ---
 
 ## 📝 변경 이력
 
-### v16.1 (2025-12-30)
-- 🐛 **HWP 저장 오류 완전 해결** - Dynamic Dispatch 적용으로 캐시 손상 문제 원천 차단
-- 🔗 **상임위원회 링크 최신화** - 2025년 최신 xcode 파라미터 적용
-- ✨ **상임위 약칭 지원** - '법사위', '과방위' 등 약칭으로 자동 매핑 지원
-- 🔧 관리자 권한 감지 및 안내 메시지 강화
+### v17.1 (2025-01-05)
+- 🎨 **UI/UX 전면 개선** - 모던 다크 테마, Empty State
+- ⚡ **성능 최적화** - 증분 렌더링, 캐싱
+- 🐛 **버그 수정** - 타이머 cleanup, Playwright 호환성
+
+### v17.0 (2025-01-04)
+- ✨ **다중 위원회 동시 모니터링** - 탭 기반 UI
+- ✨ **다중 브라우저 지원** - Selenium + Playwright
+- 🔍 **전체 세션 검색** - Ctrl+Shift+F
 
 ### v16.0 (2025-12-29)
-
-### v15.1 (2024-12-29)
-- 🐛 UI 클리핑 수정: 상임위 버튼, 통계 패널 텍스트 잘림 수정
-- 🎨 테마 호환성 개선: 다크/라이트 전환 시 동적 스타일 적용
-
-### v15.0 (2024-12-29)
-- 🎨 **UI/UX 전면 리팩토링** - GitHub 스타일 디자인 시스템
-- ✨ 모던 다크/라이트 테마 적용
-- 🔘 개선된 버튼 그라데이션 효과
-- 💬 모던 토스트 알림 디자인
-
-### v14.0 (2024-12-26)
-- ✨ 자막 통계 내보내기 기능 추가
-- 🔔 토스트 알림 스택 관리
-- 🔄 Chrome WebDriver 재시도 로직
-- 📱 HiDPI 고해상도 모니터 지원
+- ✨ **시스템 트레이 통합** - 트레이 최소화 옵션
+- ✨ **자막 편집/삭제 기능** - Ctrl+E, Delete
+- 🐛 **HWP 저장 오류 수정**
 
 ---
 

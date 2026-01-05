@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-국회 의사중계 자막 추출기 v16.1 - PyInstaller Spec File (Onefile Edition)
+국회 의사중계 자막 추출기 v17.1 - PyInstaller Spec File (경량화 버전)
 
 빌드 명령어:
     pyinstaller subtitle_extractor.spec
@@ -8,36 +8,45 @@
 생성되는 파일:
     dist/subtitle_extractor.exe (단일 실행 파일)
 
-새 기능 (v16.1):
-    - HWP 저장 오류 완전 해결 (Dynamic Dispatch)
-    - 상임위원회 링크 최신화 및 약칭 지원
-    - 관리자 권한 안내 메시지 추가
+경량화 최적화:
+    - 불필요한 모듈 제외 (tkinter, matplotlib, numpy 등)
+    - Playwright 제외 (PyInstaller 비호환)
+    - UPX 압축 활성화
+    - 디버그 정보 제거
 """
 
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_submodules
 
-# 숨겨진 임포트 모듈 수집
+# ============================================================
+# 숨겨진 임포트 (필수 모듈만 포함 - 경량화)
+# ============================================================
 hiddenimports = [
-    # PyQt6 관련
-    'PyQt6',
+    # PyQt6 코어 (필수)
     'PyQt6.QtCore',
     'PyQt6.QtGui',
     'PyQt6.QtWidgets',
     'PyQt6.sip',
     
-    # Selenium 관련
-    'selenium',
+    # Selenium 코어 (필수)
     'selenium.webdriver',
-    'selenium.webdriver.chrome',
     'selenium.webdriver.chrome.options',
     'selenium.webdriver.chrome.service',
+    'selenium.webdriver.firefox.options',
+    'selenium.webdriver.firefox.service',
+    'selenium.webdriver.edge.options',
+    'selenium.webdriver.edge.service',
     'selenium.webdriver.common.by',
     'selenium.webdriver.support.ui',
     'selenium.webdriver.support.expected_conditions',
     'selenium.common.exceptions',
     
-    # 표준 라이브러리
+    # 앱 모듈 (v17.1)
+    'browser_drivers',
+    'subtitle_session',
+    'session_tab_widget',
+    
+    # 표준 라이브러리 (필수)
     'json',
     'logging',
     'queue',
@@ -47,51 +56,59 @@ hiddenimports = [
     'datetime',
     'pathlib',
     'shutil',
-    
-    # 선택적 라이브러리 (있으면 포함)
+    'uuid',
+    'dataclasses',
+    'abc',
+    'enum',
+    'typing',
+]
+
+# 선택적 모듈 (있으면 포함)
+optional_modules = [
     'docx',
     'docx.shared',
     'docx.enum.text',
     'win32com.client',
-    'win32com.client.dynamic',
-    'pywintypes',
-    'pythoncom',
 ]
 
-# Selenium 서브모듈 자동 수집
-try:
-    hiddenimports += collect_submodules('selenium')
-except Exception:
-    pass
+for mod in optional_modules:
+    try:
+        __import__(mod.split('.')[0])
+        hiddenimports.append(mod)
+    except ImportError:
+        pass
 
-# PyQt6 서브모듈 자동 수집
-try:
-    hiddenimports += collect_submodules('PyQt6')
-except Exception:
-    pass
-
-# 제외할 모듈 (용량 최적화)
+# ============================================================
+# 제외 모듈 (경량화 - 용량 대폭 감소)
+# ============================================================
 excludes = [
-    'tkinter',
-    '_tkinter',
-    'matplotlib',
-    'numpy',
-    'pandas',
-    'scipy',
-    'PIL',
-    'cv2',
-    'IPython',
-    'jupyter',
-    'notebook',
-    'pytest',
-    'unittest',
-    'test',
-    'tests',
+    # GUI 프레임워크
+    'tkinter', '_tkinter', 'tkinter.ttk',
+    
+    # 과학/데이터 라이브러리
+    'matplotlib', 'numpy', 'pandas', 'scipy', 'sklearn',
+    'PIL', 'pillow', 'cv2', 'opencv',
+    
+    # 개발/테스트 도구
+    'IPython', 'jupyter', 'notebook', 'pytest', 'unittest',
+    'test', 'tests', 'sphinx', 'docutils',
+    
+    # Playwright (PyInstaller 비호환 - Node.js 의존성)
+    'playwright', 'playwright.sync_api', 'playwright.async_api',
+    
+    # 기타 불필요한 모듈
+    'asyncio', 'multiprocessing', 'concurrent',
+    'email', 'html.parser', 'http.server',
+    'xml.etree', 'xml.dom', 'xml.sax',
+    'distutils', 'setuptools', 'pkg_resources',
+    'lib2to3', 'pydoc', 'pydoc_data',
 ]
 
+# ============================================================
 # Analysis 설정
+# ============================================================
 a = Analysis(
-    ['251226 국회의사중계 자막.py'],
+    ['multi_session_launcher.py'],  # v17.1 다중 세션 버전
     pathex=[],
     binaries=[],
     datas=[],
@@ -106,10 +123,30 @@ a = Analysis(
     noarchive=False,
 )
 
-# PYZ 설정
-pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+# ============================================================
+# 불필요한 바이너리 제거 (경량화)
+# ============================================================
+# Qt 플러그인 중 불필요한 것 제거
+excluded_binaries = [
+    'Qt6Pdf', 'Qt6Quick', 'Qt6Qml', 'Qt6Network', 'Qt6Sql',
+    'Qt6Svg', 'Qt63D', 'Qt6Multimedia', 'Qt6WebEngine',
+    'opengl32sw', 'd3dcompiler',
+]
 
-# EXE 설정 (Onefile 모드)
+a.binaries = [b for b in a.binaries if not any(exc in b[0] for exc in excluded_binaries)]
+
+# ============================================================
+# PYZ 설정 (압축 최적화)
+# ============================================================
+pyz = PYZ(
+    a.pure,
+    a.zipped_data,
+    cipher=None,
+)
+
+# ============================================================
+# EXE 설정 (Onefile + 경량화)
+# ============================================================
 exe = EXE(
     pyz,
     a.scripts,
@@ -120,37 +157,51 @@ exe = EXE(
     name='subtitle_extractor',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
+    strip=True,  # 디버그 심볼 제거 (경량화)
+    upx=True,    # UPX 압축 활성화 (경량화)
+    upx_exclude=[
+        'vcruntime140.dll',
+        'python3*.dll',
+        'Qt6Core.dll',
+        'Qt6Gui.dll',
+        'Qt6Widgets.dll',
+    ],
     runtime_tmpdir=None,
-    console=False,  # GUI 앱이므로 콘솔 숨김
+    console=False,  # GUI 앱 (콘솔 숨김)
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon=None,
+    # 버전 정보
+    version=None,
 )
 
 # ============================================================
-# 빌드 후 추가 작업 안내
+# 빌드 안내
 # ============================================================
 """
-빌드 완료 후:
+=== 빌드 명령어 ===
+pyinstaller subtitle_extractor.spec
 
-1. dist/subtitle_extractor.exe (단일 파일)이 생성됩니다.
+=== 경량화 팁 ===
+1. UPX 설치: https://github.com/upx/upx/releases
+   - 다운로드 후 PATH에 추가하면 자동으로 압축됩니다.
 
-2. 이 파일 하나만 배포하면 됩니다.
+2. 가상 환경 사용:
+   - 새 가상환경에서 필수 패키지만 설치하면 더 경량화됩니다.
+   - pip install PyQt6 selenium python-docx pywin32
 
-3. 실행 시 주의사항:
-   - 처음 실행 시 임시 폴더에 압축을 풀기 때문에 실행 시간이 조금 더 걸릴 수 있습니다.
-   - 일부 백신 프로그램이 오탐지할 수 있습니다.
-   - 로그 파일(logs), 프리셋(presets) 등은 실행 파일과 같은 위치에 생성됩니다.
+3. 예상 파일 크기:
+   - UPX 없이: ~80-100MB
+   - UPX 적용: ~40-60MB
 
-4. 디버깅 시:
-   - console=True 로 변경하여 빌드 후 에러 메시지를 확인하세요.
+=== 주의사항 ===
+- Playwright는 PyInstaller에서 지원되지 않습니다.
+- EXE 실행 시 Selenium 브라우저만 사용 가능합니다.
+- 첫 실행 시 임시 폴더 압축 해제로 시간이 걸릴 수 있습니다.
 
-5. 버전 정보:
-   - v16.0: 시스템 트레이, 자막 편집, 키보드 단축키 다이얼로그, HWP 저장 버그 수정
+=== 디버깅 ===
+- 오류 확인 시 console=True로 변경하고 재빌드하세요.
 """
