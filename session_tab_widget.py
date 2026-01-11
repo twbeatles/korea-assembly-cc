@@ -275,7 +275,9 @@ class SessionTabWidget(QWidget):
             self.url_input.setEnabled(False)
             self.browser_combo.setEnabled(False)
             self.progress.show()
-            self.stats_timer.start(1000)
+            # 타이머 중복 시작 방지
+            if not self.stats_timer.isActive():
+                self.stats_timer.start(1000)
             self._set_status("시작 중...", "running")
     
     def _stop(self):

@@ -582,6 +582,8 @@ class BrowserFactory:
         PyInstaller 환경에서는 Playwright가 제대로 작동하지 않을 수 있으므로
         제외합니다. Playwright는 Node.js 프로세스를 사용하며, 패키징된 환경에서는
         경로 문제로 실패할 수 있습니다.
+        
+        실제 브라우저 실행 가능 여부도 확인합니다.
         """
         # PyInstaller 환경에서는 Playwright 사용 불가
         if is_frozen():
@@ -589,12 +591,24 @@ class BrowserFactory:
             return False
         
         try:
-            import playwright
-            # 실제 브라우저가 설치되어 있는지도 확인
+            from playwright.sync_api import sync_playwright
+            
+            # 실제 브라우저 실행 가능 여부 간단 체크
             try:
-                from playwright.sync_api import sync_playwright
-                return True
-            except Exception:
+                with sync_playwright() as p:
+                    # 브라우저 중 하나라도 실행 가능한지 확인
+                    for launcher in [p.chromium, p.firefox, p.webkit]:
+                        try:
+                            browser = launcher.launch(headless=True)
+                            browser.close()
+                            logger.debug("Playwright 브라우저 실행 확인 성공")
+                            return True
+                        except Exception:
+                            continue
+                    logger.debug("Playwright 설치되었으나 브라우저 실행 불가")
+                    return False
+            except Exception as e:
+                logger.debug(f"Playwright 브라우저 테스트 실패: {e}")
                 return False
         except ImportError:
             return False

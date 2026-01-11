@@ -76,6 +76,13 @@ class SubtitleSession:
     STATE_STOPPING = "stopping"
     STATE_ERROR = "error"
     
+    # 설정 상수
+    SUBTITLE_FINALIZE_TIMEOUT = 2.0  # 자막 확정 타임아웃 (초)
+    MONITOR_INTERVAL = 0.2  # 모니터링 간격 (초)
+    BROWSER_RETRY_COUNT = 3  # 브라우저 재시도 횟수
+    WORKER_THREAD_TIMEOUT = 3  # 워커 스레드 종료 대기 (초)
+    ELEMENT_WAIT_TIMEOUT = 20  # 요소 대기 타임아웃 (초)
+    
     def __init__(self, session_id: str, name: str = ""):
         self.session_id = session_id
         self.name = name or f"세션 {session_id[:8]}"
@@ -95,6 +102,8 @@ class SubtitleSession:
         
         # 데이터
         self.subtitles: List[SubtitleEntry] = []
+        self._subtitles_lock = threading.Lock()  # 자막 리스트 동기화
+        self._realtime_file_lock = threading.Lock()  # 실시간 파일 쓰기 동기화
         self.last_subtitle: str = ""
         self.last_update_time: float = 0
         self.start_time: Optional[float] = None
@@ -134,19 +143,23 @@ class SubtitleSession:
     
     def start(self) -> bool:
         """추출 시작"""
-        if self.is_running:
-            return False
+        # 원자적 상태 체크 및 변경 (경쟁 조건 방지)
+        with self._state_lock:
+            if self._state in (self.STATE_STARTING, self.STATE_RUNNING):
+                return False
+            self._state = self.STATE_STARTING
         
         if not self.url or not self.selector:
+            self.state = self.STATE_IDLE
             self.message_queue.put(("error", "URL과 선택자를 입력하세요."))
             return False
         
         # 초기화
-        self.subtitles = []
+        with self._subtitles_lock:
+            self.subtitles = []
         self.last_subtitle = ""
         self.start_time = time.time()
         self.stop_event.clear()
-        self.state = self.STATE_STARTING
         
         # 실시간 저장 설정
         if self.realtime_save:
@@ -169,32 +182,41 @@ class SubtitleSession:
     
     def stop(self) -> None:
         """추출 중지"""
-        if not self.is_running:
-            return
+        # 원자적 상태 체크 (경쟁 조건 방지)
+        with self._state_lock:
+            if self._state not in (self.STATE_STARTING, self.STATE_RUNNING):
+                return
+            self._state = self.STATE_STOPPING
         
-        self.state = self.STATE_STOPPING
         self.stop_event.set()
         
         # 워커 스레드 종료 대기
         if self.worker_thread and self.worker_thread.is_alive():
-            self.worker_thread.join(timeout=3)
+            self.worker_thread.join(timeout=self.WORKER_THREAD_TIMEOUT)
+            if self.worker_thread.is_alive():
+                logger.warning(f"워커 스레드가 여전히 실행 중: {self.session_id}")
         
         # 마지막 자막 저장
         if self.last_subtitle:
             self._finalize_subtitle(self.last_subtitle)
             self.last_subtitle = ""
         
-        # 실시간 저장 종료
-        if self.realtime_file:
-            try:
+        # 실시간 저장 종료 (finally 패턴으로 확실히 닫기)
+        try:
+            if self.realtime_file:
                 self.realtime_file.close()
-            except Exception:
-                pass
+        except Exception as e:
+            logger.debug(f"실시간 저장 파일 닫기 오류: {e}")
+        finally:
             self.realtime_file = None
         
-        # 브라우저 종료
-        if self.browser:
-            self.browser.quit()
+        # 브라우저 종료 (finally 패턴으로 확실히 정리)
+        try:
+            if self.browser:
+                self.browser.quit()
+        except Exception as e:
+            logger.debug(f"브라우저 종료 중 오류: {e}")
+        finally:
             self.browser = None
         
         self.state = self.STATE_IDLE
@@ -207,18 +229,17 @@ class SubtitleSession:
             self.browser = BrowserFactory.create(self.browser_type, self.headless)
             
             # 재시도 로직
-            max_retries = 3
-            for attempt in range(max_retries):
+            for attempt in range(self.BROWSER_RETRY_COUNT):
                 try:
                     self.browser.create_driver()
                     self.message_queue.put(("status", "브라우저 시작 완료"))
                     break
                 except Exception as e:
-                    if attempt < max_retries - 1:
-                        self.message_queue.put(("status", f"재시도 ({attempt+2}/{max_retries})..."))
+                    if attempt < self.BROWSER_RETRY_COUNT - 1:
+                        self.message_queue.put(("status", f"재시도 ({attempt+2}/{self.BROWSER_RETRY_COUNT})..."))
                         time.sleep(2)
                     else:
-                        self.message_queue.put(("error", f"브라우저 오류 ({max_retries}회 시도 실패): {e}"))
+                        self.message_queue.put(("error", f"브라우저 오류 ({self.BROWSER_RETRY_COUNT}회 시도 실패): {e}"))
                         return
             
             # 페이지 로드
@@ -238,7 +259,7 @@ class SubtitleSession:
             
             # Selenium 사용 시 WebDriverWait 활용
             if SELENIUM_AVAILABLE and WebDriverWait is not None and not BrowserType.is_playwright(self.browser_type):
-                wait = WebDriverWait(self.browser.driver, 20)
+                wait = WebDriverWait(self.browser.driver, self.ELEMENT_WAIT_TIMEOUT)
                 for sel in selectors_to_try:
                     try:
                         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, sel)))
@@ -250,11 +271,10 @@ class SubtitleSession:
                         continue
             else:
                 # Playwright 또는 Selenium 미설치 시 직접 대기
-                import time as time_module
                 for sel in selectors_to_try:
-                    for _ in range(20):  # 20초 대기
+                    for _ in range(self.ELEMENT_WAIT_TIMEOUT):  # 대기
                         try:
-                            element = self.browser.find_element(By, sel) if By else self.browser.find_element("css selector", sel)
+                            element = self.browser.find_element(By.CSS_SELECTOR, sel) if By else self.browser.find_element("css selector", sel)
                             if element:
                                 self.selector = sel
                                 self.message_queue.put(("status", f"자막 요소 찾음: {sel}"))
@@ -262,7 +282,7 @@ class SubtitleSession:
                                 break
                         except Exception:
                             pass
-                        time_module.sleep(1)
+                        time.sleep(1)
                     if found:
                         break
             
@@ -278,11 +298,18 @@ class SubtitleSession:
             while not self.stop_event.is_set():
                 try:
                     now = time.time()
-                    if now - last_check >= 0.2:
+                    if now - last_check >= self.MONITOR_INTERVAL:
                         try:
-                            # 상단에서 import된 Selenium 모듈 활용 (반복 import 제거)
-                            text = self.browser.find_element(By.CSS_SELECTOR, self.selector).text.strip()
+                            # Selenium/Playwright 호환성 처리
+                            if By is not None:
+                                text = self.browser.find_element(By.CSS_SELECTOR, self.selector).text.strip()
+                            else:
+                                # Playwright 또는 Selenium 미설치 환경
+                                text = self.browser.find_element("css selector", self.selector).text.strip()
                         except (NoSuchElementException, StaleElementReferenceException):
+                            text = ""
+                        except AttributeError:
+                            # find_element 결과가 None인 경우
                             text = ""
                         except Exception:
                             text = ""
@@ -293,8 +320,8 @@ class SubtitleSession:
                             self.last_subtitle = text
                             self.message_queue.put(("preview", text))
                         
-                        # 2초 경과 시 확정
-                        if self.last_subtitle and (now - self.last_update_time) >= 2.0:
+                        # 타임아웃 경과 시 확정
+                        if self.last_subtitle and (now - self.last_update_time) >= self.SUBTITLE_FINALIZE_TIMEOUT:
                             self._finalize_subtitle(self.last_subtitle)
                             self.last_subtitle = ""
                         
@@ -349,65 +376,71 @@ class SubtitleSession:
         return text.strip()
     
     def _finalize_subtitle(self, text: str) -> None:
-        """자막 확정"""
+        """자막 확정 - 스레드 안전하게 처리"""
         if not text:
             return
         
-        # 중복/겹침 처리
-        if self.subtitles:
-            last_text = self.subtitles[-1].text
-            if text.startswith(last_text):
-                new_part = text[len(last_text):].strip()
-                if new_part:
-                    self.subtitles[-1].text = text
-                    self.subtitles[-1].end_time = datetime.now()
-                    
-                    if self.realtime_file:
-                        try:
-                            self.realtime_file.write(f"+{new_part}\n")
-                            self.realtime_file.flush()
-                        except Exception:
-                            pass
-                return
+        entry = None  # 콜백용 변수 (lock 외부에서 사용)
         
-        # 새 자막
-        entry = SubtitleEntry(text)
-        entry.start_time = datetime.now()
-        entry.end_time = datetime.now()
-        self.subtitles.append(entry)
+        # 스레드 안전한 자막 리스트 접근
+        with self._subtitles_lock:
+            # 중복/겹침 처리
+            if self.subtitles:
+                last_text = self.subtitles[-1].text
+                if text.startswith(last_text):
+                    new_part = text[len(last_text):].strip()
+                    if new_part:
+                        self.subtitles[-1].text = text
+                        self.subtitles[-1].end_time = datetime.now()
+                        self._write_realtime(f"+{new_part}\n")
+                    return
+            
+            # 새 자막
+            entry = SubtitleEntry(text)
+            entry.start_time = datetime.now()
+            entry.end_time = datetime.now()
+            self.subtitles.append(entry)
         
-        # 콜백
-        if self.on_subtitle_finalized:
-            self.on_subtitle_finalized(entry)
-        
-        self.message_queue.put(("finalized", entry))
-        
-        # 실시간 저장
-        if self.realtime_file:
-            try:
-                timestamp = entry.timestamp.strftime('%H:%M:%S')
-                self.realtime_file.write(f"[{timestamp}] {text}\n")
-                self.realtime_file.flush()
-            except Exception:
-                pass
+        # 콜백 (lock 외부에서 실행 - entry가 None이 아닐 때만)
+        if entry:
+            if self.on_subtitle_finalized:
+                self.on_subtitle_finalized(entry)
+            
+            self.message_queue.put(("finalized", entry))
+            
+            # 실시간 저장
+            timestamp = entry.timestamp.strftime('%H:%M:%S')
+            self._write_realtime(f"[{timestamp}] {text}\n")
+    
+    def _write_realtime(self, text: str) -> None:
+        """스레드 안전한 실시간 파일 쓰기"""
+        with self._realtime_file_lock:
+            if self.realtime_file:
+                try:
+                    self.realtime_file.write(text)
+                    self.realtime_file.flush()
+                except Exception:
+                    pass
     
     def get_stats(self) -> Dict[str, Any]:
-        """통계 정보 반환 - 단일 순회로 최적화"""
+        """통계 정보 반환 - 스레드 안전하게 단일 순회로 최적화"""
         elapsed = int(time.time() - self.start_time) if self.start_time else 0
         
-        # 한 번의 순회로 모든 통계 계산 (성능 최적화)
+        # 스레드 안전한 접근으로 한 번의 순회로 모든 통계 계산
         total_chars = 0
         total_words = 0
-        for s in self.subtitles:
-            total_chars += len(s.text)
-            total_words += len(s.text.split())
+        with self._subtitles_lock:
+            subtitle_count = len(self.subtitles)
+            for s in self.subtitles:
+                total_chars += len(s.text)
+                total_words += len(s.text.split())
         
         # ZeroDivisionError 방지
         cpm = int(total_chars / (elapsed / 60)) if elapsed > 0 else 0
         
         return {
             'elapsed': elapsed,
-            'subtitle_count': len(self.subtitles),
+            'subtitle_count': subtitle_count,
             'char_count': total_chars,
             'word_count': total_words,
             'cpm': cpm,

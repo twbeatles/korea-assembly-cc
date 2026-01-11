@@ -471,7 +471,7 @@ QMessageBox QLabel {
 class MultiSessionMainWindow(QMainWindow):
     """다중 세션 지원 메인 윈도우"""
     
-    VERSION = "17.0"
+    VERSION = "17.2"
     APP_NAME = "국회 의사중계 자막 추출기"
     
     def __init__(self):
@@ -652,18 +652,30 @@ class MultiSessionMainWindow(QMainWindow):
             return
         
         saved = 0
+        failed = []  # 실패한 세션 추적
         for session_id, widget in self.tab_widget.tab_widgets.items():
-            if widget.session.subtitles:
-                filename = f"{folder}/{widget.session.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-                try:
-                    with open(filename, 'w', encoding='utf-8') as f:
-                        for entry in widget.session.subtitles:
-                            f.write(f"[{entry.timestamp.strftime('%H:%M:%S')}] {entry.text}\n")
-                    saved += 1
-                except Exception as e:
-                    logger.error(f"저장 오류: {e}")
+            # 스레드 안전하게 자막 접근
+            with widget.session._subtitles_lock:
+                if widget.session.subtitles:
+                    filename = f"{folder}/{widget.session.name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                    try:
+                        with open(filename, 'w', encoding='utf-8') as f:
+                            for entry in widget.session.subtitles:
+                                f.write(f"[{entry.timestamp.strftime('%H:%M:%S')}] {entry.text}\n")
+                        saved += 1
+                    except Exception as e:
+                        logger.error(f"저장 오류: {e}")
+                        failed.append((widget.session.name, str(e)))
         
-        QMessageBox.information(self, "저장 완료", f"{saved}개 세션이 저장되었습니다.")
+        # 결과 메시지에 실패 정보 포함
+        if failed:
+            failed_msg = "\n".join([f"- {name}: {err}" for name, err in failed])
+            QMessageBox.warning(
+                self, "저장 완료 (일부 실패)", 
+                f"{saved}개 세션 저장됨, {len(failed)}개 실패:\n\n{failed_msg}"
+            )
+        else:
+            QMessageBox.information(self, "저장 완료", f"{saved}개 세션이 저장되었습니다.")
     
     def _search_all(self):
         """전체 세션 검색"""
