@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-국회 의사중계 자막 추출기 v16.3
+국회 의사중계 자막 추출기 v16.4
 - 참조 코드 기반 안정적 구조
 - PyQt6 모던 UI
 - 추가 기능: 타임스탬프, 실시간 저장, 검색, 테마, URL 히스토리, SRT/VTT 내보내기, 통계, 키워드 하이라이트, 세션 저장
@@ -73,7 +73,7 @@ try:
         QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QCheckBox,
         QFrame, QProgressBar, QMessageBox, QFileDialog,
         QGroupBox, QGridLayout, QDialog, QDialogButtonBox, QListWidget,
-        QSplitter, QMenu, QMenuBar, QInputDialog, QSystemTrayIcon
+        QSplitter, QMenu, QMenuBar, QInputDialog, QSystemTrayIcon, QAbstractItemView
     )
     from PyQt6.QtCore import Qt, QTimer, QSettings
     from PyQt6.QtGui import (
@@ -102,7 +102,7 @@ except ImportError:
 
 class Config:
     """프로그램 설정 상수"""
-    VERSION = "16.3"  # 스레드 안전성 강화, 키워드 설정 영구 저장, 종료 처리 개선
+    VERSION = "16.5"  # 스레드 안전성 전면 강화, 비동기 파일 저장, 헤드리스 포트 동적 할당
     APP_NAME = "국회 의사중계 자막 추출기"
     
     # 타이밍 상수 (초)
@@ -138,54 +138,50 @@ class Config:
     # 기본 URL
     DEFAULT_URL = "https://assembly.webcast.go.kr/main/player.asp"
     
-    # 상임위원회 기본 프리셋 (xcode 값은 국회 의사중계 시스템에서 확인된 정확한 값)
+    # 상임위원회 기본 프리셋 (v16.0 기준 동작하는 xcode 값)
     # xcode: 위원회(채널) 구분 고정 값
     # xcgcd: 해당 회의의 고유 방송 ID (매 회의마다 변경)
     DEFAULT_COMMITTEE_PRESETS = {
-        "본회의": "https://assembly.webcast.go.kr/main/player.asp?xcode=10",
-        "운영위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=324",
-        "법제사법위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=325",
-        "정무위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=326",
-        "기획재정위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=365",
-        "교육위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=358",
-        "과학기술정보방송통신위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=356",
-        "외교통일위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=348",
-        "국방위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=337",
-        "행정안전위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=345",
-        "문화체육관광위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=359",
-        "농림축산식품해양수산위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=353",
-        "산업통상자원중소벤처기업위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=355",
-        "보건복지위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=333",
-        "환경노동위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=362",
-        "국토교통위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=354",
-        "여성가족위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=363",
+        "본회의": "https://assembly.webcast.go.kr/main/player.asp",
+        "국회운영위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=24",
+        "법제사법위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=25",
+        "기획재정위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=38",
+        "교육위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=58",
+        "과학기술정보방송통신위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=56",
+        "외교통일위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=48",
+        "국방위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=37",
+        "행정안전위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=45",
+        "문화체육관광위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=59",
+        "농림축산식품해양수산위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=53",
+        "산업통상자원중소벤처기업위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=55",
+        "보건복지위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=33",
+        "환경노동위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=62",
+        "국토교통위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=54",
+        "정보위원회": "https://assembly.webcast.go.kr/main/player.asp",
+        "여성가족위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=36",
         "예산결산특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=21",
-        "특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=20",
-        "청문회/공청회": "https://assembly.webcast.go.kr/main/player.asp?xcode=97",
     }
     
-    # 상임위원회 xcode 값 매핑 (프로그램 내 참조용)
+    # 상임위원회 xcode 값 매핑 (v16.0 기준 동작하는 값)
     COMMITTEE_XCODE_MAP = {
-        "본회의": 10,
-        "운영위원회": 324,
-        "법제사법위원회": 325,
-        "정무위원회": 326,
-        "기획재정위원회": 365,
-        "교육위원회": 358,
-        "과학기술정보방송통신위원회": 356,
-        "외교통일위원회": 348,
-        "국방위원회": 337,
-        "행정안전위원회": 345,
-        "문화체육관광위원회": 359,
-        "농림축산식품해양수산위원회": 353,
-        "산업통상자원중소벤처기업위원회": 355,
-        "보건복지위원회": 333,
-        "환경노동위원회": 362,
-        "국토교통위원회": 354,
-        "여성가족위원회": 363,
+        "본회의": None,  # 본회의는 xcode 없이 접근
+        "국회운영위원회": 24,
+        "법제사법위원회": 25,
+        "기획재정위원회": 38,
+        "교육위원회": 58,
+        "과학기술정보방송통신위원회": 56,
+        "외교통일위원회": 48,
+        "국방위원회": 37,
+        "행정안전위원회": 45,
+        "문화체육관광위원회": 59,
+        "농림축산식품해양수산위원회": 53,
+        "산업통상자원중소벤처기업위원회": 55,
+        "보건복지위원회": 33,
+        "환경노동위원회": 62,
+        "국토교통위원회": 54,
+        "정보위원회": None,
+        "여성가족위원회": 36,
         "예산결산특별위원회": 21,
-        "특별위원회": 20,
-        "청문회/공청회": 97,
     }
     
     # 상임위원회 약칭 매핑 (사이트 내 표기 포함)
@@ -879,9 +875,18 @@ class SubtitleEntry:
     
     @classmethod
     def from_dict(cls, data: dict) -> 'SubtitleEntry':
-        """딕셔너리에서 생성"""
-        entry = cls(data['text'])
-        entry.timestamp = datetime.fromisoformat(data['timestamp'])
+        """딕셔너리에서 생성 - 방어 코드 포함"""
+        # 필수 필드 검증
+        text = data.get('text', '')
+        timestamp_str = data.get('timestamp')
+        
+        if not text:
+            raise ValueError("자막 텍스트가 비어있습니다")
+        if not timestamp_str:
+            raise ValueError("타임스탬프가 없습니다")
+        
+        entry = cls(text)
+        entry.timestamp = datetime.fromisoformat(timestamp_str)
         if data.get('start_time'):
             entry.start_time = datetime.fromisoformat(data['start_time'])
         if data.get('end_time'):
@@ -1686,9 +1691,9 @@ class MainWindow(QMainWindow):
                         return abbr
                 return name
         
-        # 2. xcode 파라미터 매칭
+        # 2. xcode 파라미터 매칭 (숫자 또는 문자열 xcode 모두 지원)
         import re
-        match = re.search(r'xcode=(\d+)', url)
+        match = re.search(r'xcode=([^&]+)', url)
         if match:
             xcode = match.group(1)
             # 프리셋에서 해당 xcode를 가진 URL 찾기
@@ -2035,6 +2040,7 @@ class MainWindow(QMainWindow):
             self.progress.show()
             
             self._set_status("Chrome 브라우저 시작 중...", "running")
+            self._update_tray_status("🟢 추출 중")
             
             # UI 값을 시작 시점에 복사 (스레드 안전성)
             headless = self.headless_check.isChecked()
@@ -2094,6 +2100,7 @@ class MainWindow(QMainWindow):
         
         self._reset_ui()
         self._set_status("중지됨", "warning")
+        self._update_tray_status("⚪ 대기 중")
     
     def _reset_ui(self):
         self.is_running = False
@@ -2208,8 +2215,8 @@ class MainWindow(QMainWindow):
             if not xcgcd:
                 navigated_to_main = False
                 try:
-                    # xcode 추출
-                    xcode_match = re.search(r'xcode=(\d+)', original_url)
+                    # xcode 추출 (숫자 또는 문자열 xcode 모두 지원)
+                    xcode_match = re.search(r'xcode=([^&]+)', original_url)
                     if xcode_match:
                         xcode = xcode_match.group(1)
                         
@@ -2291,14 +2298,9 @@ class MainWindow(QMainWindow):
                 options.add_argument("--no-sandbox")
                 options.add_argument("--disable-dev-shm-usage")
                 options.add_argument("--disable-setuid-sandbox")
-                options.add_argument("--remote-debugging-port=9222")
+                options.add_argument("--remote-debugging-port=0")  # 동적 포트 할당 (다중 인스턴스 충돌 방지)
                 options.add_argument("--enable-javascript")
                 self.message_queue.put(("status", "헤드리스 모드로 시작 중..."))
-            
-            # 브라우저 세션 쿠키 유지를 위한 user-data-dir 설정 (PID로 고유화)
-            user_data_dir = Path(f"chrome_profile_{os.getpid()}")
-            user_data_dir.mkdir(exist_ok=True)
-            options.add_argument(f"--user-data-dir={user_data_dir.absolute()}")
             
             # WebDriver 초기화 재시도 (최대 3회)
             max_retries = 3
@@ -2318,18 +2320,17 @@ class MainWindow(QMainWindow):
             
             self.message_queue.put(("status", "페이지 로딩 중..."))
             driver.get(url)
-            time.sleep(3)  # 초기 로딩 대기
+            time.sleep(5)  # 초기 로딩 대기 (v16.0과 동일하게 5초로 복원)
             
-            # 현재 생중계 xcgcd 자동 감지 (URL에 xcgcd가 없는 경우)
-            detected_url = self._detect_live_broadcast(driver, url)
-            
-            # 감지된 URL이 다르면 페이지 다시 로드
-            if detected_url != url and 'xcgcd=' in detected_url:
-                self.message_queue.put(("status", "🔄 생중계 URL로 이동 중..."))
-                driver.get(detected_url)
-                time.sleep(3)
-            
-            time.sleep(2)  # 추가 로딩 대기
+            # 현재 생중계 xcgcd 자동 감지 (URL에 xcgcd가 없는 경우에만)
+            # xcgcd가 이미 URL에 있으면 자동 감지 건너뛰기
+            if 'xcgcd=' not in url:
+                detected_url = self._detect_live_broadcast(driver, url)
+                # 감지된 URL이 다르면 페이지 다시 로드
+                if detected_url != url and 'xcgcd=' in detected_url:
+                    self.message_queue.put(("status", "🔄 생중계 URL로 이동 중..."))
+                    driver.get(detected_url)
+                    time.sleep(5)
             
             self.message_queue.put(("status", "AI 자막 활성화 중..."))
             self._activate_subtitle(driver)
@@ -2359,7 +2360,17 @@ class MainWindow(QMainWindow):
                     continue
             
             if not found:
-                self.message_queue.put(("error", "자막 요소를 찾을 수 없습니다."))
+                # 사용자에게 직접 링크를 가져오라고 안내
+                self.message_queue.put((
+                    "subtitle_not_found",
+                    "자막 요소를 찾을 수 없습니다.\n\n"
+                    "현재 진행 중인 생중계가 없거나, URL이 올바르지 않을 수 있습니다.\n\n"
+                    "📌 해결 방법:\n"
+                    "1. https://assembly.webcast.go.kr 사이트에서\n"
+                    "2. 현재 진행 중인 중계를 직접 클릭하여\n"
+                    "3. 해당 페이지의 URL을 복사해서 입력해주세요.\n\n"
+                    "💡 Tip: URL에 'xcgcd=' 파라미터가 포함된 링크가 필요합니다."
+                ))
                 return
             
             # 찾은 셀렉터를 사용하여 모니터링
@@ -2572,8 +2583,36 @@ class MainWindow(QMainWindow):
                 self._refresh_text()
                 self._reset_ui()
                 
-                total_chars = sum(len(s.text) for s in self.subtitles)
-                self.status_label.setText(f"완료 - {len(self.subtitles)}문장, {total_chars:,}자")
+                # 스레드 안전하게 통계 계산
+                with self.subtitle_lock:
+                    subtitle_count = len(self.subtitles)
+                    total_chars = sum(len(s.text) for s in self.subtitles)
+                self.status_label.setText(f"완료 - {subtitle_count}문장, {total_chars:,}자")
+            
+            elif msg_type == "subtitle_not_found":
+                # 자막 요소를 찾지 못했을 때 사용자 안내
+                self.progress.hide()
+                self._reset_ui()
+                self._update_tray_status("⚪ 대기 중")
+                
+                # 상세 안내 다이얼로그
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("자막을 찾을 수 없습니다")
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setText(str(data))
+                msg_box.setStandardButtons(
+                    QMessageBox.StandardButton.Open | 
+                    QMessageBox.StandardButton.Ok
+                )
+                msg_box.button(QMessageBox.StandardButton.Open).setText("🌐 사이트 열기")
+                msg_box.button(QMessageBox.StandardButton.Ok).setText("확인")
+                
+                result = msg_box.exec()
+                
+                # 사이트 열기 버튼 클릭 시 브라우저에서 열기
+                if result == QMessageBox.StandardButton.Open:
+                    import webbrowser
+                    webbrowser.open("https://assembly.webcast.go.kr")
         
         except Exception as e:
             logger.error(f"메시지 처리 오류 ({msg_type}): {e}")
@@ -2589,7 +2628,7 @@ class MainWindow(QMainWindow):
         
         # 확정 타이머 시작 (아직 안돌고 있으면)
         if not self.finalize_timer.isActive():
-            self.finalize_timer.start(500)
+            self.finalize_timer.start(Config.FINALIZE_CHECK_INTERVAL)
         
         # 화면에는 현재 자막만 표시 (누적 없음, 미리보기만)
         self._update_preview(raw)
@@ -2765,12 +2804,16 @@ class MainWindow(QMainWindow):
             m, s = divmod(r, 60)
             self.stat_time.setText(f"⏱️ 실행 시간: {h:02d}:{m:02d}:{s:02d}")
             
-            total_chars = sum(len(s.text) for s in self.subtitles)
-            total_words = sum(len(s.text.split()) for s in self.subtitles)
+            # 스레드 안전하게 자막 접근
+            with self.subtitle_lock:
+                subtitles_snapshot = list(self.subtitles)
+            
+            total_chars = sum(len(s.text) for s in subtitles_snapshot)
+            total_words = sum(len(s.text.split()) for s in subtitles_snapshot)
             
             self.stat_chars.setText(f"📝 글자 수: {total_chars:,}")
             self.stat_words.setText(f"📖 단어 수: {total_words:,}")
-            self.stat_sents.setText(f"💬 문장 수: {len(self.subtitles)}")
+            self.stat_sents.setText(f"💬 문장 수: {len(subtitles_snapshot)}")
             
             if elapsed > 0:
                 cpm = int(total_chars / (elapsed / 60))
@@ -2890,11 +2933,15 @@ class MainWindow(QMainWindow):
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_file = backup_dir / f"backup_{timestamp}.json"
             
+            # 스레드 안전하게 자막 복사
+            with self.subtitle_lock:
+                subtitles_copy = [s.to_dict() for s in self.subtitles]
+            
             data = {
                 'version': Config.VERSION,
                 'created': datetime.now().isoformat(),
                 'url': self._get_current_url(),
-                'subtitles': [s.to_dict() for s in self.subtitles]
+                'subtitles': subtitles_copy
             }
             
             with open(backup_file, 'w', encoding='utf-8') as f:
@@ -2923,8 +2970,34 @@ class MainWindow(QMainWindow):
     
     # ========== 파일 저장 ==========
     
+    def _save_in_background(self, save_func, path: str, success_msg: str, error_prefix: str):
+        """백그라운드에서 파일 저장 (자막 수집 중단 없이)
+        
+        Args:
+            save_func: 실제 저장을 수행하는 함수 (path를 인자로 받음)
+            path: 저장할 파일 경로
+            success_msg: 성공 시 토스트 메시지
+            error_prefix: 실패 시 에러 메시지 접두어
+        """
+        def background_save():
+            try:
+                save_func(path)
+                # UI 스레드에서 토스트 표시 (QTimer.singleShot 사용)
+                QTimer.singleShot(0, lambda: self._show_toast(success_msg, "success"))
+            except Exception as e:
+                logger.error(f"{error_prefix}: {e}")
+                QTimer.singleShot(0, lambda: self._show_toast(f"{error_prefix}: {e}", "error", 5000))
+        
+        # 백그라운드 스레드에서 저장 실행
+        save_thread = threading.Thread(target=background_save, daemon=True)
+        save_thread.start()
+        
+        # 저장 시작 알림 (즉시)
+        self._show_toast(f"💾 저장 중... ({Path(path).name})", "info", 1500)
+    
     def _get_accumulated_text(self):
-        return "\n".join(s.text for s in self.subtitles)
+        with self.subtitle_lock:
+            return "\n".join(s.text for s in self.subtitles)
     
     def _export_stats(self):
         """자막 통계 내보내기"""
@@ -2932,19 +3005,23 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "알림", "내보낼 내용이 없습니다.")
             return
         
+        # 스레드 안전하게 자막 스냅샷 생성
+        with self.subtitle_lock:
+            subtitles_snapshot = list(self.subtitles)
+        
         # 통계 계산
-        total_chars = sum(len(s.text) for s in self.subtitles)
-        total_words = sum(len(s.text.split()) for s in self.subtitles)
+        total_chars = sum(len(s.text) for s in subtitles_snapshot)
+        total_words = sum(len(s.text.split()) for s in subtitles_snapshot)
         
         # 시간대별 통계
         hour_counts = {}
-        for entry in self.subtitles:
+        for entry in subtitles_snapshot:
             hour = entry.timestamp.hour
             hour_counts[hour] = hour_counts.get(hour, 0) + 1
         
         # 가장 긴/짧은 문장
-        longest = max(self.subtitles, key=lambda s: len(s.text))
-        shortest = min(self.subtitles, key=lambda s: len(s.text))
+        longest = max(subtitles_snapshot, key=lambda s: len(s.text))
+        shortest = min(subtitles_snapshot, key=lambda s: len(s.text))
         
         # 파일 저장
         filename = f"자막통계_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -2961,11 +3038,11 @@ class MainWindow(QMainWindow):
                     
                     f.write("📊 기본 통계\n")
                     f.write("-" * 30 + "\n")
-                    f.write(f"  총 문장 수: {len(self.subtitles):,}개\n")
+                    f.write(f"  총 문장 수: {len(subtitles_snapshot):,}개\n")
                     f.write(f"  총 글자 수: {total_chars:,}자\n")
                     f.write(f"  총 단어 수: {total_words:,}개\n")
-                    f.write(f"  평균 문장 길이: {total_chars/len(self.subtitles):.1f}자\n")
-                    f.write(f"  평균 단어 수: {total_words/len(self.subtitles):.1f}개\n\n")
+                    f.write(f"  평균 문장 길이: {total_chars/len(subtitles_snapshot):.1f}자\n")
+                    f.write(f"  평균 단어 수: {total_words/len(subtitles_snapshot):.1f}개\n\n")
                     
                     f.write("📏 문장 분석\n")
                     f.write("-" * 30 + "\n")
@@ -2986,7 +3063,7 @@ class MainWindow(QMainWindow):
                     if self.keywords:
                         f.write("🔍 키워드 빈도\n")
                         f.write("-" * 30 + "\n")
-                        all_text = " ".join(s.text for s in self.subtitles).lower()
+                        all_text = " ".join(s.text for s in subtitles_snapshot).lower()
                         for kw in self.keywords:
                             count = all_text.count(kw.lower())
                             if count > 0:
@@ -3008,10 +3085,18 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "TXT 저장", filename, "텍스트 (*.txt)")
         
         if path:
-            with open(path, 'w', encoding='utf-8') as f:
-                for entry in self.subtitles:
-                    f.write(f"[{entry.timestamp.strftime('%H:%M:%S')}] {entry.text}\n")
-            QMessageBox.information(self, "성공", "저장 완료!")
+            # 스레드 안전하게 자막 스냅샷 생성 (UI 스레드에서)
+            with self.subtitle_lock:
+                subtitles_snapshot = list(self.subtitles)
+            
+            # 실제 저장 함수 정의
+            def do_save(filepath):
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    for entry in subtitles_snapshot:
+                        f.write(f"[{entry.timestamp.strftime('%H:%M:%S')}] {entry.text}\n")
+            
+            # 백그라운드에서 저장 실행
+            self._save_in_background(do_save, path, "TXT 저장 완료!", "TXT 저장 실패")
     
     def _save_srt(self):
         if not self.subtitles:
@@ -3022,18 +3107,23 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "SRT 저장", filename, "SubRip (*.srt)")
         
         if path:
-            with open(path, 'w', encoding='utf-8') as f:
-                for i, entry in enumerate(self.subtitles, 1):
-                    # None 값 처리 - timestamp 기반 fallback
-                    if entry.start_time and entry.end_time:
-                        start = entry.start_time.strftime('%H:%M:%S,000')
-                        end = entry.end_time.strftime('%H:%M:%S,000')
-                    else:
-                        start = entry.timestamp.strftime('%H:%M:%S,000')
-                        end_time = entry.timestamp + timedelta(seconds=3)
-                        end = end_time.strftime('%H:%M:%S,000')
-                    f.write(f"{i}\n{start} --> {end}\n{entry.text}\n\n")
-            QMessageBox.information(self, "성공", "SRT 저장 완료!")
+            # 스레드 안전하게 자막 스냅샷 생성 (UI 스레드에서)
+            with self.subtitle_lock:
+                subtitles_snapshot = list(self.subtitles)
+            
+            def do_save(filepath):
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    for i, entry in enumerate(subtitles_snapshot, 1):
+                        if entry.start_time and entry.end_time:
+                            start = entry.start_time.strftime('%H:%M:%S,000')
+                            end = entry.end_time.strftime('%H:%M:%S,000')
+                        else:
+                            start = entry.timestamp.strftime('%H:%M:%S,000')
+                            end_time = entry.timestamp + timedelta(seconds=3)
+                            end = end_time.strftime('%H:%M:%S,000')
+                        f.write(f"{i}\n{start} --> {end}\n{entry.text}\n\n")
+            
+            self._save_in_background(do_save, path, "SRT 저장 완료!", "SRT 저장 실패")
     
     def _save_vtt(self):
         if not self.subtitles:
@@ -3044,19 +3134,23 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "VTT 저장", filename, "WebVTT (*.vtt)")
         
         if path:
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write("WEBVTT\n\n")
-                for i, entry in enumerate(self.subtitles, 1):
-                    # None 값 처리 - timestamp 기반 fallback
-                    if entry.start_time and entry.end_time:
-                        start = entry.start_time.strftime('%H:%M:%S.000')
-                        end = entry.end_time.strftime('%H:%M:%S.000')
-                    else:
-                        start = entry.timestamp.strftime('%H:%M:%S.000')
-                        end_time = entry.timestamp + timedelta(seconds=3)
-                        end = end_time.strftime('%H:%M:%S.000')
-                    f.write(f"{i}\n{start} --> {end}\n{entry.text}\n\n")
-            QMessageBox.information(self, "성공", "VTT 저장 완료!")
+            with self.subtitle_lock:
+                subtitles_snapshot = list(self.subtitles)
+            
+            def do_save(filepath):
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write("WEBVTT\n\n")
+                    for i, entry in enumerate(subtitles_snapshot, 1):
+                        if entry.start_time and entry.end_time:
+                            start = entry.start_time.strftime('%H:%M:%S.000')
+                            end = entry.end_time.strftime('%H:%M:%S.000')
+                        else:
+                            start = entry.timestamp.strftime('%H:%M:%S.000')
+                            end_time = entry.timestamp + timedelta(seconds=3)
+                            end = end_time.strftime('%H:%M:%S.000')
+                        f.write(f"{i}\n{start} --> {end}\n{entry.text}\n\n")
+            
+            self._save_in_background(do_save, path, "VTT 저장 완료!", "VTT 저장 실패")
     
     def _save_docx(self):
         """DOCX (Word) 파일로 저장"""
@@ -3091,8 +3185,12 @@ class MainWindow(QMainWindow):
                 doc.add_paragraph(f"생성 일시: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M:%S')}")
                 doc.add_paragraph()
                 
+                # 스레드 안전하게 자막 스냅샷 생성
+                with self.subtitle_lock:
+                    subtitles_snapshot = list(self.subtitles)
+                
                 # 자막 내용
-                for entry in self.subtitles:
+                for entry in subtitles_snapshot:
                     timestamp = entry.timestamp.strftime('%H:%M:%S')
                     p = doc.add_paragraph()
                     run = p.add_run(f"[{timestamp}] ")
@@ -3102,8 +3200,8 @@ class MainWindow(QMainWindow):
                 
                 # 통계
                 doc.add_paragraph()
-                total_chars = sum(len(s.text) for s in self.subtitles)
-                doc.add_paragraph(f"총 {len(self.subtitles)}문장, {total_chars:,}자")
+                total_chars = sum(len(s.text) for s in subtitles_snapshot)
+                doc.add_paragraph(f"총 {len(subtitles_snapshot)}문장, {total_chars:,}자")
                 
                 doc.save(path)
                 QMessageBox.information(self, "성공", f"DOCX 저장 완료!\n\n파일: {path}")
@@ -3154,15 +3252,19 @@ class MainWindow(QMainWindow):
             hwp.HParameterSet.HInsertText.Text = f"생성 일시: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M:%S')}\r\n\r\n"
             hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
             
+            # 스레드 안전하게 자막 스냅샷 생성
+            with self.subtitle_lock:
+                subtitles_snapshot = list(self.subtitles)
+            
             # 자막 내용
-            for entry in self.subtitles:
+            for entry in subtitles_snapshot:
                 timestamp = entry.timestamp.strftime('%H:%M:%S')
                 hwp.HParameterSet.HInsertText.Text = f"[{timestamp}] {entry.text}\r\n"
                 hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
             
             # 통계
-            total_chars = sum(len(s.text) for s in self.subtitles)
-            hwp.HParameterSet.HInsertText.Text = f"\r\n총 {len(self.subtitles)}문장, {total_chars:,}자\r\n"
+            total_chars = sum(len(s.text) for s in subtitles_snapshot)
+            hwp.HParameterSet.HInsertText.Text = f"\r\n총 {len(subtitles_snapshot)}문장, {total_chars:,}자\r\n"
             hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
             
             # 저장 대화상자
@@ -3204,6 +3306,20 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
     
+    def _rtf_encode(self, text: str) -> str:
+        """유니코드 문자를 RTF 형식으로 인코딩 (특수문자 이스케이프)"""
+        result = []
+        for char in text:
+            if char == '\\':
+                result.append("\\\\")
+            elif char == '{':
+                result.append("\\{")
+            elif char == '}':
+                result.append("\\}")
+            else:
+                result.append(char)
+        return ''.join(result)
+    
     def _save_rtf(self):
         """RTF 파일로 저장 (HWP에서 열기 가능)"""
         if not self.subtitles:
@@ -3215,34 +3331,45 @@ class MainWindow(QMainWindow):
         
         if path:
             try:
-                with open(path, 'w', encoding='utf-8') as f:
-                    # RTF 헤더
-                    f.write(r"{\rtf1\ansi\deff0")
-                    f.write(r"{\fonttbl{\f0 맑은 고딕;}}")
-                    f.write(r"{\colortbl;\red0\green0\blue0;\red128\green128\blue128;}")
-                    f.write("\n")
+                # 스레드 안전하게 자막 스냅샷 생성
+                with self.subtitle_lock:
+                    subtitles_snapshot = list(self.subtitles)
+                
+                with open(path, 'wb') as f:  # 바이너리 모드로 변경
+                    # RTF 헤더 (유니코드 지원)
+                    f.write(b"{\\rtf1\\ansi\\ansicpg949\\deff0")
+                    f.write(b"{\\fonttbl{\\f0\\fnil\\fcharset129 \\'b8\\'c0\\'c0\\'ba \\'b0\\'ed\\'b5\\'f1;}}")
+                    f.write(b"{\\colortbl;\\red0\\green0\\blue0;\\red128\\green128\\blue128;}")
+                    f.write(b"\n")
                     
                     # 제목
-                    f.write(r"\pard\qc\b\fs28 국회 의사중계 자막\b0\par")
-                    f.write("\n")
+                    title = self._rtf_encode("국회 의사중계 자막")
+                    f.write(b"\\pard\\qc\\b\\fs28 ")
+                    f.write(title.encode('cp949', errors='replace'))
+                    f.write(b"\\b0\\par\n")
                     
                     # 생성 일시
-                    f.write(r"\pard\ql\fs20 생성 일시: " + datetime.now().strftime('%Y년 %m월 %d일 %H:%M:%S') + r"\par\par")
-                    f.write("\n")
+                    date_str = self._rtf_encode(f"생성 일시: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M:%S')}")
+                    f.write(b"\\pard\\ql\\fs20 ")
+                    f.write(date_str.encode('cp949', errors='replace'))
+                    f.write(b"\\par\\par\n")
                     
                     # 자막 내용
-                    for entry in self.subtitles:
+                    for entry in subtitles_snapshot:
                         timestamp = entry.timestamp.strftime('%H:%M:%S')
-                        text = entry.text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
-                        f.write(rf"\cf2[{timestamp}]\cf1 {text}\par")
-                        f.write("\n")
+                        text = self._rtf_encode(entry.text)
+                        f.write(b"\\cf2[")
+                        f.write(timestamp.encode('cp949', errors='replace'))
+                        f.write(b"]\\cf1 ")
+                        f.write(text.encode('cp949', errors='replace'))
+                        f.write(b"\\par\n")
                     
                     # 통계
-                    total_chars = sum(len(s.text) for s in self.subtitles)
-                    f.write(rf"\par\fs18 총 {len(self.subtitles)}문장, {total_chars:,}자\par")
-                    
-                    # RTF 종료
-                    f.write("}")
+                    total_chars = sum(len(s.text) for s in subtitles_snapshot)
+                    stats = self._rtf_encode(f"총 {len(subtitles_snapshot)}문장, {total_chars:,}자")
+                    f.write(b"\\par\\fs18 ")
+                    f.write(stats.encode('cp949', errors='replace'))
+                    f.write(b"\\par}")
                 
                 QMessageBox.information(self, "성공", f"RTF 저장 완료!\n\n파일: {path}\n\n이 파일은 한글(HWP)에서 열 수 있습니다.")
             
@@ -3260,19 +3387,28 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "세션 저장", filename, "JSON (*.json)")
         
         if path:
-            # 디렉토리 존재 확인
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                'version': Config.VERSION,
-                'created': datetime.now().isoformat(),
-                'url': self._get_current_url(),
-                'subtitles': [s.to_dict() for s in self.subtitles]
-            }
-            
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            
-            self._show_toast("세션 저장 완료!", "success")
+            try:
+                # 디렉토리 존재 확인
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                
+                # 스레드 안전하게 자막 복사
+                with self.subtitle_lock:
+                    subtitles_copy = [s.to_dict() for s in self.subtitles]
+                
+                data = {
+                    'version': Config.VERSION,
+                    'created': datetime.now().isoformat(),
+                    'url': self._get_current_url(),
+                    'subtitles': subtitles_copy
+                }
+                
+                with open(path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                
+                self._show_toast("세션 저장 완료!", "success")
+            except Exception as e:
+                logger.error(f"세션 저장 오류: {e}")
+                QMessageBox.critical(self, "오류", f"세션 저장 실패: {e}")
     
     def _load_session(self):
         path, _ = QFileDialog.getOpenFileName(self, "세션 불러오기", f"{Config.SESSION_DIR}/", "JSON (*.json)")
@@ -3333,7 +3469,8 @@ class MainWindow(QMainWindow):
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            self.subtitles = []
+            with self.subtitle_lock:
+                self.subtitles = []
             self.last_subtitle = ""
             self.subtitle_text.clear()
             self.status_label.setText("내용 삭제됨")
@@ -3389,7 +3526,8 @@ class MainWindow(QMainWindow):
             if 0 <= idx < len(self.subtitles):
                 new_text = edit_text.toPlainText().strip()
                 if new_text:
-                    self.subtitles[idx].text = new_text
+                    with self.subtitle_lock:
+                        self.subtitles[idx].text = new_text
                     self._refresh_text()
                     self._show_toast("자막이 수정되었습니다.", "success")
                     dialog.accept()
@@ -3426,7 +3564,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(info_label)
         
         # 자막 목록 (다중 선택 가능)
-        from PyQt6.QtWidgets import QAbstractItemView
         list_widget = QListWidget()
         list_widget.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         
@@ -3455,8 +3592,9 @@ class MainWindow(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
-                for row in selected_rows:
-                    del self.subtitles[row]
+                with self.subtitle_lock:
+                    for row in selected_rows:
+                        del self.subtitles[row]
                 self._refresh_text()
                 self._update_count_label()
                 self._show_toast(f"{len(selected_rows)}개 자막이 삭제되었습니다.", "success")
@@ -3465,6 +3603,8 @@ class MainWindow(QMainWindow):
         buttons.accepted.connect(delete_selected)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
+        
+        dialog.exec()
     
     # ========== 도움말 ==========
     
