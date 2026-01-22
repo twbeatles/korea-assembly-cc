@@ -1,116 +1,79 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-국회 의사중계 자막 추출기 v16.3 - PyInstaller Spec File (Onefile Edition)
+국회 의사중계 자막 추출기 v16.5
+PyInstaller Build Spec - 경량화 최적화 버전
 
-빌드 명령어:
-    pyinstaller subtitle_extractor.spec
-
-생성되는 파일:
-    dist/subtitle_extractor.exe (단일 실행 파일)
-
-변경 이력:
-    - v16.1: HWP 저장 오류 해결, 상임위 약칭 지원
-    - v16.2: 코드 품질 개선, 자동 셀렉터 감지
-    - v16.3: 스레드 안전성 강화, 키워드 저장, 자막 추출 개선
+빌드 명령: pyinstaller subtitle_extractor.spec
 """
 
 import sys
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
-# 숨겨진 임포트 모듈 수집
-hiddenimports = [
-    # PyQt6 관련
-    'PyQt6',
-    'PyQt6.QtCore',
-    'PyQt6.QtGui',
-    'PyQt6.QtWidgets',
-    'PyQt6.sip',
-    
-    # Selenium 관련
-    'selenium',
-    'selenium.webdriver',
-    'selenium.webdriver.chrome',
-    'selenium.webdriver.chrome.options',
+block_cipher = None
+
+# 제외할 모듈 (경량화)
+EXCLUDES = [
+    # 불필요한 대형 라이브러리
+    'matplotlib', 'numpy', 'pandas', 'scipy', 'PIL', 'cv2',
+    'tkinter', 'tk', 'tcl',
+    'IPython', 'jupyter', 'notebook',
+    'pytest', 'unittest', 'test',
+    # Qt 불필요 모듈
+    'PyQt6.QtBluetooth', 'PyQt6.QtDesigner', 'PyQt6.QtHelp',
+    'PyQt6.QtMultimedia', 'PyQt6.QtMultimediaWidgets',
+    'PyQt6.QtNetwork', 'PyQt6.QtNfc', 'PyQt6.QtOpenGL',
+    'PyQt6.QtPositioning', 'PyQt6.QtPrintSupport',
+    'PyQt6.QtQml', 'PyQt6.QtQuick', 'PyQt6.QtQuickWidgets',
+    'PyQt6.QtRemoteObjects', 'PyQt6.QtSensors', 'PyQt6.QtSerialPort',
+    'PyQt6.QtSql', 'PyQt6.QtSvg', 'PyQt6.QtTest', 'PyQt6.QtWebChannel',
+    'PyQt6.QtWebEngine', 'PyQt6.QtWebEngineCore', 'PyQt6.QtWebEngineWidgets',
+    'PyQt6.QtWebSockets', 'PyQt6.QtXml', 'PyQt6.Qt3DCore',
+    'PyQt6.Qt3DAnimation', 'PyQt6.Qt3DExtras', 'PyQt6.Qt3DInput',
+    'PyQt6.Qt3DLogic', 'PyQt6.Qt3DRender',
+    # 기타
+    'lib2to3', 'pydoc', 'doctest',
+    'pkg_resources', 'setuptools', 'distutils',
+]
+
+# 숨겨진 import 명시
+HIDDEN_IMPORTS = [
     'selenium.webdriver.chrome.service',
     'selenium.webdriver.common.by',
     'selenium.webdriver.support.ui',
     'selenium.webdriver.support.expected_conditions',
-    'selenium.common.exceptions',
-    
-    # 표준 라이브러리
-    'json',
-    'logging',
     'queue',
     'threading',
-    're',
-    'time',
-    'datetime',
-    'pathlib',
-    'shutil',
-    'os',  # PID 기반 Chrome 프로필에 필요
-    
-    # 선택적 라이브러리 (있으면 포함)
-    'docx',
-    'docx.shared',
-    'docx.enum.text',
-    'win32com.client',
-    'win32com.client.dynamic',
-    'pywintypes',
-    'pythoncom',
+    'json',
+    'logging',
 ]
 
-# Selenium 서브모듈 자동 수집
-try:
-    hiddenimports += collect_submodules('selenium')
-except Exception:
-    pass
-
-# PyQt6 서브모듈 자동 수집
-try:
-    hiddenimports += collect_submodules('PyQt6')
-except Exception:
-    pass
-
-# 제외할 모듈 (용량 최적화)
-excludes = [
-    'tkinter',
-    '_tkinter',
-    'matplotlib',
-    'numpy',
-    'pandas',
-    'scipy',
-    'PIL',
-    'cv2',
-    'IPython',
-    'jupyter',
-    'notebook',
-    'pytest',
-    'unittest',
-    'test',
-    'tests',
-]
-
-# Analysis 설정
 a = Analysis(
-    ['251226 국회의사중계 자막.py'],
+    ['국회의사중계 자막.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=hiddenimports,
+    hiddenimports=HIDDEN_IMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=excludes,
+    excludes=EXCLUDES,
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
-    cipher=None,
+    cipher=block_cipher,
     noarchive=False,
 )
 
-# PYZ 설정
-pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+# 불필요한 바이너리 제거 (추가 경량화)
+a.binaries = [x for x in a.binaries if not any(
+    exc in x[0].lower() for exc in [
+        'qt6webengine', 'qt6designer', 'qt6quick', 'qt6qml',
+        'qt6multimedia', 'qt6pdf', 'qt6positioning',
+        'd3dcompiler', 'opengl32sw',
+    ]
+)]
 
-# EXE 설정 (Onefile 모드)
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -118,43 +81,19 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='subtitle_extractor',
+    name='국회자막추출기_v16.5',
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
+    strip=False,  # Windows에서는 strip 비활성화
+    upx=True,  # UPX 압축 사용 (설치되어 있다면)
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # GUI 앱이므로 콘솔 숨김
+    console=False,  # 콘솔 창 숨김 (GUI 앱)
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    # 아이콘 설정 (있을 경우)
+    # icon='icon.ico',
 )
-
-# ============================================================
-# 빌드 후 추가 작업 안내
-# ============================================================
-"""
-빌드 완료 후:
-
-1. dist/subtitle_extractor.exe (단일 파일)이 생성됩니다.
-
-2. 이 파일 하나만 배포하면 됩니다.
-
-3. 실행 시 주의사항:
-   - 처음 실행 시 임시 폴더에 압축을 풀기 때문에 실행 시간이 조금 더 걸릴 수 있습니다.
-   - 일부 백신 프로그램이 오탐지할 수 있습니다.
-   - 로그 파일(logs), 프리셋(presets) 등은 실행 파일과 같은 위치에 생성됩니다.
-
-4. 디버깅 시:
-   - console=True 로 변경하여 빌드 후 에러 메시지를 확인하세요.
-
-5. 버전 정보:
-   - v16.0: 시스템 트레이, 자막 편집, 키보드 단축키 다이얼로그
-   - v16.1: HWP 저장 버그 수정, 상임위 약칭 지원
-   - v16.2: 코드 품질 개선, 자동 셀렉터 감지
-   - v16.3: 스레드 안전성, 네트워크 재연결, 자막 추출 개선
-"""
