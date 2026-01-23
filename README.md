@@ -34,6 +34,9 @@
 - **스레드 안전성 전면 강화** - 자막 저장/편집/초기화 시 `subtitle_lock` 적용으로 충돌 방지
 - **DB 최적화** - 연결 캐싱(Pooling) 및 Bulk Insert 최적화, FTS5 검색 엔진 적용
 - **자막 렌더링 가속** - 전체 다시 그리기 대신 증분 렌더링 도입
+- **스크롤 우선 표시** - 사용자가 스크롤로 보고 있을 때 자동 스크롤을 일시 중지하고 위치 유지
+- **분 단위 자막 묶기** - 같은 분은 합치고, 길이/간격이 크면 분리하여 안정적으로 저장
+- **중지 즉시 확정** - 중지 시 진행 중인 자막을 즉시 확정하고 큐를 정리해 종료 안정성 개선
 
 ### 🎨 UI/UX 개선 (v16.9)
 - **키워드 입력 최적화** - 디바운싱(Debouncing) 적용으로 입력 중 렉 제거
@@ -165,7 +168,7 @@ python "국회의사중계 자막.py"
 3. URL이 자동으로 입력됨
 
 #### 3단계: 옵션 설정
-- ✅ **자동 스크롤**: 새 자막이 추가될 때 자동으로 아래로 스크롤
+- ✅ **자동 스크롤**: 새 자막이 추가될 때 자동으로 아래로 스크롤 (사용자 스크롤 시 일시 중지)
 - ✅ **실시간 저장**: 자막을 파일에 실시간으로 저장 (realtime_output 폴더)
 - ✅ **헤드리스 모드**: 브라우저 창을 숨기고 백그라운드에서 실행
 
@@ -374,20 +377,29 @@ dist/subtitle_extractor.exe  # 단일 실행 파일 (~80MB)
 
 ```
 assemblyccv3/
-├── 국회의사중계 자막.py       # 메인 프로그램
-├── database.py               # SQLite 데이터베이스 관리 (v16.6)
-├── subtitle_extractor.spec   # PyInstaller 빌드 설정
-├── README.md                 # 이 문서
-├── CLAUDE.md                 # AI 어시스턴트용 문서
-├── GEMINI.md                 # AI 어시스턴트용 문서
-├── subtitle_history.db       # SQLite DB (자동 생성, v16.6)
-├── url_history.json          # URL 히스토리 (자동 생성)
-├── committee_presets.json    # 상임위 프리셋 (자동 생성)
-├── logs/                     # 로그 파일
-│   └── subtitle_YYYYMMDD.log
-├── sessions/                 # 세션 저장 파일
-├── backups/                  # 자동 백업 파일 (최대 10개)
-└── realtime_output/          # 실시간 저장 파일
+  국회의사중계 자막.py       # 메인 엔트리포인트
+  core/                         # 공통 로직/설정
+    config.py
+    logging_utils.py
+    models.py
+  ui/                           # UI 구성요소
+    dialogs.py
+    themes.py
+    widgets.py
+    main_window.py
+  database.py               # SQLite DB 관리 (v16.6)
+  subtitle_extractor.spec   # PyInstaller 빌드 설정
+  README.md                 # 문서
+  CLAUDE.md                 # AI 컨텍스트
+  GEMINI.md                 # AI 컨텍스트
+  subtitle_history.db       # SQLite DB (자동 생성)
+  url_history.json          # URL 히스토리 (자동 생성)
+  committee_presets.json    # 상임위 프리셋 (자동 생성)
+  logs/
+    subtitle_YYYYMMDD.log
+  sessions/
+  backups/
+  realtime_output/
 ```
 
 ---
@@ -399,6 +411,9 @@ assemblyccv3/
 - 🔒 **스레드 안전성**: 자막 데이터 접근 락(Lock) 전면 적용
 - ⚡ **DB 성능 개선**: 연결 캐싱, FTS5 검색 적용, 대량 삽입 최적화
 - 🎨 **UI 개선**: 증분 렌더링, 키워드 디바운싱, 병합 옵션 추가
+- 🧭 **스크롤 우선 표시**: 사용자 스크롤 중 자동 스크롤 일시 중지
+- 🕒 **분 단위 확정**: 분 경계에서 즉시 확정 + 길이/간격 기반 분리
+- ⏹️ **중지 즉시 확정/종료 안정화**: 중지 시 현재 자막 확정 및 큐 정리
 
 ### v16.8 (2026-01-23)
 - 🧾 **상임위원회 xcode 최신화**
