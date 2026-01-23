@@ -81,7 +81,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='국회자막추출기_v16.8',
+    name='국회의사중계자막추출기 v16.9',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,  # Windows에서는 strip 비활성화
