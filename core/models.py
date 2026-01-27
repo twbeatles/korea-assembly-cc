@@ -1,15 +1,16 @@
 ﻿# -*- coding: utf-8 -*-
 
 from datetime import datetime
+from typing import Optional, Dict, Any
 
 class SubtitleEntry:
     """자막 항목 - 타입 힌트 포함, 성능 최적화: 통계 캐싱"""
     
-    def __init__(self, text: str, timestamp=None):
+    def __init__(self, text: str, timestamp: Optional[datetime] = None):
         self.text: str = text
         self.timestamp: datetime = timestamp or datetime.now()
-        self.start_time: datetime = None  # SRT용
-        self.end_time: datetime = None    # SRT용
+        self.start_time: Optional[datetime] = None  # SRT용
+        self.end_time: Optional[datetime] = None    # SRT용
         # 성능 최적화: 통계 캐시 필드
         self._char_count: int = len(text)
         self._word_count: int = len(text.split())
@@ -24,13 +25,13 @@ class SubtitleEntry:
         """캐시된 단어 수 반환"""
         return self._word_count
     
-    def update_text(self, new_text: str):
+    def update_text(self, new_text: str) -> None:
         """텍스트 업데이트 시 캐시도 갱신"""
         self.text = new_text
         self._char_count = len(new_text)
         self._word_count = len(new_text.split())
     
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Optional[str]]:
         """딕셔너리로 변환 (세션 저장용)"""
         return {
             'text': self.text,
@@ -40,7 +41,7 @@ class SubtitleEntry:
         }
     
     @classmethod
-    def from_dict(cls, data: dict) -> 'SubtitleEntry':
+    def from_dict(cls, data: Dict[str, Any]) -> 'SubtitleEntry':
         """딕셔너리에서 생성 - 방어 코드 포함"""
         # 필수 필드 검증
         text = data.get('text', '')

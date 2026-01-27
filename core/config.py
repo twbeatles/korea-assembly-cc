@@ -1,10 +1,25 @@
 ﻿# -*- coding: utf-8 -*-
 
 import re
+from pathlib import Path
+
+
+def _load_version_from_readme(default: str = "unknown") -> str:
+    """README 첫 줄에서 버전 문자열(vX.YZ)을 추출한다."""
+    try:
+        readme_path = Path(__file__).resolve().parent.parent / "README.md"
+        if not readme_path.exists():
+            return default
+        with readme_path.open("r", encoding="utf-8") as f:
+            first_line = f.readline()
+        match = re.search(r"\bv(\d+(?:\.\d+)*)", first_line, re.IGNORECASE)
+        return match.group(1) if match else default
+    except Exception:
+        return default
 
 class Config:
     """프로그램 설정 상수"""
-    VERSION = "16.9"  # v16.8 성능 최적화 + v16.9 안정성/무결성 강화
+    VERSION = _load_version_from_readme()
     APP_NAME = "국회 의사중계 자막 추출기"
     
     # 타이밍 상수 (초)
@@ -20,8 +35,6 @@ class Config:
     
     # 네트워크 타임아웃 (초)
     API_TIMEOUT = 5           # API 호출
-    PAGE_LOAD_TIMEOUT = 30    # 페이지 로딩
-    ELEMENT_WAIT_TIMEOUT = 10 # 요소 대기
     PAGE_LOAD_TIMEOUT = 30    # 페이지 로딩
     ELEMENT_WAIT_TIMEOUT = 10 # 요소 대기
     
@@ -151,9 +164,9 @@ class Config:
     RECONNECT_BASE_DELAY = 2           # 초기 대기 시간 (초)
     RECONNECT_MAX_DELAY = 60           # 최대 대기 시간 (초)
 
-    # 분 단위 자막 버킷팅(기본: 분 단위로 묶되, 과도한 길이나 간격이면 분리)
-    MINUTE_BUCKET_MAX_CHARS = 400
-    MINUTE_BUCKET_MAX_GAP = 90  # 초
+    # 자막 병합 기준 (너무 길거나 간격이 크면 분리)
+    ENTRY_MERGE_MAX_CHARS = 400
+    ENTRY_MERGE_MAX_GAP = 90  # 초
     
     # 자동 파일명 생성 (#28)
     DEFAULT_FILENAME_TEMPLATE = "{date}_{committee}_{time}"

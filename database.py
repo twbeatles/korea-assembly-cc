@@ -7,7 +7,7 @@ SQLite 데이터베이스 관리 모듈 (#26)
 import sqlite3
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any, Union
 import json
 import threading
 import logging
@@ -225,7 +225,7 @@ class DatabaseManager:
                 raise
             # 연결은 캐싱되므로 닫지 않음
     
-    def load_session(self, session_id: int) -> Optional[dict]:
+    def load_session(self, session_id: int) -> Optional[Dict[str, Any]]:
         """세션 로드
         
         Args:
@@ -283,7 +283,7 @@ class DatabaseManager:
                 return None
             # 연결은 캐싱되므로 닫지 않음
     
-    def list_sessions(self, limit: int = 50, offset: int = 0) -> List[dict]:
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         """세션 목록 조회
         
         Args:
@@ -312,7 +312,7 @@ class DatabaseManager:
                 return []
             # 연결은 캐싱되므로 닫지 않음
     
-    def search_subtitles(self, query: str, limit: int = 100) -> List[dict]:
+    def search_subtitles(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
         """자막 텍스트 검색
         
         Args:
@@ -377,7 +377,7 @@ class DatabaseManager:
                 return False
             # 연결은 캐싱되므로 닫지 않음
     
-    def get_statistics(self) -> dict:
+    def get_statistics(self) -> Dict[str, Union[int, float]]:
         """전체 통계 조회
         
         Returns:

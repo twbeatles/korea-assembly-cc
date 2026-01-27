@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-국회 의사중계 자막 추출기 v16.9
+국회 의사중계 자막 추출기 v16.10
 PyInstaller Build Spec - 경량화 최적화 버전
 
 빌드 명령: pyinstaller subtitle_extractor.spec
@@ -41,6 +41,9 @@ HIDDEN_IMPORTS = [
     'selenium.webdriver.common.by',
     'selenium.webdriver.support.ui',
     'selenium.webdriver.support.expected_conditions',
+    'win32com',
+    'win32com.client',
+    'pythoncom',
     'queue',
     'threading',
     'json',
@@ -81,7 +84,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='국회의사중계자막추출기 v16.9',
+    name='국회의사중계자막추출기 v16.10',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,  # Windows에서는 strip 비활성화
