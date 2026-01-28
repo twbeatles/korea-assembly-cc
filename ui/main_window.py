@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QCheckBox,
+    QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QCheckBox, QApplication,
     QFrame, QProgressBar, QMessageBox, QFileDialog,
     QGroupBox, QGridLayout, QDialog, QDialogButtonBox, QListWidget,
     QSplitter, QMenu, QMenuBar, QInputDialog, QSystemTrayIcon, QAbstractItemView,
@@ -48,6 +48,10 @@ except ImportError:
     logger.warning("database.py 모듈을 찾을 수 없습니다. 데이터베이스 기능은 비활성화됩니다.")
 
 
+class RecoverableWebDriverError(RuntimeError):
+    """웹드라이버 재연결로 복구 가능한 오류"""
+
+
 class MainWindow(QMainWindow):
     
     def __init__(self):
@@ -74,6 +78,9 @@ class MainWindow(QMainWindow):
         self._auto_backup_lock = threading.Lock()  # 자동 백업 중복 실행 방지
         self.start_time = None
         self.last_subtitle = ""
+        self._last_raw_text = ""
+        self._last_processed_raw = ""
+        self._stream_start_time = None
         
         # 자막 데이터 (타임스탬프 포함)
         self.subtitles = []  # List[SubtitleEntry]
@@ -98,8 +105,6 @@ class MainWindow(QMainWindow):
         self._normal_fmt = QTextCharFormat()
         self._timestamp_fmt = QTextCharFormat()
         self._timestamp_fmt.setForeground(QColor("#888888"))
-        self._preview_fmt = QTextCharFormat()
-        self._preview_fmt.setForeground(QColor("#aaaaaa"))
         
         # 성능 최적화: 키워드 패턴 캐싱
         self._keyword_pattern = None  # 컴파일된 정규식 패턴
@@ -113,13 +118,15 @@ class MainWindow(QMainWindow):
         # 렌더링 상태 캐싱
         self._last_rendered_count = 0
         self._last_rendered_last_text = ""
-        self._last_rendered_had_preview = False
         
         # 토스트 스택 관리
         self.active_toasts = []  # 현재 표시 중인 토스트 목록
         
         # 실시간 저장
         self.realtime_file = None
+
+        # 중지 시 브라우저 유지용 (종료 시 정리)
+        self._detached_drivers = []
         
         # 연결 상태 모니터링 (#30)
         self.connection_status = "disconnected"  # connected, disconnected, reconnecting
@@ -154,7 +161,7 @@ class MainWindow(QMainWindow):
         
         # 자막 확정 타이머
         self.finalize_timer = QTimer(self)
-        # self.finalize_timer.timeout.connect(self._check_finalize) # 스트리밍 방식으로 변경됨
+        self.finalize_timer.timeout.connect(self._check_finalize)
         
         # 자동 백업 타이머
         self.backup_timer = QTimer(self)
@@ -352,7 +359,7 @@ class MainWindow(QMainWindow):
         edit_menu.addSeparator()
         
         copy_action = QAction("클립보드 복사", self)
-        copy_action.setShortcut("Ctrl+C")
+        # copy_action.setShortcut("Ctrl+C") # 텍스트 선택 복사 충돌 방지
         copy_action.setToolTip("전체 자막을 클립보드에 복사합니다")
         copy_action.triggered.connect(self._copy_to_clipboard)
         edit_menu.addAction(copy_action)
@@ -373,7 +380,7 @@ class MainWindow(QMainWindow):
         self.timestamp_action = QAction("타임스탬프 표시", self)
         self.timestamp_action.setCheckable(True)
         self.timestamp_action.setChecked(True)
-        self.timestamp_action.triggered.connect(self._refresh_text)
+        self.timestamp_action.triggered.connect(self._refresh_text_full)
         view_menu.addAction(self.timestamp_action)
         
         self.tray_action = QAction("🔽 트레이로 최소화", self)
@@ -412,6 +419,13 @@ class MainWindow(QMainWindow):
         merge_action.setToolTip("여러 세션 파일을 하나로 병합합니다")
         merge_action.triggered.connect(self._show_merge_dialog)
         tools_menu.addAction(merge_action)
+        
+        # 줄넘김 정리
+        clean_newlines_action = QAction("줄넘김 정리", self)
+        clean_newlines_action.setShortcut("Ctrl+Shift+L")
+        clean_newlines_action.setToolTip("문장 부호로 끝나지 않는 줄을 병합하여 문장을 정리합니다")
+        clean_newlines_action.triggered.connect(self._clean_newlines)
+        tools_menu.addAction(clean_newlines_action)
         
         # 데이터베이스 메뉴 (#26)
         db_menu = menubar.addMenu("데이터베이스")
@@ -530,6 +544,12 @@ class MainWindow(QMainWindow):
         copy_btn.setToolTip("전체 자막을 클립보드에 복사")
         copy_btn.clicked.connect(self._copy_to_clipboard)
         
+        # 자막 줄넘김 정리 버튼 (New)
+        clean_btn = QPushButton("✨ 줄넘김 정리")
+        clean_btn.setStyleSheet(toolbar_btn_style)
+        clean_btn.setToolTip("문장 부호로 끊어지지 않은 줄을 자동으로 병합 (Ctrl+Shift+L)")
+        clean_btn.clicked.connect(self._clean_newlines)
+        
         # 자막 지우기 버튼
         clear_btn = QPushButton("🗑️ 지우기")
         clear_btn.setStyleSheet(toolbar_btn_style)
@@ -539,6 +559,7 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(quick_save_btn)
         toolbar_layout.addWidget(search_btn)
         toolbar_layout.addWidget(copy_btn)
+        toolbar_layout.addWidget(clean_btn)
         toolbar_layout.addWidget(clear_btn)
         toolbar_layout.addStretch()
         
@@ -731,6 +752,26 @@ class MainWindow(QMainWindow):
         self.subtitle_text.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
         
         subtitle_layout.addWidget(self.subtitle_text)
+
+        # 실시간 미리보기 영역 (별도 표시)
+        self.preview_frame = QFrame()
+        preview_layout = QHBoxLayout(self.preview_frame)
+        preview_layout.setContentsMargins(8, 6, 8, 6)
+        preview_layout.setSpacing(8)
+
+        preview_title = QLabel("⏳ 미리보기")
+        preview_title.setFixedWidth(90)
+        preview_title.setStyleSheet("background: transparent; border: none; font-weight: 600;")
+
+        self.preview_label = QLabel("")
+        self.preview_label.setWordWrap(True)
+        self.preview_label.setStyleSheet("background: transparent; border: none;")
+
+        preview_layout.addWidget(preview_title)
+        preview_layout.addWidget(self.preview_label, 1)
+
+        self.preview_frame.hide()
+        subtitle_layout.addWidget(self.preview_frame)
         
         # 통계 토글 버튼 (자막 영역 하단)
         self.toggle_stats_btn = QPushButton("📊 통계 숨기기")
@@ -970,12 +1011,16 @@ class MainWindow(QMainWindow):
             search_border = "rgba(88, 166, 255, 0.2)"
             status_bg = "rgba(48, 54, 61, 0.3)"
             count_color = "#8b949e"
+            preview_bg = "rgba(88, 166, 255, 0.08)"
+            preview_border = "rgba(88, 166, 255, 0.25)"
         else:
             stat_bg = "rgba(9, 105, 218, 0.06)"
             search_bg = "rgba(9, 105, 218, 0.04)"
             search_border = "rgba(9, 105, 218, 0.15)"
             status_bg = "rgba(208, 215, 222, 0.4)"
             count_color = "#57606a"
+            preview_bg = "rgba(9, 105, 218, 0.05)"
+            preview_border = "rgba(9, 105, 218, 0.15)"
         
         # 통계 라벨 스타일 업데이트
         try:
@@ -999,6 +1044,13 @@ class MainWindow(QMainWindow):
             
             # 상태바 카운트 라벨 색상 업데이트
             self.count_label.setStyleSheet(f"color: {count_color}; background: transparent; border: none;")
+
+            # 미리보기 영역 스타일 업데이트
+            if hasattr(self, 'preview_frame'):
+                self.preview_frame.setStyleSheet(
+                    f"background-color: {preview_bg}; border: 1px solid {preview_border}; "
+                    "border-radius: 8px;"
+                )
         except AttributeError:
             # UI가 아직 완전히 초기화되지 않은 경우
             pass
@@ -1504,6 +1556,7 @@ class MainWindow(QMainWindow):
         try:
             # 히스토리에 추가
             self._add_to_history(url)
+            self.current_url = url
             
             # 초기화
             self.subtitle_text.clear()
@@ -1515,8 +1568,12 @@ class MainWindow(QMainWindow):
 
             self.last_subtitle = ""
             self.last_update_time = 0
+            self._last_raw_text = ""
+            self._last_processed_raw = ""
+            self._stream_start_time = None
             self._is_stopping = False
             self.finalize_timer.stop()
+            self._clear_preview()
             self.start_time = time.time()
             
             # 큐 비우기
@@ -1602,6 +1659,7 @@ class MainWindow(QMainWindow):
             # 종료 후에도 남아있던 preview 처리
             self._drain_pending_previews()
             self._finalize_pending_subtitle()
+            self._clear_preview()
             
             # 실시간 저장 종료
             if self.realtime_file:
@@ -1611,8 +1669,8 @@ class MainWindow(QMainWindow):
                     logger.debug(f"파일 닫기 오류: {e}")
                 self.realtime_file = None
             
-            # WebDriver 종료
-            if self.driver:
+            # WebDriver 종료 (중지 시 브라우저 유지 옵션)
+            if self.driver and not Config.KEEP_BROWSER_ON_STOP:
                 try:
                     driver = self.driver
                     self.driver = None  # 먼저 None 설정
@@ -1676,6 +1734,7 @@ class MainWindow(QMainWindow):
     def _show_live_dialog(self):
         """생중계 목록 다이얼로그 표시"""
         dialog = LiveBroadcastDialog(self)
+        dialog.finished.connect(dialog.deleteLater)
         if dialog.exec():
             data = dialog.selected_broadcast
             if data:
@@ -1771,7 +1830,7 @@ class MainWindow(QMainWindow):
             if existing_xcgcd and existing_xcode:
                 logger.info(f"URL에 이미 xcode/xcgcd 포함됨: {original_url}")
                 return original_url
-            
+
             self.message_queue.put(("status", "🔍 현재 생중계 감지 중..."))
             
             # xcode 추출 (모든 방법에서 공통으로 사용)
@@ -2092,15 +2151,41 @@ class MainWindow(QMainWindow):
             logger.error(f"생중계 감지 오류: {e}")
             self.message_queue.put(("status", f"⚠️ 생중계 감지 실패: {e}"))
             return original_url
+
+    def _get_reconnect_delay(self, attempt: int) -> float:
+        """지수 백오프 기반 재연결 대기 시간(초) 계산"""
+        if attempt <= 0:
+            return 0.0
+        delay = Config.RECONNECT_BASE_DELAY * (2 ** (attempt - 1))
+        return min(delay, Config.RECONNECT_MAX_DELAY)
+
+    def _is_recoverable_webdriver_error(self, error: Exception) -> bool:
+        """재연결로 복구 가능한 웹드라이버 오류인지 판단"""
+        msg = str(error).lower()
+        markers = [
+            "invalid session",
+            "no such execution context",
+            "chrome not reachable",
+            "disconnected",
+            "target closed",
+            "session deleted",
+            "connection reset",
+            "connection refused",
+            "web view not found",
+        ]
+        return any(marker in msg for marker in markers)
+
+    def _ping_driver(self, driver):
+        """웹드라이버 응답 시간을 측정 (ms). 실패 시 None 반환."""
+        start = time.time()
+        try:
+            driver.execute_script("return 1")
+        except Exception:
+            return None
+        return int((time.time() - start) * 1000)
     
     def _extraction_worker(self, url, selector, headless):
-        """자막 추출 워커 스레드
-        
-        Args:
-            url: 대상 웹사이트 URL
-            selector: 자막 요소 CSS 선택자
-            headless: 헤드리스 모드 여부 (시작 시점에 복사됨)
-        """
+        """자막 추출 워커 스레드 (Legacy Logic Restoration)"""
         driver = None
         
         try:
@@ -2114,328 +2199,70 @@ class MainWindow(QMainWindow):
             if headless:
                 options.add_argument("--headless=new")
                 options.add_argument("--window-size=1280,720")
-                options.add_argument("--disable-gpu")
-                options.add_argument("--no-sandbox")
-                options.add_argument("--disable-dev-shm-usage")
-                options.add_argument("--disable-setuid-sandbox")
-                options.add_argument("--remote-debugging-port=0")  # 동적 포트 할당 (다중 인스턴스 충돌 방지)
-                options.add_argument("--enable-javascript")
                 self.message_queue.put(("status", "헤드리스 모드로 시작 중..."))
             
-            # WebDriver 초기화 재시도 (최대 3회)
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    driver = webdriver.Chrome(options=options)
-                    self.driver = driver
-                    self.message_queue.put(("status", "Chrome 시작 완료"))
-                    break
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        self.message_queue.put(("status", f"Chrome 시작 재시도 ({attempt+2}/{max_retries})..."))
-                        time.sleep(2)
-                    else:
-                        self.message_queue.put(("error", f"Chrome 오류 ({max_retries}회 시도 실패): {e}"))
-                        return
-            
-            self.message_queue.put(("status", "페이지 로딩 중..."))
-            target_xcode = self._get_query_param(url, "xcode").strip()
-            target_xcgcd = self._get_query_param(url, "xcgcd").strip()
-            
-            # ========== 새로운 접근 방식 ==========
-            # 국회 의사중계 시스템은 직접 URL 접속 시 메인 페이지로 리다이렉트됨
-            # 따라서 항상 메인 페이지 → 생중계 버튼 클릭 방식으로 진입해야 함
-            
-            logger.info(f"[extraction] 추출 시작 - xcode={target_xcode}, xcgcd={target_xcgcd[:20] if target_xcgcd else 'None'}...")
-            
-            # 1. 먼저 메인 페이지로 이동
-            main_url = "https://assembly.webcast.go.kr/main/"
-            self.message_queue.put(("status", "🌐 메인 페이지 이동 중..."))
-            driver.get(main_url)
-            time.sleep(3)
-            
-            player_loaded = False
-            
-            # 2. xcode가 있으면 해당 생중계 버튼 클릭
-            if target_xcode:
-                self.message_queue.put(("status", f"🖱️ xcode={target_xcode} 생중계 버튼 찾는 중..."))
-                
-                try:
-                    # 동적 콘텐츠 로딩 대기
-                    try:
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='xcode=']"))
-                        )
-                    except Exception:
-                        logger.debug("생중계 링크 대기 타임아웃")
-                    
-                    # 생중계 버튼 찾기 (다양한 선택자 시도)
-                    selectors = [
-                        f'a.onair[href*="xcode={target_xcode}"]',
-                        f'a[href*="xcode={target_xcode}"].onair',
-                        f'a[href*="xcode={target_xcode}"]',
-                    ]
-                    
-                    btn = None
-                    btn_href = ""
-                    for sel in selectors:
-                        try:
-                            elems = driver.find_elements(By.CSS_SELECTOR, sel)
-                            if not elems:
-                                continue
-                            # 표시되는 요소 중 플레이어 링크를 우선 선택
-                            for elem in elems:
-                                try:
-                                    if not elem.is_displayed():
-                                        continue
-                                    href = elem.get_attribute("href") or ""
-                                    if "player.asp" in href:
-                                        btn = elem
-                                        btn_href = href
-                                        break
-                                except StaleElementReferenceException:
-                                    continue
-                            # 플레이어 링크가 없으면 표시되는 첫 요소 사용
-                            if not btn:
-                                for elem in elems:
-                                    try:
-                                        if elem.is_displayed():
-                                            btn = elem
-                                            btn_href = elem.get_attribute("href") or ""
-                                            break
-                                    except StaleElementReferenceException:
-                                        continue
-                            # 표시 여부 판단이 불가한 경우를 대비해 첫 요소로 폴백
-                            if not btn:
-                                try:
-                                    btn = elems[0]
-                                    btn_href = btn.get_attribute("href") or ""
-                                except Exception:
-                                    pass
-                            if btn:
-                                logger.info(f"생중계 버튼 발견: {sel}")
-                                break
-                        except Exception:
-                            pass
-                    
-                    if btn:
-                        # 버튼 클릭
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                        time.sleep(0.5)
-                        driver.execute_script("arguments[0].click();", btn)
-                        self.message_queue.put(("status", "✅ 생중계 버튼 클릭 성공"))
-                        logger.info(f"생중계 버튼 클릭 완료: xcode={target_xcode}")
-                        
-                        # 페이지 전환 대기
-                        try:
-                            WebDriverWait(driver, 10).until(
-                                lambda d: "player.asp" in d.current_url
-                            )
-                            player_loaded = True
-                            logger.info(f"플레이어 페이지 로드 완료: {driver.current_url}")
-                        except Exception:
-                            logger.warning("플레이어 페이지 전환 타임아웃")
-                        
-                        # 클릭 후에도 이동 실패하면 링크 직접 접속
-                        if not player_loaded and btn_href:
-                            if not btn_href.startswith("http"):
-                                btn_href = f"https://assembly.webcast.go.kr/{btn_href.lstrip('/')}"
-                            self.message_queue.put(("status", "🔄 링크 직접 접속 시도..."))
-                            driver.get(btn_href)
-                            time.sleep(3)
-                            if "player.asp" in driver.current_url:
-                                player_loaded = True
-                                logger.info(f"플레이어 페이지 직접 이동 성공: {driver.current_url}")
-                    else:
-                        logger.warning(f"xcode={target_xcode} 생중계 버튼을 찾을 수 없음")
-                        self.message_queue.put(("status", f"⚠️ xcode={target_xcode} 버튼 없음 - 생중계 중인지 확인하세요"))
-                        
-                except Exception as e:
-                    logger.error(f"생중계 버튼 클릭 오류: {e}")
-            
-            # 3. xcode가 없는 경우에만 첫 번째 생중계 시도
-            #    (xcode가 지정되었는데 못 찾으면: 다른 생중계로 진입하지 않음)
-            if not player_loaded and not target_xcode:
-                self.message_queue.put(("status", "🔍 진행 중인 생중계 찾는 중..."))
-                try:
-                    # onair 클래스가 있는 생중계 버튼 클릭
-                    onair_btns = driver.find_elements(By.CSS_SELECTOR, "a.onair[href*='player.asp']")
-                    if onair_btns:
-                        driver.execute_script("arguments[0].click();", onair_btns[0])
-                        time.sleep(3)
-                        if "player.asp" in driver.current_url:
-                            player_loaded = True
-                            logger.info(f"첫 번째 생중계로 이동: {driver.current_url}")
-                except Exception as e:
-                    logger.debug(f"첫 번째 생중계 시도 실패: {e}")
-            
-            # 4. 그래도 플레이어 로드 안되면 원래 URL 직접 시도 (최후의 수단)
-            if not player_loaded and target_xcgcd:
-                self.message_queue.put(("status", "🔄 직접 URL 접속 시도..."))
-                driver.get(url)
-                time.sleep(5)
-                if "player.asp" in driver.current_url:
-                    player_loaded = True
-            
-            # 5. xcode가 지정되었는데 실패한 경우: 사용자에게 알림 후 종료
-            if not player_loaded and target_xcode:
-                self.message_queue.put((
-                    "error",
-                    f"❌ 선택한 위원회(xcode={target_xcode})의 생중계를 찾을 수 없습니다.\n\n"
-                    "가능한 원인:\n"
-                    "• 해당 위원회에서 현재 진행 중인 생중계가 없음\n"
-                    "• 생중계가 종료되었거나 아직 시작되지 않음\n\n"
-                    "💡 해결 방법:\n"
-                    "• '📡 생중계 목록' 버튼을 눌러 현재 진행 중인 방송을 확인하세요"
-                ))
+            try:
+                driver = webdriver.Chrome(options=options)
+                self.driver = driver
+                self.message_queue.put(("status", "Chrome 시작 완료"))
+            except Exception as e:
+                self.message_queue.put(("error", f"Chrome 오류: {e}"))
                 return
             
-            # 6. 플레이어 로드 후 추가 대기
-            if player_loaded:
-                time.sleep(3)  # 플레이어 안정화 대기
-            else:
-                time.sleep(2)
-
+            self.message_queue.put(("status", "페이지 로딩 중..."))
+            driver.get(url)
+            time.sleep(3)
             
             self.message_queue.put(("status", "AI 자막 활성화 중..."))
             self._activate_subtitle(driver)
             
             self.message_queue.put(("status", "자막 요소 검색 중..."))
-            
-            # 헤드리스 모드에서는 타임아웃 증가 (JavaScript 로딩 지연 대비)
-            timeout = 30 if headless else 20
-            wait = WebDriverWait(driver, timeout)
-            
-            # _find_subtitle_selector를 활용하여 자막 요소 자동 감지
-            detected_selector = self._find_subtitle_selector(driver)
-            selectors_to_try = [selector, detected_selector, "#viewSubtit .incont", "#viewSubtit", ".subtitle_area"]
-            # 중복 제거
-            selectors_to_try = list(dict.fromkeys(selectors_to_try))
+            wait = WebDriverWait(driver, 20)
             
             found = False
-            working_selector = selector  # 실제 동작하는 셀렉터 저장
-            for sel in selectors_to_try:
+            for sel in [selector, "#viewSubtit .incont", "#viewSubtit", ".subtitle_area"]:
                 try:
                     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, sel)))
                     self.message_queue.put(("status", f"자막 요소 찾음: {sel}"))
                     found = True
-                    working_selector = sel
                     break
                 except Exception:
                     continue
             
             if not found:
-                # 사용자에게 직접 링크를 가져오라고 안내 (개선된 메시지)
-                self.message_queue.put((
-                    "subtitle_not_found",
-                    "자막 요소를 찾을 수 없습니다.\n\n"
-                    "❌ 가능한 원인:\n"
-                    "  • 현재 진행 중인 생중계가 없음\n"
-                    "  • 선택한 위원회에서 현재 회의가 없음\n"
-                    "  • URL에 방송 ID(xcgcd)가 누락됨\n\n"
-                    "📌 해결 방법:\n"
-                    "  1. 사이트 열기 버튼을 클릭하세요\n"
-                    "  2. '오늘의 생중계' 목록에서 원하는 중계를 클릭\n"
-                    "  3. 브라우저 주소창의 URL을 전체 복사\n"
-                    "  4. 프로그램의 URL 입력란에 붙여넣기\n\n"
-                    "💡 올바른 URL 예시:\n"
-                    "   https://assembly.webcast.go.kr/main/player.asp?xcode=IO&xcgcd=DCM0000IO...\n\n"
-                    "ℹ️ xcgcd는 각 회의마다 고유한 방송 ID입니다."
-                ))
+                self.message_queue.put(("error", "자막 요소를 찾을 수 없습니다."))
                 return
             
-            # 찾은 셀렉터를 사용하여 모니터링
-            selector = working_selector
-            
             self.message_queue.put(("status", "자막 모니터링 중"))
-            # 연결 성공 상태 전송 (#30)
-            self.message_queue.put(("connection_status", {"status": "connected", "latency": 0}))
             
             last_check = time.time()
-            last_ping = time.time()  # 연결 상태 체크용 (#30)
-            consecutive_errors = 0  # 네트워크 오류 재연결 카운터
-            empty_text_count = 0  # 빈 텍스트 연속 카운터
-            max_empty_text = 30  # 30회 연속 빈 텍스트 (약 6초) 시 경고
-            
             # stop_event 사용으로 더 빠른 종료 응답
             while not self.stop_event.is_set():
                 try:
                     now = time.time()
                     if now - last_check >= 0.2:
-                        ping_start = time.time()  # 레이턴시 측정 (#30)
                         try:
                             text = driver.find_element(By.CSS_SELECTOR, selector).text.strip()
-                            consecutive_errors = 0  # 성공 시 카운터 리셋
-                            
-                            # 주기적으로 연결 상태 업데이트 (#30)
-                            if now - last_ping >= 5:  # 5초마다
-                                latency = int((time.time() - ping_start) * 1000)
-                                self.message_queue.put(("connection_status", {"status": "connected", "latency": latency}))
-                                last_ping = now
-                                
                         except (NoSuchElementException, StaleElementReferenceException):
                             text = ""
                         
-                        text = utils.clean_text(text)
+                        # utils 사용으로 변경 (Legacy의 _clean_text 대체)
+                        text = utils.clean_text_display(text)
                         
-                        # 빈 텍스트 연속 감지 (방송 종료 또는 자막 없음)
-                        if not text:
-                            empty_text_count += 1
-                            if empty_text_count == max_empty_text:
-                                self.message_queue.put(("status", "⏸️ 자막 대기 중... (방송 확인 필요)"))
-                        else:
-                            empty_text_count = 0  # 리셋
-                        
-                        # 텍스트 정규화 비교 (공백/특수문자 차이 무시) - 성능 최적화
-                        normalized_text = Config.RE_MULTI_SPACE.sub(' ', text).strip()
-                        normalized_last = Config.RE_MULTI_SPACE.sub(' ', self.last_subtitle).strip() if self.last_subtitle else ""
-                        
-                        if text and normalized_text != normalized_last:
+                        # [Fix] Worker 내부 상태(_last_raw_text)를 사용하여 중복 전송 방지
+                        # UI의 last_subtitle은 확정 시 초기화되므로, 이를 사용하면 무한 재전송 발생함
+                        if text and text != self._last_raw_text:
+                            self._last_raw_text = text
                             self.message_queue.put(("preview", text))
                         
                         last_check = now
                     
                     # stop_event 대기 (0.05초, 즉시 응답 가능)
                     self.stop_event.wait(timeout=0.05)
-                    
-                except WebDriverException as e:
-                    # 네트워크/브라우저 오류 - 지수 백오프로 재연결 시도 (#31)
-                    consecutive_errors += 1
-                    if not self.stop_event.is_set():
-                        logger.warning(f"브라우저 오류 ({consecutive_errors}/{Config.MAX_RECONNECT_ATTEMPTS}): {e}")
-                        
-                        # 연결 끊김 상태 전송 (#30)
-                        self.message_queue.put(("connection_status", {"status": "disconnected"}))
-                        
-                        if consecutive_errors >= Config.MAX_RECONNECT_ATTEMPTS:
-                            self.message_queue.put(("error", f"네트워크 오류로 중단됨: {consecutive_errors}회 연속 실패"))
-                            break
-                        
-                        # 재연결 시도 알림 (#31)
-                        self.message_queue.put(("reconnecting", {"attempt": consecutive_errors}))
-                        
-                        # 지수 백오프 대기 (#31)
-                        delay = min(
-                            Config.RECONNECT_BASE_DELAY * (2 ** (consecutive_errors - 1)),
-                            Config.RECONNECT_MAX_DELAY
-                        )
-                        logger.info(f"재연결 대기: {delay}초")
-                        if self.stop_event.wait(timeout=delay):
-                            break  # 종료 신호 받으면 즉시 탈출
-                        
-                        try:
-                            driver.refresh()
-                            time.sleep(3)
-                            self._activate_subtitle(driver)
-                            # 재연결 성공 (#31)
-                            self.message_queue.put(("reconnected", {}))
-                            consecutive_errors = 0  # 성공 시 리셋
-                        except Exception as reconnect_error:
-                            logger.warning(f"재연결 실패: {reconnect_error}")
-                            
                 except Exception as e:
                     if not self.stop_event.is_set():
-                        logger.warning(f"모니터링 중 오류: {e}")
+                        # logger.warning(f"모니터링 중 오류: {e}") # 로그 과다 방지
+                        pass
                     time.sleep(0.5)
         
         except Exception as e:
@@ -2447,7 +2274,7 @@ class MainWindow(QMainWindow):
                 try:
                     driver.quit()
                 except Exception as e:
-                    logger.debug(f"워커 WebDriver 종료 중 오류: {e}")
+                    pass
                 self.driver = None
             self.message_queue.put(("finished", ""))
     
@@ -2482,22 +2309,6 @@ class MainWindow(QMainWindow):
         
         # 추가 대기 - 자막 레이어 로딩
         time.sleep(2.0)
-        
-        # 활성화 검증: 자막 요소가 실제로 보이는지 확인
-        try:
-            elem = driver.find_element(By.CSS_SELECTOR, "#viewSubtit")
-            is_visible = driver.execute_script(
-                "return arguments[0].offsetParent !== null && getComputedStyle(arguments[0]).display !== 'none';",
-                elem
-            )
-            if is_visible:
-                logger.info("자막 레이어 활성화 확인됨")
-                return True
-            else:
-                logger.warning("자막 레이어가 숨겨져 있음")
-        except Exception as e:
-            logger.debug(f"자막 레이어 확인 실패: {e}")
-        
         return activated
     
     def _find_subtitle_selector(self, driver) -> str:
@@ -2539,8 +2350,20 @@ class MainWindow(QMainWindow):
         except queue.Empty:
             pass
 
+    def _process_subtitle_segments(self, data) -> None:
+        """세그먼트 형태로 들어온 자막 데이터를 처리한다."""
+        if not data:
+            return
+        if isinstance(data, (list, tuple)):
+            for item in data:
+                if item:
+                    self._process_raw_text(item)
+            return
+        if isinstance(data, str):
+            self._process_raw_text(data)
+
     def _drain_pending_previews(self, max_items: int = 200, requeue_others: bool = False) -> None:
-        """큐에 남은 preview 메시지를 소진해 마지막 자막 누락을 줄인다."""
+        """큐에 남은 preview/segments 메시지를 소진해 마지막 자막 누락을 줄인다."""
         drained = 0
         pending = []
         try:
@@ -2548,6 +2371,8 @@ class MainWindow(QMainWindow):
                 msg_type, data = self.message_queue.get_nowait()
                 if msg_type == "preview":
                     self._process_raw_text(data)
+                elif msg_type == "subtitle_segments":
+                    self._process_subtitle_segments(data)
                 else:
                     pending.append((msg_type, data))
                 drained += 1
@@ -2559,10 +2384,24 @@ class MainWindow(QMainWindow):
                 self.message_queue.put(item)
 
     def _finalize_pending_subtitle(self) -> None:
-        """마지막 버퍼 자막 확정 처리."""
+        """남아있는 버퍼를 확정 처리 (종료/중지 안전성용)."""
         if self.last_subtitle:
             self._finalize_subtitle(self.last_subtitle)
             self.last_subtitle = ""
+            self._stream_start_time = None
+            self._clear_preview()
+
+    def _check_finalize(self):
+        """2초 동안 변경 없으면 현재 자막 확정"""
+        if not self.last_subtitle:
+            return
+        
+        elapsed = time.time() - self.last_update_time
+        if elapsed >= 2.0:  # 2초 동안 변경 없음
+            self._finalize_subtitle(self.last_subtitle)
+            self.last_subtitle = ""
+            self.finalize_timer.stop()
+            self._refresh_text()
     
     # ========== 메시지 큐 처리 ==========
     
@@ -2605,19 +2444,25 @@ class MainWindow(QMainWindow):
             
             elif msg_type == "preview":
                 self._process_raw_text(data)
+
+            elif msg_type == "keepalive":
+                self._handle_keepalive(data)
             
             elif msg_type == "error":
                 self.progress.hide()
                 self._reset_ui()
                 self._update_tray_status("⚪ 대기 중")
                 self._update_connection_status("disconnected")
+                self._clear_preview()
                 QMessageBox.critical(self, "오류", str(data))
             
             elif msg_type == "finished":
                 if self.last_subtitle:
                     self._finalize_subtitle(self.last_subtitle)
                     self.last_subtitle = ""
+                    self._stream_start_time = None
                 self.finalize_timer.stop()
+                self._clear_preview()
                 
                 self._refresh_text()
                 self._reset_ui()
@@ -2635,6 +2480,7 @@ class MainWindow(QMainWindow):
                 self.progress.hide()
                 self._reset_ui()
                 self._update_tray_status("⚪ 대기 중")
+                self._clear_preview()
                 
                 # 상세 안내 다이얼로그
                 msg_box = QMessageBox(self)
@@ -2680,8 +2526,25 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"메시지 처리 오류 ({msg_type}): {e}")
 
+    def _handle_keepalive(self, raw: str) -> None:
+        """동일 자막이 유지될 때 마지막 엔트리의 end_time을 갱신한다."""
+        if not raw:
+            return
+        # 현재 진행 중인 버퍼가 있으면 확정 이후에만 갱신
+        if self.last_subtitle:
+            return
+        raw_compact = utils.compact_subtitle_text(raw)
+        if not raw_compact:
+            return
 
-
+        with self.subtitle_lock:
+            if not self.subtitles:
+                return
+            last_entry = self.subtitles[-1]
+            last_compact = utils.compact_subtitle_text(last_entry.text)
+            if raw_compact != last_compact:
+                return
+            last_entry.end_time = datetime.now()
 
     def _should_merge_entry(self, last_entry: SubtitleEntry, new_text: str, now: datetime) -> bool:
         """기존 자막에 이어붙여도 되는지 판단 (단순 시간/길이 체크)"""
@@ -2713,207 +2576,151 @@ class MainWindow(QMainWindow):
             compact = compact[-max_compact_len:]
         return compact
 
-    def _is_redundant_to_confirmed_history(self, raw: str) -> bool:
-        """최근 확정 자막들의 tail에 포함되는(이미 확정된) 텍스트인지 확인"""
-        if not raw:
-            return False
+    def _slice_incremental_part(
+        self,
+        raw: str,
+        anchor_compact: str,
+        raw_compact: str,
+        min_anchor: int = 12,
+        min_overlap: int = 4,
+    ):
+        """anchor 기준으로 raw에서 새로 추가된 부분을 반환한다.
+
+        반환값:
+          - None: 겹침 없음 (문맥 전환으로 처리)
+          - "": 겹침은 있으나 새 내용 없음
+          - str: 새로 추가된 텍스트
+        """
+        if not raw or not anchor_compact or not raw_compact:
+            return None
+
+        # anchor가 길면, raw 내부에서 마지막으로 등장하는 위치를 기준으로 슬라이스
+        if len(anchor_compact) >= min_anchor:
+            idx = raw_compact.rfind(anchor_compact)
+            if idx != -1:
+                return utils.slice_from_compact_index(raw, idx + len(anchor_compact)).strip()
+
+        # fallback: suffix-prefix overlap
+        overlap_len = utils.find_compact_suffix_prefix_overlap(
+            anchor_compact, raw_compact, min_overlap=min_overlap
+        )
+        if overlap_len > 0:
+            return utils.slice_from_compact_index(raw, overlap_len).strip()
+
+        return None
+
+    def _extract_stream_delta(self, raw: str, last_raw: str):
+        """이전 raw 대비 새로 추가된 부분(delta)을 추출한다.
+
+        Returns:
+            str: 새로 추가된 텍스트 (없으면 "")
+            None: 문맥 전환(새 문장)으로 판단
+        """
+        if not last_raw:
+            return None
+
         raw_compact = utils.compact_subtitle_text(raw)
-        if not raw_compact:
-            return False
-        history_tail = self._confirmed_history_compact_tail()
-        return bool(history_tail) and (raw_compact in history_tail)
+        last_compact = utils.compact_subtitle_text(last_raw)
+        if not raw_compact or not last_compact:
+            return ""
 
+        if raw_compact == last_compact:
+            return ""
 
+        if last_compact in raw_compact:
+            idx = raw_compact.rfind(last_compact)
+            start = idx + len(last_compact)
+            if start <= 0 or start >= len(raw_compact):
+                return ""
+            return utils.slice_from_compact_index(raw, start).strip()
 
+        if utils.is_continuation_text(last_raw, raw):
+            return ""
 
+        return None
 
-    def _is_redundant_to_last_confirmed(self, raw: str) -> bool:
-        """마지막 확정 자막보다 진전이 없는 텍스트인지 확인"""
-        if not raw:
-            return False
-        with self.subtitle_lock:
-            if not self.subtitles:
-                return False
-            last_text = self.subtitles[-1].text
-        return utils.is_redundant_text(raw, last_text)
     
-    def _process_raw_text(self, raw: str):
-        """자막 텍스트 처리 - 스트리밍 방식 (즉시 반영 및 변경 사항 추적)"""
-        
-        # 1. 빈 텍스트 처리 (자막이 사라짐)
+    def _process_raw_text(self, raw):
         if not raw:
-            # 현재 버퍼가 있으면 확정하고 클리어
-            if self.last_subtitle:
-                # 마지막 자막 종료 시각 보정 (SRT/VTT 안정성)
-                now_dt = datetime.now()
-                with self.subtitle_lock:
-                    if self.subtitles:
-                        self.subtitles[-1].end_time = now_dt
-                self.last_update_time = time.time()
-                self.last_subtitle = ""
             return
-
-        # 2. 변경 없음 처리
-        if raw == self.last_subtitle:
-            # 동일한 자막이 유지되면 end_time을 주기적으로 갱신
-            now_ts = time.time()
-            if now_ts - self.last_update_time >= 1.0:
-                now_dt = datetime.now()
-                with self.subtitle_lock:
-                    if self.subtitles:
-                        self.subtitles[-1].end_time = now_dt
-                self.last_update_time = now_ts
-            return
-
-        # 3. 노이즈 처리를 위한 정규화
-        raw_clean = utils.compact_subtitle_text(raw)
-        last_clean = utils.compact_subtitle_text(self.last_subtitle)
-
-        # 4. 이어붙이기 감지 (Streaming Append)
-        # 새 텍스트가 이전 텍스트로 시작한다면 -> 새로운 뒷부분만 추가
-        # 예: "안녕" -> "안녕 하세요" (Delta: " 하세요")
-        if last_clean and raw_clean.startswith(last_clean):
-            # 원본 텍스트 기준으로는 인덱스를 찾기 어려울 수 있음 (공백 차이 등)
-            # 따라서 '길이' 기반으로 추정하거나, 단순히 raw에서 last_subtitle을 뺌
-            if raw.startswith(self.last_subtitle):
-                delta = raw[len(self.last_subtitle):]
-            else:
-                # 공백/포맷이 약간 변했을 수 있음. 안전하게 Overlap 체크 후 나머지
-                # 근데 startswith가 실패했다면, 포맷이 바뀐 것.
-                # 스트리밍의 경우 '화면 그대로'가 중요하므로,
-                # 이전 텍스트가 포함되어 있다면 그 위치를 찾음
-                idx = raw.find(self.last_subtitle)
-                if idx != -1:
-                    delta = raw[idx + len(self.last_subtitle):]
-                else:
-                    # 포함되지 않음 (수정됨) -> 전체 다시 처리?
-                    # "안녕" -> "안녕하세욤" (수정)
-                    # 기존에 "안녕"을 이미 출력했으므로, "하세욤"만 출력해야 함?
-                    # 아니면 "안녕"을 지우고 "안녕하세욤"을 써야 함?
-                    # 출력된 자막(SubtitleEntry)은 수정 불가(immutable 가정)하면 곤란.
-                    # 하지만 여기서는 'append' 모델이므로, 수정은 포기하고 그냥 새 내용을 붙임.
-                    # 단, 중복을 최대한 피하기 위해 Overlap 넉넉히 체크
-                    overlap = utils.find_compact_suffix_prefix_overlap(last_clean, raw_clean, max_overlap=1200)
-                    delta = utils.slice_from_compact_index(raw, overlap)
             
-            if delta:
-                self._append_stream_text(delta)
-            
-            self.last_subtitle = raw
-            self.last_update_time = time.time()
+        # [Fix] 중복 방지: 이미 처리한 텍스트와 동일하면 무시
+        if raw == self._last_processed_raw:
             return
 
-        # 5. 문맥 변경 (새로운 문장 or 리셋)
-        # 화면이 클리어되거나, 아예 다른 문장으로 바뀜
-        # "안녕 하세요" -> "반갑습니다"
-        # 혹은 "A" -> "B" (accumulated buffer가 아님)
+        # [Fix] Streaming Logic Restore
+        # 1. Diff 계산 (이전 처리된 전체 텍스트 기준)
+        delta = utils.get_word_diff(self._last_processed_raw, raw)
         
-        # 기존 내용이 완전히 포함되지 않은 경우 -> 새로운 시작으로 간주
-        # 단, 중복 방지를 위해 Global History(최근 확정 자막)와 비교
-        if self._is_redundant_to_confirmed_history(raw):
-            # 이미 처리된 내용이면 무시 (버퍼가 비워지지 않고 남아있는 경우 등)
-            return
-
-        # 새로운 내용임. Overlap 체크 후 추가
-        # (이전 버퍼인 self.last_subtitle과는 관계가 끊어짐. History Tail과 비교)
-        history_tail = self._confirmed_history_compact_tail()
-        overlap = utils.find_compact_suffix_prefix_overlap(history_tail, raw_clean, max_overlap=5000)
-        
-        new_text = utils.slice_from_compact_index(raw, overlap).strip()
-        
-        if new_text:
-            # 새 엔트리 시작 (문맥이 바뀌었으므로)
-            self._append_stream_text(new_text, force_new_entry=True)
-            
-        self.last_subtitle = raw
-        self.last_update_time = time.time()
-
-    def _append_stream_text(self, text: str, force_new_entry: bool = False):
-        """스트리밍 텍스트를 현재 자막 엔트리에 즉시 추가"""
-        if not text:
-            return
-
-        now_dt = datetime.now()
-        appended_text = None
-        updated_existing = False
-        last_entry_text = ""
-        
-        with self.subtitle_lock:
-            if not self.subtitles or force_new_entry:
-                # 새 엔트리 생성
-                entry = SubtitleEntry(text, timestamp=now_dt)
-                entry.start_time = now_dt
-                entry.end_time = now_dt
-                self.subtitles.append(entry)
-                
-                # 통계 갱신
-                self._cached_total_chars += entry.char_count
-                self._cached_total_words += entry.word_count
-            else:
-                # 기존 엔트리에 Append
-                last_entry = self.subtitles[-1]
-                
-                # 단, 마지막 엔트리가 너무 길어지면 자름 (약 200자 기준?) 
-                # 또는 시간이 너무 지났으면 (90초)
-                should_split = False
-                if len(last_entry.text) > Config.ENTRY_MERGE_MAX_CHARS:
-                    should_split = True
-                if last_entry.end_time and (now_dt - last_entry.end_time).total_seconds() > Config.ENTRY_MERGE_MAX_GAP:
-                    should_split = True
-                
-                if should_split:
-                     # 분리
-                    entry = SubtitleEntry(text, timestamp=now_dt)
-                    entry.start_time = now_dt
-                    entry.end_time = now_dt
+        if delta:
+            # 2. 자막 업데이트 (Append or Split)
+            with self.subtitle_lock:
+                if not self.subtitles:
+                    # 첫 자막
+                    entry = SubtitleEntry(delta)
+                    entry.start_time = datetime.now()
+                    entry.end_time = datetime.now()
                     self.subtitles.append(entry)
-                    self._cached_total_chars += entry.char_count
-                    self._cached_total_words += entry.word_count
                 else:
-                    # 병합
-                    old_chars = last_entry.char_count
-                    old_words = last_entry.word_count
-                    
-                    separator = " " if last_entry.text and not last_entry.text.endswith((" ", "\n")) else ""
-                    last_entry.update_text(f"{last_entry.text}{separator}{text}")
-                    last_entry.end_time = now_dt
-                    
-                    self._cached_total_chars += (last_entry.char_count - old_chars)
-                    self._cached_total_words += (last_entry.word_count - old_words)
-                    appended_text = f"{separator}{text}" if separator else text
-                    updated_existing = True
-                    last_entry_text = last_entry.text
-
-        # 키워드 알림
-        self._check_keyword_alert(text)
-        
-        # 화면 갱신 (즉시)
-        if updated_existing and appended_text:
-            if not self._append_to_last_rendered_entry(appended_text, last_entry_text):
-                self._refresh_text()
+                    last_entry = self.subtitles[-1]
+                    # [Length Check] 길이 제한 초과 시 분리
+                    if len(last_entry.text) + len(delta) > Config.STREAM_SUBTITLE_MAX_LENGTH:
+                        # 새 엔트리 생성 (타임스탬프 분리)
+                        entry = SubtitleEntry(delta)
+                        entry.start_time = datetime.now()
+                        entry.end_time = datetime.now()
+                        self.subtitles.append(entry)
+                    else:
+                        # 이어붙이기
+                        last_entry.text += " " + delta
+                        last_entry.end_time = datetime.now()
+            
+            # 3. 상태 업데이트
+            self._last_processed_raw = raw
+            self.last_subtitle = raw # UI 호환성
+            self.last_update_time = time.time()
+            
+            # 4. UI 갱신 (즉시)
+            self._refresh_text(force_full=True)
+            self._update_count_label()
+            
+            # 5. 실시간 저장
+            if self.realtime_file:
+                try:
+                    self.realtime_file.write(f"+ {delta}\n")
+                    self.realtime_file.flush()
+                except IOError:
+                    pass
         else:
-            self._refresh_text()
-        self._update_count_label()
-        
-        # 실시간 저장
-        if self.realtime_file:
-            try:
-                # Append 모드이므로 그냥 써도 됨 (단, 파일 포맷에 따라 줄바꿈 처리가 애매할 수 있음)
-                # 여기서는 단순 로그처럼 저장
-                timestamp = now_dt.strftime('%H:%M:%S')
-                self.realtime_file.write(f"[{timestamp}] {text}\n")
-                self.realtime_file.flush()
-            except Exception:
-                pass
+            # 텍스트 변화는 없지만(delta=""), raw가 다를 수 있음 (공백 등)
+            # 상태만 업데이트
+            self._last_processed_raw = raw
+
     
     
+    def _set_preview_text(self, text: str) -> None:
+        """미리보기 텍스트 표시/숨김"""
+        if not hasattr(self, 'preview_frame'):
+            return
+        content = (text or "").strip()
+        if content:
+            self.preview_label.setText(content)
+            self.preview_frame.show()
+        else:
+            self.preview_label.setText("")
+            self.preview_frame.hide()
+
+    def _clear_preview(self) -> None:
+        """미리보기 초기화"""
+        self._set_preview_text("")
+
     def _update_preview(self, raw: str) -> None:
-        """미리보기 업데이트 - 확정 자막 + 현재 자막 모두 표시"""
-        self._render_subtitles(current_raw=raw)
+        """미리보기 업데이트 (별도 UI)"""
+        self._set_preview_text(raw)
     
 
 
-    def _render_subtitles(self, current_raw: str = None) -> None:
+    def _render_subtitles(self, force_full: bool = False) -> None:
         """Render subtitles with incremental updates when possible."""
         scrollbar = self.subtitle_text.verticalScrollBar()
         preserve_scroll = self._user_scrolled_up and scrollbar is not None
@@ -2929,35 +2736,48 @@ class MainWindow(QMainWindow):
         total_count = len(subtitles_copy)
         last_text = subtitles_copy[-1].text if subtitles_copy else ""
 
+        show_ts = self.timestamp_action.isChecked()
+
+        # 마지막 출력된 타임스탬프 (희소 타임스탬프용)
+        # 렌더링 시작 시 초기화
+        if not hasattr(self, '_last_printed_ts'):
+            self._last_printed_ts = None
+
         needs_full_render = (
-            current_raw is not None
+            force_full
             or (total_count < self._last_rendered_count)
-            or (self._last_rendered_had_preview and current_raw is None)
             or (total_count == self._last_rendered_count and last_text != self._last_rendered_last_text)
         )
 
-        show_ts = self.timestamp_action.isChecked()
-
         if needs_full_render:
             self.subtitle_text.clear()
+            self._last_printed_ts = None # 풀 렌더링 시 초기화
             cursor = self.subtitle_text.textCursor()
 
             for i, entry in enumerate(subtitles_copy):
+                same_second = False
                 if i > 0:
-                    cursor.insertText("\n\n")
+                    prev_entry = subtitles_copy[i - 1]
+                    same_second = entry.timestamp.replace(microsecond=0) == prev_entry.timestamp.replace(microsecond=0)
+                    cursor.insertText(" " if same_second else "\n\n")
+                
                 if show_ts:
-                    cursor.insertText(f"[{entry.timestamp.strftime('%H:%M:%S')}] ", self._timestamp_fmt)
-                self._insert_highlighted_text(cursor, entry.text)
+                    # 1분 간격 타임스탬프 로직
+                    should_print = False
+                    if not same_second:
+                        if self._last_printed_ts is None:
+                            should_print = True
+                        elif (entry.timestamp - self._last_printed_ts).total_seconds() >= 60:
+                            should_print = True
+                    
+                    if should_print:
+                        cursor.insertText(f"[{entry.timestamp.strftime('%H:%M:%S')}] ", self._timestamp_fmt)
+                        self._last_printed_ts = entry.timestamp
 
-            if current_raw:
-                if subtitles_copy:
-                    cursor.insertText("\n\n")
-                cursor.insertText("⏳ ", self._preview_fmt)
-                cursor.insertText(current_raw)
+                self._insert_highlighted_text(cursor, entry.text)
 
             self._last_rendered_count = total_count
             self._last_rendered_last_text = last_text
-            self._last_rendered_had_preview = bool(current_raw)
         else:
             cursor = self.subtitle_text.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -2965,15 +2785,29 @@ class MainWindow(QMainWindow):
             new_entries = subtitles_copy[self._last_rendered_count:] if self._last_rendered_count < total_count else []
             for i, entry in enumerate(new_entries):
                 global_idx = self._last_rendered_count + i
+                same_second = False
                 if global_idx > 0:
-                    cursor.insertText("\n\n")
+                    prev_entry = subtitles_copy[global_idx - 1]
+                    same_second = entry.timestamp.replace(microsecond=0) == prev_entry.timestamp.replace(microsecond=0)
+                    cursor.insertText(" " if same_second else "\n\n")
+                
                 if show_ts:
-                    cursor.insertText(f"[{entry.timestamp.strftime('%H:%M:%S')}] ", self._timestamp_fmt)
+                    # 1분 간격 타임스탬프 로직 (증분)
+                    should_print = False
+                    if not same_second:
+                        if self._last_printed_ts is None:
+                            should_print = True
+                        elif (entry.timestamp - self._last_printed_ts).total_seconds() >= 60:
+                            should_print = True
+                    
+                    if should_print:
+                        cursor.insertText(f"[{entry.timestamp.strftime('%H:%M:%S')}] ", self._timestamp_fmt)
+                        self._last_printed_ts = entry.timestamp
+
                 self._insert_highlighted_text(cursor, entry.text)
 
             self._last_rendered_count = total_count
             self._last_rendered_last_text = last_text
-            self._last_rendered_had_preview = False
 
         if self.auto_scroll_check.isChecked() and not self._user_scrolled_up:
             self.subtitle_text.moveCursor(QTextCursor.MoveOperation.End)
@@ -2981,42 +2815,6 @@ class MainWindow(QMainWindow):
         if preserve_scroll:
             scrollbar.setValue(min(saved_scroll, scrollbar.maximum()))
             scrollbar.blockSignals(False)
-
-    def _append_to_last_rendered_entry(self, appended_text: str, last_entry_text: str) -> bool:
-        """Append to the already-rendered last entry when safe."""
-        if not appended_text:
-            return False
-        if self._last_rendered_had_preview:
-            return False
-        if not hasattr(self, 'subtitle_text'):
-            return False
-
-        with self.subtitle_lock:
-            if not self.subtitles:
-                return False
-            if self._last_rendered_count != len(self.subtitles):
-                return False
-
-        scrollbar = self.subtitle_text.verticalScrollBar()
-        preserve_scroll = self._user_scrolled_up and scrollbar is not None
-        saved_scroll = None
-        if preserve_scroll:
-            saved_scroll = scrollbar.value()
-            scrollbar.blockSignals(True)
-
-        cursor = self.subtitle_text.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-        self._insert_highlighted_text(cursor, appended_text)
-
-        if self.auto_scroll_check.isChecked() and not self._user_scrolled_up:
-            self.subtitle_text.moveCursor(QTextCursor.MoveOperation.End)
-
-        if preserve_scroll:
-            scrollbar.setValue(min(saved_scroll, scrollbar.maximum()))
-            scrollbar.blockSignals(False)
-
-        self._last_rendered_last_text = last_entry_text
-        return True
 
     def _on_scroll_changed(self) -> None:
         """스크롤바 위치 변경 감지 - 스마트 스크롤용"""
@@ -3057,136 +2855,77 @@ class MainWindow(QMainWindow):
                 self.toggle_stats_btn.setText("📊 통계 숨기기")
                 self.main_splitter.setSizes([860, 220])
     
-    def _refresh_text(self) -> None:
+    def _refresh_text(self, force_full: bool = False) -> None:
         """확정된 자막만 표시 (진행 중인 자막 없음)"""
-        self._render_subtitles(current_raw=None)
+        self._render_subtitles(force_full=force_full)
+
+    def _refresh_text_full(self, *_args) -> None:
+        """렌더 캐시를 무시하고 전체 다시 그리기"""
+        self._refresh_text(force_full=True)
 
 
     
-    def _finalize_subtitle(self, text: str) -> None:
-        """자막 확정 - 이전 확정 자막과 겹치는 부분 제거 후 이어붙이기
-        
-        성능 최적화: 통계 캐시 갱신
-        """
+    def _finalize_subtitle(self, text):
+        """자막 확정 - 단어 단위 증분 병합 (Incremental Word Accumulation)"""
         if not text:
             return
         
-        now_dt = datetime.now()
-        entry = None
-        finalized_text = None
-        with self.subtitle_lock:
-            text_compact = utils.compact_subtitle_text(text)
-            if not text_compact:
-                return
-
-            # "확정 후 다음 자막" 방식: 최근 확정 히스토리(tail)와 겹치는 부분은 제거하고,
-            # 새로 추가된 부분만 새로운 SubtitleEntry로 추가
-            tail_entries = self.subtitles[-10:] if self.subtitles else []
-            history_joined = " ".join(e.text for e in tail_entries if e and e.text)
-            history_tail = utils.compact_subtitle_text(history_joined)
-            if len(history_tail) > 3000:
-                history_tail = history_tail[-3000:]
-            if history_tail and (text_compact in history_tail):
-                return
-
-            # 1. 기존 Overlap 로직 (Suffix-Prefix Match)
-            # max_overlap을 늘려서 긴 버퍼도 처리 가능하게 함 (1200 -> 5000)
-            overlap_len = utils.find_compact_suffix_prefix_overlap(history_tail, text_compact, max_overlap=5000)
+        # 이전에 확정된 자막이 있으면, 겹치는 부분 제거
+        if self.subtitles:
+            last_text = self.subtitles[-1].text
             
-            # 2. Accumulated Text 로직 (History가 Text 안에 포함된 경우)
-            # Overlap이 0이고 텍스트가 길다면, History(tail)가 새 텍스트의 중간에 있을 수 있음
-            if overlap_len == 0 and len(text_compact) > len(history_tail) and len(history_tail) > 10:
-                # history_tail이 text_compact의 어딘가에 존재하는지 확인 (뒤에서부터 검색)
-                # 단, history_tail이 너무 짧으면 오탐 가능성이 있으므로 적당한 길이일 때만
-                idx = text_compact.rfind(history_tail)
-                if idx != -1:
-                    # History 발견! 그 뒤가 새로운 텍스트
-                    # 단, 발견된 위치가 텍스트의 끝부분이어야 의미가 있음 (중간에 우연히 일치하는 경우 제외?)
-                    # 아니오, History Tail은 확정된 마지막 부분이므로, 텍스트 내에서 발견되면 그 뒤는 무조건 새 내용임.
-                    overlap_len = 0 # slice 로직은 index 기반이므로 별도 처리 필요
-                    
-                    # compact 기준 인덱스에서 원문 인덱스를 찾는 건 복잡하므로,
-                    # 여기서는 간단히 '그 뒤의 compact 텍스트'에 해당하는 원문을 찾거나
-                    # 혹은 기존 slice 로직을 활용하기 위해 trick을 씀.
-                    pass 
-                    
-            new_part = ""
-            if overlap_len > 0:
-                new_part = utils.slice_from_compact_index(text, overlap_len).strip()
+            # [Smart Merge] 단어 단위 겹침 분석하여 새로운 단어만 추출
+            new_part = utils.get_word_diff(last_text, text)
             
-            # Fallback: Overlap 0이고 포함관계도 아니면?
-            # 1) 텍스트가 완전히 새로운 경우 -> 전체 추가
-            # 2) History가 Text 안에 포함된 경우 (위에서 감지 못한) -> 처리 필요
-            
-            if overlap_len == 0:
-                # History가 Text 안에 포함되어 있는지 확인 (Compact 기준)
-                if history_tail and history_tail in text_compact:
-                    # History 뒤의 내용만 추출 - 정교한 원문 매핑이 필요하지만
-                    # 여기서는 'History와 일치하는 부분'을 text에서 찾아 제거
-                    # (정확한 원문 보존을 위해 _slice_from_compact_index 유사 로직 구현 필요하지만 복잡)
-                    # 차선책: text_compact에서 history_tail 이후의 문자열을 찾고, 그에 매핑되는 원문 찾기?
-                    # 더 간단히: 이미 포함되어 있다면, 이는 '확정된 내용 + @' 형태일 가능성이 높음.
-                    # text가 history를 포함하면, text는 history의 확장임.
-                    # 따라서 text의 뒷부분(history 길이만큼 제외)이 new_part?
-                    # 아니오, 중간 공백/포맷 차이 때문에 길이로 자르면 안됨.
+            if new_part:
+                # [Length Check] 문장이 너무 길어지면 강제로 끊고 시 타임스탬프 생성
+                current_len = len(last_text)
+                new_len = len(new_part)
+                
+                # 기존 길이에 새 내용을 더했을 때 최대 길이를 초과하면 분리
+                if current_len + new_len > Config.STREAM_SUBTITLE_MAX_LENGTH:
+                    entry = SubtitleEntry(new_part)
+                    entry.start_time = datetime.now()
+                    entry.end_time = datetime.now()
+                    self.subtitles.append(entry)
                     
-                    # 가장 안전한 방법: Overlap이 0인데 History가 Text에 있다면,
-                    # Text가 History를 "품고" 있는 상태. (Accumulated Buffer)
-                    # 이 경우 Text의 끝부분이 새 내용일 것임.
-                    # 우리는 "History Tail"과 일치하는 Text 내 위치를 찾아야 함.
-                    
-                    # rfind로 위치 찾기 (Compact 기준)
-                    c_idx = text_compact.rfind(history_tail)
-                    if c_idx != -1:
-                        # Compact 기준 c_idx + len(history_tail) 이후가 새로운 내용
-                        compact_end_idx = c_idx + len(history_tail)
-                        new_part = utils.slice_from_compact_index(text, compact_end_idx).strip()
+                    if self.realtime_file:
+                        try:
+                            # 분리된 새 문장으로 저장
+                            timestamp = entry.timestamp.strftime('%H:%M:%S')
+                            self.realtime_file.write(f"[{timestamp}] {new_part}\n")
+                            self.realtime_file.flush()
+                        except IOError as e:
+                            logger.warning(f"실시간 저장 쓰기 오류: {e}")
                 else:
-                    # 진짜 새로운 텍스트 (또는 매칭 실패)
-                    new_part = text.strip()
-
-            if not new_part:
+                    # 새로운 내용이 있으면 이어붙이기
+                    self.subtitles[-1].text += " " + new_part
+                    self.subtitles[-1].end_time = datetime.now()
+                    
+                    # 실시간 저장
+                    if self.realtime_file:
+                        try:
+                            # + 기호로 이어붙여진 내용임을 표시
+                            self.realtime_file.write(f"+ {new_part}\n")
+                            self.realtime_file.flush()
+                        except IOError as e:
+                            logger.warning(f"실시간 저장 쓰기 오류: {e}")
                 return
-
-            # 안전장치: 델타가 여전히 최근 확정 히스토리에 포함되면 추가하지 않음
-            new_part_compact = utils.compact_subtitle_text(new_part)
-            if history_tail and new_part_compact and (new_part_compact in history_tail):
-                return
-
-            last_entry = self.subtitles[-1] if self.subtitles else None
-
-            # 마지막 자막에 이미 포함된 경우 중복 추가 방지
-            if last_entry and utils.is_redundant_text(new_part, last_entry.text):
-                return
-            
-            # 병합 조건 체크 (분 경계 무시하고 이어붙이기)
-            if self._should_merge_entry(last_entry, new_part, now_dt):
-                old_chars = last_entry.char_count
-                old_words = last_entry.word_count
-                separator = " " if last_entry.text and not last_entry.text.endswith((" ", "\n")) else ""
-                last_entry.update_text(f"{last_entry.text}{separator}{new_part}")
-                
-                last_entry.end_time = now_dt
-                entry = last_entry
-                finalized_text = new_part
-                self._cached_total_chars += (last_entry.char_count - old_chars)
-                self._cached_total_words += (last_entry.word_count - old_words)
             else:
-                # 새 엔트리 생성
-                entry = SubtitleEntry(new_part, timestamp=now_dt)
-                entry.start_time = now_dt
-                entry.end_time = now_dt
-                
-                self.subtitles.append(entry)
-                finalized_text = entry.text
-                
-                # 통계 캐시 갱신 (새 자막 추가)
-                self._cached_total_chars += entry.char_count
-                self._cached_total_words += entry.word_count
+                # 겹치는 내용만 있고 새로운 내용이 없으면 (부분집합)
+                # 시간만 갱신하고 종료
+                self.subtitles[-1].end_time = datetime.now()
+                return
         
-        # 키워드 알림 확인 (lock 외부)
-        if finalized_text:
-            self._check_keyword_alert(finalized_text)
+        # 첫 번째 자막 또는 완전히 새로운 문장
+        entry = SubtitleEntry(text)
+        entry.start_time = datetime.now()
+        entry.end_time = datetime.now()
+        
+        self.subtitles.append(entry)
+        
+        # 키워드 알림 확인
+        self._check_keyword_alert(text)
         
         # 카운트 라벨 업데이트
         self._update_count_label()
@@ -3194,14 +2933,13 @@ class MainWindow(QMainWindow):
         # 실시간 저장
         if self.realtime_file:
             try:
-                if entry and finalized_text:
-                    timestamp = entry.timestamp.strftime('%H:%M:%S')
-                    self.realtime_file.write(f"[{timestamp}] {finalized_text}\n")
-                    self.realtime_file.flush()
+                timestamp = entry.timestamp.strftime('%H:%M:%S')
+                self.realtime_file.write(f"[{timestamp}] {text}\n")
+                self.realtime_file.flush()
             except IOError as e:
                 logger.warning(f"실시간 저장 쓰기 오류: {e}")
         
-        self._refresh_text()
+        self._refresh_text(force_full=True)
 
     
     def _insert_highlighted_text(self, cursor, text):
@@ -3244,8 +2982,7 @@ class MainWindow(QMainWindow):
             self.settings.setValue("highlight_keywords", ", ".join(self.keywords))
 
         if refresh and hasattr(self, 'subtitle_text'):
-            self._last_rendered_count = 0
-            self._refresh_text()
+            self._refresh_text(force_full=True)
 
     def _update_keyword_cache(self):
         """키워드 패턴 캐시 업데이트 (디바운싱 적용)"""
@@ -3313,8 +3050,11 @@ class MainWindow(QMainWindow):
             self.subtitles.clear()
             self._cached_total_chars = 0
             self._cached_total_words = 0
-        
-        self._refresh_text()
+            self.last_subtitle = ""
+            self._last_processed_raw = ""
+            self._stream_start_time = None
+            self._clear_preview()
+        self._refresh_text(force_full=True)
         self._update_count_label()
         self._show_toast(f"🗑️ {count}개 자막 삭제됨", "success")
     
@@ -3360,7 +3100,7 @@ class MainWindow(QMainWindow):
     
     def _hide_search(self):
         self.search_frame.hide()
-        self._refresh_text()
+        self._refresh_text(force_full=True)
     
     def _do_search(self):
         query = self.search_input.text()
@@ -4096,14 +3836,14 @@ class MainWindow(QMainWindow):
                 with self.subtitle_lock:
                     self.subtitles = new_subtitles
                 self.last_subtitle = ""
-                self._pending_minute_bucket = None
+                self._stream_start_time = None
                 self.finalize_timer.stop()
                 self._rebuild_stats_cache()
                 
                 if data.get('url'):
                     self.url_combo.setCurrentText(data['url'])
                 
-                self._refresh_text()
+                self._refresh_text(force_full=True)
                 self._update_count_label()
                 self._show_toast(f"세션 불러오기 완료! {len(self.subtitles)}개 문장", "success")
             
@@ -4126,9 +3866,11 @@ class MainWindow(QMainWindow):
             self._cached_total_chars = 0
             self._cached_total_words = 0
             self.last_subtitle = ""
-            self._pending_minute_bucket = None
+            self._last_processed_raw = ""
+            self._stream_start_time = None
             self.finalize_timer.stop()
-            self.subtitle_text.clear()
+            self._clear_preview()
+            self._refresh_text(force_full=True)
             self._update_count_label()
             self.status_label.setText("내용 삭제됨")
     
@@ -4193,7 +3935,7 @@ class MainWindow(QMainWindow):
                         entry.update_text(new_text)
                         self._cached_total_chars += (entry.char_count - old_chars)
                         self._cached_total_words += (entry.word_count - old_words)
-                    self._refresh_text()
+                    self._refresh_text(force_full=True)
                     self._update_count_label()
                     self._show_toast("자막이 수정되었습니다.", "success")
                     dialog.accept()
@@ -4267,7 +4009,7 @@ class MainWindow(QMainWindow):
                         self._cached_total_chars -= entry.char_count
                         self._cached_total_words -= entry.word_count
                         del self.subtitles[row]
-                self._refresh_text()
+                self._refresh_text(force_full=True)
                 self._update_count_label()
                 self._show_toast(f"{len(selected_rows)}개 자막이 삭제되었습니다.", "success")
                 dialog.accept()
@@ -4475,10 +4217,11 @@ class MainWindow(QMainWindow):
                     with self.subtitle_lock:
                         self.subtitles = new_subtitles
                     self.last_subtitle = ""
-                    self._pending_minute_bucket = None
+                    self._stream_start_time = None
                     self.finalize_timer.stop()
+                    self._clear_preview()
                     self._rebuild_stats_cache()
-                    self._refresh_text()
+                    self._refresh_text(force_full=True)
                     self._update_count_label()
                     self._show_toast(f"세션 불러오기 완료! {len(new_subtitles)}개 문장", "success")
                     dialog.accept()
@@ -4656,10 +4399,11 @@ class MainWindow(QMainWindow):
                 with self.subtitle_lock:
                     self.subtitles = merged
                 self.last_subtitle = ""
-                self._pending_minute_bucket = None
+                self._stream_start_time = None
                 self.finalize_timer.stop()
+                self._clear_preview()
                 self._rebuild_stats_cache()
-                self._refresh_text()
+                self._refresh_text(force_full=True)
                 self._update_count_label()
                 self._show_toast(f"병합 완료! {len(merged)}개 문장", "success")
                 dialog.accept()
@@ -4672,6 +4416,60 @@ class MainWindow(QMainWindow):
         
         layout.addLayout(btn_layout)
         dialog.exec()
+
+    def _clean_newlines(self):
+        """줄넘김 정리: 문장 부호 분리 및 병합 (스마트 리플로우)"""
+        # 자막이 없는 경우 처리
+        if not self.subtitles:
+            self._show_toast("정리할 자막이 없습니다.", "warning")
+            return
+
+        # 사용자 확인
+        reply = QMessageBox.question(
+            self, "줄넘김 정리 (Smart Reflow)",
+            "자막 재정렬을 수행하시겠습니까?\n\n"
+            "기능:\n"
+            "1. 텍스트 내 타임스탬프([HH:MM:SS])를 감지하여 분리\n"
+            "2. 문장 부호(. ? !) 기준으로 줄 바꿈\n"
+            "3. 끊어진 문장 병합\n\n"
+            "(주의: 되돌리기는 지원되지 않습니다.)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.No:
+            return
+
+        # 병합/분리 로직 (utils 모듈 위임)
+        try:
+            old_count = len(self.subtitles)
+            
+            # 스레드 안전하게 복사본 생성 후 처리
+            with self.subtitle_lock:
+                current_subs = list(self.subtitles)
+                
+            # 처리 (시간 소요 가능성 있으므로 락 밖에서 수행 권장하지만, 데이터가 크지 않아 즉시 수행)
+            new_subtitles = utils.reflow_subtitles(current_subs)
+            
+            if not new_subtitles:
+                return
+
+            # 원본과 개수 차이 확인
+            logger.info(f"스마트 리플로우: {old_count} -> {len(new_subtitles)}")
+            
+            # 변경 적용 (Thread-safe)
+            with self.subtitle_lock:
+                self.subtitles = new_subtitles
+                
+            # UI 갱신
+            self._rebuild_stats_cache()
+            self._refresh_text(force_full=True)
+            self._update_count_label()
+            
+            # 결과 알림
+            self._show_toast(f"정리 완료! ({len(new_subtitles)}개 문장)", "success")
+            
+        except Exception as e:
+            logger.error(f"리플로우 중 오류: {e}")
+            self._show_toast(f"오류 발생: {e}", "error")
     
     def _merge_sessions(self, file_paths: list, remove_duplicates: bool = True, 
                        sort_by_time: bool = True, existing_subtitles: list = None) -> list:
@@ -4808,6 +4606,13 @@ class MainWindow(QMainWindow):
                 self.driver.quit()
             except Exception as e:
                 logger.debug(f"WebDriver 종료 오류: {e}")
+        if self._detached_drivers:
+            for drv in list(self._detached_drivers):
+                try:
+                    drv.quit()
+                except Exception as e:
+                    logger.debug(f"분리된 WebDriver 종료 오류: {e}")
+            self._detached_drivers.clear()
         
         # 데이터베이스 연결 정리
         if getattr(self, 'db', None):

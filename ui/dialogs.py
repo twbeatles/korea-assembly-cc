@@ -4,7 +4,7 @@ import json
 import time
 from urllib.request import Request, urlopen
 
-from PyQt6.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem,
@@ -14,11 +14,13 @@ from PyQt6.QtWidgets import (
 from core.config import Config
 
 class _LiveListFetchWorker(QObject):
-    """live_list.asp API 호출을 UI와 분리하기 위한 워커(QObject+QThread)."""
+    """live_list.asp API 호출을 UI와 분리하기 위한 워커."""
 
     finished = pyqtSignal(object)  # {"ok": bool, "result": list} 또는 {"ok": False, "error": str}
 
-    def run(self):
+    @pyqtSlot()
+    def fetch(self):
+        """API 호출을 수행하는 슬롯"""
         try:
             api_url = f"https://assembly.webcast.go.kr/main/service/live_list.asp?vv={int(time.time())}"
             req = Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -32,6 +34,9 @@ class _LiveListFetchWorker(QObject):
 
 class LiveBroadcastDialog(QDialog):
     """현재 생중계 중인 방송 목록을 보여주고 선택하는 다이얼로그"""
+
+    sig_fetch_request = pyqtSignal() # 워커에게 요청을 보내는 시그널
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("실시간 국회 생중계 목록")
@@ -82,31 +87,35 @@ class LiveBroadcastDialog(QDialog):
             QTreeWidget::item { padding: 5px; }
             QTreeWidget::item:selected { background-color: #3b82f6; color: white; }
         """)
+
+        # --- 스레드 초기화 (Persistent) ---
+        self._fetch_thread = QThread(self)
+        self._fetch_worker = _LiveListFetchWorker()
+        self._fetch_worker.moveToThread(self._fetch_thread)
+        
+        # 시그널 연결
+        self.sig_fetch_request.connect(self._fetch_worker.fetch)
+        self._fetch_worker.finished.connect(self._on_fetch_done)
+        
+        # 스레드 시작
+        self._fetch_thread.start()
         
         # 초기 로딩
         QTimer.singleShot(100, self.load_broadcasts)
         
     def load_broadcasts(self):
-        """API 호출하여 생중계 목록 로딩"""
+        """API 호출 요청"""
+        # 중복 요청 방지 (UI 상태로 제어)
+        if not self.refresh_btn.isEnabled():
+            return
+            
         self.tree.clear()
         self.msg_label.setText("데이터 조회 중...")
         self.msg_label.show()
-        
-        # UI 프리즈 방지: API 호출은 QThread에서 실행
-        if getattr(self, "_fetch_thread", None) and self._fetch_thread.isRunning():
-            return
-
         self.refresh_btn.setEnabled(False)
 
-        self._fetch_thread = QThread(self)
-        self._fetch_worker = _LiveListFetchWorker()
-        self._fetch_worker.moveToThread(self._fetch_thread)
-        self._fetch_thread.started.connect(self._fetch_worker.run)
-        self._fetch_worker.finished.connect(self._on_fetch_done)
-        self._fetch_worker.finished.connect(self._fetch_thread.quit)
-        self._fetch_worker.finished.connect(self._fetch_worker.deleteLater)
-        self._fetch_thread.finished.connect(self._fetch_thread.deleteLater)
-        self._fetch_thread.start()
+        # 워커에게 작업 요청
+        self.sig_fetch_request.emit()
 
     def _on_fetch_done(self, payload):
         """live_list fetch 완료 콜백 (UI 스레드)."""
@@ -177,9 +186,30 @@ class LiveBroadcastDialog(QDialog):
             self.selected_broadcast = data
             self.accept()
 
-    def closeEvent(self, event):
-        """다이얼로그 닫힐 때 진행 중인 스레드 정리"""
-        if hasattr(self, '_fetch_thread') and self._fetch_thread and self._fetch_thread.isRunning():
+    def done(self, r):
+        """다이얼로그 종료 시 호출 (accept, reject 모두 포함)"""
+        # 스레드 안전하게 종료
+        if hasattr(self, '_fetch_thread') and self._fetch_thread.isRunning():
             self._fetch_thread.quit()
-            self._fetch_thread.wait(1000)  # 최대 1초 대기
+            self._fetch_thread.wait(1000)
+            
+        # 워커 제거
+        if hasattr(self, '_fetch_worker'):
+            self._fetch_worker.deleteLater()
+            del self._fetch_worker
+            
+        # 스레드 제거 (deleteLater는 이벤트 루프 의존적이므로 주의 필요, 여기선 quit/wait로 충분)
+        if hasattr(self, '_fetch_thread'):
+            # self._fetch_thread.deleteLater() # 크래시 위험으로 제거 -> 부모(self) 소멸 시 자동 정리됨
+            pass
+
+        super().done(r)
+
+    def closeEvent(self, event):
+        """창 닫기 이벤트"""
+        # done()이 호출되지 않는 경우를 대비 (보통 close -> reject -> done 순서임)
+        # 하지만 명시적으로 여기서도 체크
+        if hasattr(self, '_fetch_thread') and self._fetch_thread.isRunning():
+            self._fetch_thread.quit()
+            self._fetch_thread.wait(1000)
         super().closeEvent(event)

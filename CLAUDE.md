@@ -5,9 +5,9 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.9
+- **버전**: v16.10
 - **핵심 가치**: 
-  - 실시간 자막 캡처 (2초 확정 딜레이)
+  - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
   - 모던 UI/UX (다크/라이트 테마)
   - 다양한 출력 형식 지원
@@ -65,17 +65,19 @@
 ### 4.1 스레드 안전성
 1. **Queue 통신**: UI 스레드와 Worker 스레드 간 통신은 반드시 `queue.Queue`를 통해서만 수행
 2. **stop_event**: 스레드 종료는 `threading.Event()` 사용 (빠른 응답성 보장)
-3. **타이머 기반 업데이트**: UI 업데이트는 `QTimer`를 통해 주기적으로 Queue 폴링
+3. **타이머 기반 업데이트**: 통계 및 상태 업데이트는 `QTimer` 사용 (자막 처리는 실시간)
 4. **subtitle_lock**: 자막 리스트 접근 시 `threading.Lock()` 사용 (모든 저장/편집/삭제/통계 메서드)
 5. **스마트 스크롤**: 사용자가 스크롤하면 자동 스크롤 일시 중지 및 위치 유지
 
 ### 4.2 자막 처리 흐름
 ```
-Raw Text → preview 메시지 → 2초 대기 → finalize → SubtitleEntry 저장
+Raw Text → preview 메시지 → _process_raw_text(Diff/Append)
                               ↓
-                     변경 감지 시 타이머 리셋
+                       SubtitleEntry 즉시 반영
 ```
-- 분 경계에서는 즉시 확정, 같은 분은 길이/간격 제한으로 병합
+- 길이/간격 제한에 따라 기존 엔트리에 병합 또는 분리
+- 중지 시 `preview` 큐를 먼저 소진하고 마지막 버퍼를 확정해 누락 방지
+- 동일 자막이 유지되면 마지막 엔트리의 `end_time`을 주기적으로 갱신 (SRT/VTT 정확도)
 
 ### 4.3 예외 처리
 - 파일 I/O는 모두 `try-except`로 보호
@@ -134,8 +136,12 @@ assemblyccv3/
 | `_extraction_worker()` | 백그라운드 스레드 메인 루프 |
 | `_activate_subtitle()` | AI 자막 레이어 활성화 |
 | `_process_message_queue()` | Queue 메시지 처리 (100ms 주기) |
-| `_check_finalize()` | 2초 경과 후 자막 확정 |
+| `_process_raw_text()` | 스트리밍 자막 Diff/Append 처리 |
+| `_append_stream_text()` | 현재 엔트리에 즉시 추가 |
+| `_finalize_subtitle()` | 중지 시 마지막 버퍼 확정 |
+| `_drain_pending_previews()` | 종료 직전 preview 큐 소진 |
 | `_render_subtitles()` | 자막 화면 렌더링 + 키워드 하이라이트 |
+| `_save_in_background()` | 파일 저장 백그라운드 처리 (TXT/SRT/VTT/DOCX/HWP) |
 | `_update_connection_status()` | **연결 상태 UI 업데이트 (#30)** |
 | `_generate_smart_filename()` | **자동 파일명 생성 (#28)** |
 | `_show_merge_dialog()` | **자막 병합 다이얼로그 (#20)** |
@@ -233,33 +239,26 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 5. ~~설정 UI~~: 메뉴에서 대부분 설정 가능
 6. **PyInstaller 패키징**: 독립 실행 파일 생성
 
-## 11. 자막 수집 알고리즘 (핵심)
+## 11. 자막 수집 알고리즘 (핵심 - 스트리밍 방식)
 
 현재 잘 작동하는 자막 수집 알고리즘의 핵심 로직:
 
 ```python
-# 1. Worker 스레드에서 0.2초 간격으로 자막 요소 폴링
-text = driver.find_element(By.CSS_SELECTOR, selector).text.strip()
+# 1. Diff & Append 방식 (대기 시간 없음)
+def _process_raw_text(self, raw):
+    # 빈 텍스트 무시
+    if not raw: return
 
-# 2. 변경 감지 시 preview 메시지 전송
-if text and text != self.last_subtitle:
-    self.message_queue.put(("preview", text))
+    # 이어붙이기: 이전 텍스트가 포함되어 있으면 뒷부분만 추출
+    if raw.startswith(self.last_subtitle):
+        delta = raw[len(self.last_subtitle):] 
+        self._append_stream_text(delta) # 즉시 반영
 
-# 3. UI 스레드에서 2초 확정 타이머 관리
-elapsed = time.time() - self.last_update_time
-if elapsed >= 2.0:  # 2초 동안 변경 없음
-    self._finalize_subtitle(self.last_subtitle)
+    # 문맥 변경: 완전히 새로운 문장이면 새 엔트리 시작
+    else:
+        self._append_stream_text(new_text, force_new_entry=True)
 
-# 4. 겹침 감지 및 이어붙이기
-if text.startswith(last_text):
-    new_part = text[len(last_text):].strip()
-    self.subtitles[-1].text = text  # 기존 자막 업데이트
-
-# 5. 연결 상태 모니터링 (#30)
-self.message_queue.put(("connection_status", {"status": "connected", "latency": latency}))
-
-# 6. 자동 재연결 (#31)
-delay = min(Config.RECONNECT_BASE_DELAY * (2 ** (attempts - 1)), Config.RECONNECT_MAX_DELAY)
+    self.last_subtitle = raw
 ```
 
 ---

@@ -24,6 +24,7 @@ class Config:
     
     # 타이밍 상수 (초)
     SUBTITLE_FINALIZE_DELAY = 2.0      # 자막 확정까지 대기 시간
+    SUBTITLE_KEEPALIVE_INTERVAL = 1.0  # 동일 자막 유지 시 end_time 갱신 간격 (초)
     FINALIZE_CHECK_INTERVAL = 500      # 자막 확정 체크 간격 (ms)
     QUEUE_PROCESS_INTERVAL = 100       # 메시지 큐 처리 간격 (ms)
     STATS_UPDATE_INTERVAL = 1000       # 통계 업데이트 간격 (ms)
@@ -157,16 +158,26 @@ class Config:
     
     # 연결 상태 모니터링 (#30)
     CONNECTION_CHECK_INTERVAL = 5000   # 연결 상태 체크 간격 (ms)
-    
+
+    # 생중계 갱신 감지 (초)
+    LIVE_BROADCAST_REFRESH_INTERVAL = 30
+
     # 자동 재연결 (#31)
     AUTO_RECONNECT_ENABLED = True
     MAX_RECONNECT_ATTEMPTS = 5
     RECONNECT_BASE_DELAY = 2           # 초기 대기 시간 (초)
     RECONNECT_MAX_DELAY = 60           # 최대 대기 시간 (초)
 
+    # 중지 시 브라우저 창 유지
+    KEEP_BROWSER_ON_STOP = True
+
     # 자막 병합 기준 (너무 길거나 간격이 크면 분리)
     ENTRY_MERGE_MAX_CHARS = 400
     ENTRY_MERGE_MAX_GAP = 90  # 초
+
+    # 스트리밍 자막 최대 길이 (초과 시 강제 분할하여 새 타임스탬프 생성)
+    STREAM_SUBTITLE_MAX_LENGTH = 300
+
     
     # 자동 파일명 생성 (#28)
     DEFAULT_FILENAME_TEMPLATE = "{date}_{committee}_{time}"
