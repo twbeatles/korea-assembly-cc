@@ -58,8 +58,10 @@ def slice_from_compact_index(text: str, compact_index: int) -> str:
     return ""
 
 def find_compact_suffix_prefix_overlap(last_compact: str, text_compact: str,
-                                       min_overlap: int = 10, max_overlap: int = 500) -> int:
+                                       min_overlap: int = 10, max_overlap: int = None) -> int:
     """last_compact의 suffix와 text_compact의 prefix가 겹치는 최대 길이(공백 무시)를 반환"""
+    if max_overlap is None:
+        max_overlap = Config.MAX_WORD_DIFF_OVERLAP  # 성능 최적화 (#1)
     if not last_compact or not text_compact:
         return 0
     max_possible = min(len(last_compact), len(text_compact), max_overlap)
@@ -176,7 +178,8 @@ def get_word_diff(last_text: str, new_text: str) -> str:
     
     1) 단순 startswith 비교
     2) 단어 단위 overlap 비교 (띄어쓰기 변화 대응)
-    3) 완전히 새로운 문장이면 전체 반환
+    3) 슬라이딩 윈도우 감지 (앞부분 탈락 케이스)
+    4) 완전히 새로운 문장이면 전체 반환
     """
     if not last_text:
         return new_text
@@ -206,15 +209,23 @@ def get_word_diff(last_text: str, new_text: str) -> str:
         # 겹치는 단어 이후의 단어들만 추출
         added_words = new_words[overlap_count:]
         if added_words:
-            # 원문 텍스트에서 해당 단어들이 위치한 부분을 찾아 반환하는 것이 가장 정확하지만,
-            # 단순하게 join해도 충분한 경우가 많음 (한국어 조사/어미 처리 이슈 가능성 있긴 함)
-            # 여기서는 새로 추가된 단어들을 공백으로 연결하여 반환
             return " ".join(added_words)
         else:
             return ""
 
+    # 3.5 [Fix] 슬라이딩 윈도우 감지 - 앞부분이 탈락하고 뒷부분이 유지되는 케이스
+    # 예: last="A B C D", new="C D E F" -> delta="E F"
+    last_compact = compact_subtitle_text(last_text)
+    new_compact = compact_subtitle_text(new_text)
+    
+    # last의 tail이 new의 앞부분에 있으면 슬라이딩 윈도우
+    overlap_len = find_compact_suffix_prefix_overlap(last_compact, new_compact, min_overlap=10)
+    if overlap_len > 0:
+        # 겹치는 부분 이후만 반환
+        delta = slice_from_compact_index(new_text, overlap_len)
+        return delta.strip() if delta else ""
+
     # 4. 겹침 없음 -> 새 문장일 가능성 높음
-    # 하지만 new_text가 last_text의 부분집합도 아닌데 겹침도 없다면 아주 새로운 문장
     return new_text
 
 def reflow_subtitles(subtitles: List[SubtitleEntry]) -> List[SubtitleEntry]:

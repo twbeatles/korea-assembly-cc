@@ -1585,7 +1585,7 @@ class MainWindow(QMainWindow):
                 try:
                     Path(Config.REALTIME_DIR).mkdir(exist_ok=True)
                     filename = f"{Config.REALTIME_DIR}/자막_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-                    self.realtime_file = open(filename, 'w', encoding='utf-8')
+                    self.realtime_file = open(filename, 'w', encoding='utf-8-sig')  # BOM 포함 (#12)
                     self._set_status(f"실시간 저장: {filename}", "success")
                 except Exception as e:
                     logger.error(f"실시간 저장 파일 생성 오류: {e}")
@@ -1677,6 +1677,15 @@ class MainWindow(QMainWindow):
                     driver.quit()
                 except Exception as e:
                     logger.debug(f"WebDriver 종료 중 오류 (무시됨): {e}")
+            
+            # 분리된(detached) WebDriver 프로세스 정리 (#3)
+            if self._detached_drivers:
+                for drv in list(self._detached_drivers):
+                    try:
+                        drv.quit()
+                    except Exception as e:
+                        logger.debug(f"분리된 WebDriver 종료 오류: {e}")
+                self._detached_drivers.clear()
 
             self._clear_message_queue()
             self._reset_ui()
@@ -2236,34 +2245,95 @@ class MainWindow(QMainWindow):
             self.message_queue.put(("status", "자막 모니터링 중"))
             
             last_check = time.time()
+            last_connection_check = time.time()
+            # [Fix] 지역 변수로 변경 - 스레드 안전성 확보 (Race condition 방지)
+            worker_last_raw_text = ""
+            reconnect_attempt = 0
+            
             # stop_event 사용으로 더 빠른 종료 응답
             while not self.stop_event.is_set():
                 try:
                     now = time.time()
+                    
+                    # 연결 상태 모니터링 (#5) - 5초마다 체크
+                    if now - last_connection_check >= 5.0:
+                        ping_time = self._ping_driver(driver)
+                        if ping_time is not None:
+                            self.message_queue.put(("connection_status", {"status": "connected", "latency": ping_time}))
+                            reconnect_attempt = 0  # 연결 성공 시 재연결 횟수 초기화
+                        else:
+                            self.message_queue.put(("connection_status", {"status": "disconnected"}))
+                        last_connection_check = now
+                    
                     if now - last_check >= 0.2:
                         try:
                             text = driver.find_element(By.CSS_SELECTOR, selector).text.strip()
+                            reconnect_attempt = 0  # 정상 동작 시 재연결 횟수 초기화
                         except (NoSuchElementException, StaleElementReferenceException):
                             text = ""
                         
                         # utils 사용으로 변경 (Legacy의 _clean_text 대체)
                         text = utils.clean_text_display(text)
                         
-                        # [Fix] Worker 내부 상태(_last_raw_text)를 사용하여 중복 전송 방지
-                        # UI의 last_subtitle은 확정 시 초기화되므로, 이를 사용하면 무한 재전송 발생함
-                        if text and text != self._last_raw_text:
-                            self._last_raw_text = text
+                        # [Fix] Worker 내부 지역 변수로 중복 전송 방지 (스레드 안전)
+                        if text and text != worker_last_raw_text:
+                            worker_last_raw_text = text
                             self.message_queue.put(("preview", text))
                         
                         last_check = now
                     
                     # stop_event 대기 (0.05초, 즉시 응답 가능)
                     self.stop_event.wait(timeout=0.05)
+                    
                 except Exception as e:
-                    if not self.stop_event.is_set():
-                        # logger.warning(f"모니터링 중 오류: {e}") # 로그 과다 방지
-                        pass
-                    time.sleep(0.5)
+                    if self.stop_event.is_set():
+                        break
+                    
+                    # 자동 재연결 로직 (#4)
+                    if Config.AUTO_RECONNECT_ENABLED and self._is_recoverable_webdriver_error(e):
+                        reconnect_attempt += 1
+                        if reconnect_attempt <= Config.MAX_RECONNECT_ATTEMPTS:
+                            delay = self._get_reconnect_delay(reconnect_attempt)
+                            self.message_queue.put(("reconnecting", {
+                                "attempt": reconnect_attempt,
+                                "max_attempts": Config.MAX_RECONNECT_ATTEMPTS,
+                                "delay": delay
+                            }))
+                            logger.warning(f"WebDriver 연결 오류, {delay}초 후 재연결 시도 ({reconnect_attempt}/{Config.MAX_RECONNECT_ATTEMPTS})")
+                            
+                            # 기존 드라이버 정리
+                            if driver:
+                                try:
+                                    self._detached_drivers.append(driver)
+                                    driver.quit()
+                                except:
+                                    pass
+                            
+                            # 대기 후 재연결
+                            time.sleep(delay)
+                            if self.stop_event.is_set():
+                                break
+                            
+                            try:
+                                driver = webdriver.Chrome(options=options)
+                                self.driver = driver
+                                driver.get(url)
+                                time.sleep(2)
+                                self._activate_subtitle(driver)
+                                self.message_queue.put(("status", f"✅ 재연결 성공 (시도 {reconnect_attempt})"))
+                                self.message_queue.put(("connection_status", {"status": "connected"}))
+                                last_check = time.time()
+                                last_connection_check = time.time()
+                                continue
+                            except Exception as reconnect_error:
+                                logger.error(f"재연결 실패: {reconnect_error}")
+                        else:
+                            self.message_queue.put(("error", f"최대 재연결 시도 횟수({Config.MAX_RECONNECT_ATTEMPTS}) 초과"))
+                            break
+                    else:
+                        # 복구 불가능한 오류
+                        logger.warning(f"모니터링 중 오류: {e}")
+                        time.sleep(0.5)
         
         except Exception as e:
             if not self.stop_event.is_set():
@@ -2400,6 +2470,8 @@ class MainWindow(QMainWindow):
         if elapsed >= 2.0:  # 2초 동안 변경 없음
             self._finalize_subtitle(self.last_subtitle)
             self.last_subtitle = ""
+            # [Fix] 상태 초기화 - 다음 동일 텍스트 재수신 시 중복 가드 충돌 방지
+            self._last_processed_raw = ""
             self.finalize_timer.stop()
             self._refresh_text()
     
@@ -2661,8 +2733,15 @@ class MainWindow(QMainWindow):
                     entry.start_time = datetime.now()
                     entry.end_time = datetime.now()
                     self.subtitles.append(entry)
+                    # [Fix] 통계 캐시 즉시 갱신
+                    self._cached_total_chars += entry.char_count
+                    self._cached_total_words += entry.word_count
                 else:
                     last_entry = self.subtitles[-1]
+                    # 이전 캐시 값 저장 (갱신용)
+                    old_chars = last_entry.char_count
+                    old_words = last_entry.word_count
+                    
                     # [Length Check] 길이 제한 초과 시 분리
                     if len(last_entry.text) + len(delta) > Config.STREAM_SUBTITLE_MAX_LENGTH:
                         # 새 엔트리 생성 (타임스탬프 분리)
@@ -2670,18 +2749,28 @@ class MainWindow(QMainWindow):
                         entry.start_time = datetime.now()
                         entry.end_time = datetime.now()
                         self.subtitles.append(entry)
+                        # [Fix] 통계 캐시 즉시 갱신
+                        self._cached_total_chars += entry.char_count
+                        self._cached_total_words += entry.word_count
                     else:
-                        # 이어붙이기
-                        last_entry.text += " " + delta
+                        # 이어붙이기 - update_text()로 캐시 갱신 포함
+                        last_entry.update_text(last_entry.text + " " + delta)
                         last_entry.end_time = datetime.now()
+                        # [Fix] 통계 캐시 증분 갱신
+                        self._cached_total_chars += last_entry.char_count - old_chars
+                        self._cached_total_words += last_entry.word_count - old_words
             
             # 3. 상태 업데이트
             self._last_processed_raw = raw
             self.last_subtitle = raw # UI 호환성
             self.last_update_time = time.time()
             
-            # 4. UI 갱신 (즉시)
-            self._refresh_text(force_full=True)
+            # [Fix] finalize_timer 시작 - 장시간 동일 텍스트 시 end_time 갱신 보장
+            if not self.finalize_timer.isActive():
+                self.finalize_timer.start(Config.FINALIZE_CHECK_INTERVAL)
+            
+            # 4. UI 갱신 (증분 렌더링 활용)
+            self._refresh_text(force_full=False)
             self._update_count_label()
             
             # 5. 실시간 저장
@@ -2689,8 +2778,20 @@ class MainWindow(QMainWindow):
                 try:
                     self.realtime_file.write(f"+ {delta}\n")
                     self.realtime_file.flush()
-                except IOError:
-                    pass
+                    self._realtime_error_count = 0  # 성공 시 초기화
+                except IOError as e:
+                    # 연속 실패 카운트 (#3)
+                    if not hasattr(self, '_realtime_error_count'):
+                        self._realtime_error_count = 0
+                    self._realtime_error_count += 1
+                    
+                    # 3회 이상 연속 실패 시 경고 (한 번만)
+                    if self._realtime_error_count == 3:
+                        self._show_toast(
+                            f"⚠️ 실시간 저장 오류: {e}\n파일 저장에 문제가 발생했습니다.",
+                            "warning", 5000
+                        )
+                        logger.error(f"실시간 저장 연속 실패 ({self._realtime_error_count}회): {e}")
         else:
             # 텍스트 변화는 없지만(delta=""), raw가 다를 수 있음 (공백 등)
             # 상태만 업데이트
@@ -2734,6 +2835,13 @@ class MainWindow(QMainWindow):
             subtitles_copy = list(self.subtitles)
 
         total_count = len(subtitles_copy)
+        
+        # 성능 최적화: 대량 자막 시 최근 항목만 렌더링 (#4)
+        render_offset = 0
+        if total_count > Config.MAX_RENDER_ENTRIES:
+            render_offset = total_count - Config.MAX_RENDER_ENTRIES
+            subtitles_copy = subtitles_copy[render_offset:]
+        
         last_text = subtitles_copy[-1].text if subtitles_copy else ""
 
         show_ts = self.timestamp_action.isChecked()
@@ -2866,65 +2974,86 @@ class MainWindow(QMainWindow):
 
     
     def _finalize_subtitle(self, text):
-        """자막 확정 - 단어 단위 증분 병합 (Incremental Word Accumulation)"""
+        """자막 확정 - 단어 단위 증분 병합 (Incremental Word Accumulation)
+        
+        [Thread Safety] subtitle_lock으로 self.subtitles 접근 보호
+        """
         if not text:
             return
         
-        # 이전에 확정된 자막이 있으면, 겹치는 부분 제거
-        if self.subtitles:
-            last_text = self.subtitles[-1].text
-            
-            # [Smart Merge] 단어 단위 겹침 분석하여 새로운 단어만 추출
-            new_part = utils.get_word_diff(last_text, text)
-            
-            if new_part:
-                # [Length Check] 문장이 너무 길어지면 강제로 끊고 시 타임스탬프 생성
-                current_len = len(last_text)
-                new_len = len(new_part)
+        # [Fix] 중복 처리 방지: _process_raw_text에서 이미 처리된 텍스트면 건너뜀
+        # _last_processed_raw가 동일하면 이미 _process_raw_text에서 자막이 추가됨
+        if text == self._last_processed_raw:
+            return
+        
+        # 스레드 안전하게 자막 접근
+        with self.subtitle_lock:
+            # 이전에 확정된 자막이 있으면, 겹치는 부분 제거
+            if self.subtitles:
+                last_text = self.subtitles[-1].text
                 
-                # 기존 길이에 새 내용을 더했을 때 최대 길이를 초과하면 분리
-                if current_len + new_len > Config.STREAM_SUBTITLE_MAX_LENGTH:
-                    entry = SubtitleEntry(new_part)
-                    entry.start_time = datetime.now()
-                    entry.end_time = datetime.now()
-                    self.subtitles.append(entry)
+                # [Smart Merge] 단어 단위 겹침 분석하여 새로운 단어만 추출
+                new_part = utils.get_word_diff(last_text, text)
+                
+                if new_part:
+                    # [Length Check] 문장이 너무 길어지면 강제로 끊고 시 타임스탬프 생성
+                    current_len = len(last_text)
+                    new_len = len(new_part)
                     
-                    if self.realtime_file:
-                        try:
-                            # 분리된 새 문장으로 저장
-                            timestamp = entry.timestamp.strftime('%H:%M:%S')
-                            self.realtime_file.write(f"[{timestamp}] {new_part}\n")
-                            self.realtime_file.flush()
-                        except IOError as e:
-                            logger.warning(f"실시간 저장 쓰기 오류: {e}")
+                    # 기존 길이에 새 내용을 더했을 때 최대 길이를 초과하면 분리
+                    if current_len + new_len > Config.STREAM_SUBTITLE_MAX_LENGTH:
+                        entry = SubtitleEntry(new_part)
+                        entry.start_time = datetime.now()
+                        entry.end_time = datetime.now()
+                        self.subtitles.append(entry)
+                        # 통계 캐시 갱신
+                        self._cached_total_chars += entry.char_count
+                        self._cached_total_words += entry.word_count
+                        
+                        if self.realtime_file:
+                            try:
+                                # 분리된 새 문장으로 저장
+                                timestamp = entry.timestamp.strftime('%H:%M:%S')
+                                self.realtime_file.write(f"[{timestamp}] {new_part}\n")
+                                self.realtime_file.flush()
+                            except IOError as e:
+                                logger.warning(f"실시간 저장 쓰기 오류: {e}")
+                    else:
+                        # 새로운 내용이 있으면 이어붙이기 - update_text()로 캐시 갱신 포함
+                        old_chars = self.subtitles[-1].char_count
+                        old_words = self.subtitles[-1].word_count
+                        self.subtitles[-1].update_text(self.subtitles[-1].text + " " + new_part)
+                        self.subtitles[-1].end_time = datetime.now()
+                        # 통계 캐시 갱신
+                        self._cached_total_chars += self.subtitles[-1].char_count - old_chars
+                        self._cached_total_words += self.subtitles[-1].word_count - old_words
+                        
+                        # 실시간 저장
+                        if self.realtime_file:
+                            try:
+                                # + 기호로 이어붙여진 내용임을 표시
+                                self.realtime_file.write(f"+ {new_part}\n")
+                                self.realtime_file.flush()
+                            except IOError as e:
+                                logger.warning(f"실시간 저장 쓰기 오류: {e}")
+                    return
                 else:
-                    # 새로운 내용이 있으면 이어붙이기
-                    self.subtitles[-1].text += " " + new_part
+                    # 겹치는 내용만 있고 새로운 내용이 없으면 (부분집합)
+                    # 시간만 갱신하고 종료
                     self.subtitles[-1].end_time = datetime.now()
-                    
-                    # 실시간 저장
-                    if self.realtime_file:
-                        try:
-                            # + 기호로 이어붙여진 내용임을 표시
-                            self.realtime_file.write(f"+ {new_part}\n")
-                            self.realtime_file.flush()
-                        except IOError as e:
-                            logger.warning(f"실시간 저장 쓰기 오류: {e}")
-                return
-            else:
-                # 겹치는 내용만 있고 새로운 내용이 없으면 (부분집합)
-                # 시간만 갱신하고 종료
-                self.subtitles[-1].end_time = datetime.now()
-                return
+                    return
+            
+            # 첫 번째 자막 또는 완전히 새로운 문장
+            entry = SubtitleEntry(text)
+            entry.start_time = datetime.now()
+            entry.end_time = datetime.now()
+            
+            self.subtitles.append(entry)
+            # 통계 캐시 갱신
+            self._cached_total_chars += entry.char_count
+            self._cached_total_words += entry.word_count
         
-        # 첫 번째 자막 또는 완전히 새로운 문장
-        entry = SubtitleEntry(text)
-        entry.start_time = datetime.now()
-        entry.end_time = datetime.now()
-        
-        self.subtitles.append(entry)
-        
-        # 키워드 알림 확인
+        # 키워드 알림 확인 (락 밖에서 - UI 작업)
         self._check_keyword_alert(text)
         
         # 카운트 라벨 업데이트
@@ -2939,7 +3068,7 @@ class MainWindow(QMainWindow):
             except IOError as e:
                 logger.warning(f"실시간 저장 쓰기 오류: {e}")
         
-        self._refresh_text(force_full=True)
+        self._refresh_text(force_full=False)
 
     
     def _insert_highlighted_text(self, cursor, text):
@@ -3424,12 +3553,13 @@ class MainWindow(QMainWindow):
                 with open(filepath, 'w', encoding='utf-8') as f:
                     for i, (start_time, end_time, timestamp, text) in enumerate(subtitles_snapshot, 1):
                         if start_time and end_time:
-                            start = start_time.strftime('%H:%M:%S,000')
-                            end = end_time.strftime('%H:%M:%S,000')
+                            # [Fix] 밀리초 정밀도 개선
+                            start = f"{start_time.strftime('%H:%M:%S')},{start_time.microsecond // 1000:03d}"
+                            end = f"{end_time.strftime('%H:%M:%S')},{end_time.microsecond // 1000:03d}"
                         else:
-                            start = timestamp.strftime('%H:%M:%S,000')
+                            start = f"{timestamp.strftime('%H:%M:%S')},{timestamp.microsecond // 1000:03d}"
                             fallback_end = timestamp + timedelta(seconds=3)
-                            end = fallback_end.strftime('%H:%M:%S,000')
+                            end = f"{fallback_end.strftime('%H:%M:%S')},{fallback_end.microsecond // 1000:03d}"
                         f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
             
             self._save_in_background(do_save, path, "SRT 저장 완료!", "SRT 저장 실패")
@@ -3454,12 +3584,13 @@ class MainWindow(QMainWindow):
                     f.write("WEBVTT\n\n")
                     for i, (start_time, end_time, timestamp, text) in enumerate(subtitles_snapshot, 1):
                         if start_time and end_time:
-                            start = start_time.strftime('%H:%M:%S.000')
-                            end = end_time.strftime('%H:%M:%S.000')
+                            # [Fix] 밀리초 정밀도 개선
+                            start = f"{start_time.strftime('%H:%M:%S')}.{start_time.microsecond // 1000:03d}"
+                            end = f"{end_time.strftime('%H:%M:%S')}.{end_time.microsecond // 1000:03d}"
                         else:
-                            start = timestamp.strftime('%H:%M:%S.000')
+                            start = f"{timestamp.strftime('%H:%M:%S')}.{timestamp.microsecond // 1000:03d}"
                             fallback_end = timestamp + timedelta(seconds=3)
-                            end = fallback_end.strftime('%H:%M:%S.000')
+                            end = f"{fallback_end.strftime('%H:%M:%S')}.{fallback_end.microsecond // 1000:03d}"
                         f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
             
             self._save_in_background(do_save, path, "VTT 저장 완료!", "VTT 저장 실패")

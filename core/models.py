@@ -31,6 +31,17 @@ class SubtitleEntry:
         self._char_count = len(new_text)
         self._word_count = len(new_text.split())
     
+    def append(self, additional_text: str, separator: str = " ") -> None:
+        """텍스트 이어붙이기 - 캐시 자동 갱신 (#8)
+        
+        Args:
+            additional_text: 추가할 텍스트
+            separator: 구분자 (기본: 공백)
+        """
+        if additional_text:
+            self.update_text(self.text + separator + additional_text)
+            self.end_time = datetime.now()
+    
     def to_dict(self) -> Dict[str, Optional[str]]:
         """딕셔너리로 변환 (세션 저장용)"""
         return {
