@@ -171,15 +171,47 @@ def find_list_overlap(existing: list[str], new_items: list[str]) -> int:
             return i
     return 0
 
+def _find_match_with_window(last_compact: str, new_compact: str, window_size: int = 20) -> int:
+    """
+    last_compact의 끝에서부터 윈도우 단위로 끊어 new_compact에서 검색
+    
+    Returns:
+        int: new_compact 내에서 매칭된 부분의 끝 인덱스 (매칭 실패 시 -1)
+    """
+    if not last_compact or not new_compact:
+        return -1
+        
+    n = len(last_compact)
+    # 뒤에서부터 검색 (stride 3 - 촘촘하게 검색하여 정확도 향상)
+    # 너무 많이 검색하면 성능 저하되므로 최대 200자까지만 뒤로 탐색
+    limit = max(0, n - 200)
+    
+    for i in range(n, limit, -3):
+        start = max(0, i - window_size)
+        window = last_compact[start:i]
+        
+        if len(window) < 10: # 윈도우가 너무 작으면 오탐 가능성 높음
+            break
+            
+        pos = new_compact.rfind(window)
+        if pos != -1:
+            # 매칭 성공! 해당 윈도우의 끝 위치 반환
+            return pos + len(window)
+            
+    return -1
+
 def get_word_diff(last_text: str, new_text: str) -> str:
     """
     이전 텍스트(last_text)와 새 텍스트(new_text)를 '단어 단위'로 비교하여
     새롭게 추가된 부분만 반환한다.
     
+    웹페이지에서 자막이 누적/반복되는 경우를 처리:
     1) 단순 startswith 비교
-    2) 단어 단위 overlap 비교 (띄어쓰기 변화 대응)
-    3) 슬라이딩 윈도우 감지 (앞부분 탈락 케이스)
-    4) 완전히 새로운 문장이면 전체 반환
+    2) last_text가 new_text 내에 포함된 경우 rfind로 마지막 위치 감지
+    3) 단어 단위 overlap 비교 (띄어쓰기 변화 대응)
+    4) compact 기반 rfind 매칭 (공백 무시)
+    5) 슬라이딩 윈도우 감지 (앞부분 탈락 케이스)
+    6) 완전히 새로운 문장이면 전체 반환
     """
     if not last_text:
         return new_text
@@ -197,7 +229,19 @@ def get_word_diff(last_text: str, new_text: str) -> str:
     if new_text.startswith(last_text):
         return new_text[len(last_text):].strip()
 
-    # 3. 단어 단위 분석
+    # 3. [NEW] last_text가 new_text 내에 포함된 경우 - rfind로 마지막 위치 찾기
+    # 웹에서 누적된 텍스트에서 last_text 이후의 새 내용만 추출
+    # 예: last="A B C", new="X A B C D E" -> delta="D E"
+    if last_text in new_text:
+        last_pos = new_text.rfind(last_text)
+        if last_pos >= 0:
+            delta = new_text[last_pos + len(last_text):].strip()
+            if delta:
+                return delta
+            # last_text가 new_text의 끝부분이면 새 내용 없음
+            return ""
+
+    # 4. 단어 단위 분석
     # 공백 기준으로 단어 분리
     last_words = last_text.split()
     new_words = new_text.split()
@@ -213,19 +257,62 @@ def get_word_diff(last_text: str, new_text: str) -> str:
         else:
             return ""
 
-    # 3.5 [Fix] 슬라이딩 윈도우 감지 - 앞부분이 탈락하고 뒷부분이 유지되는 케이스
-    # 예: last="A B C D", new="C D E F" -> delta="E F"
+    # 5. [NEW] compact 기반 rfind 매칭 - 공백 무시하고 포함 관계 감지
+    # 예: last="A B C", new="X A  B  C D E" (공백 다름) -> delta="D E"
     last_compact = compact_subtitle_text(last_text)
     new_compact = compact_subtitle_text(new_text)
     
-    # last의 tail이 new의 앞부분에 있으면 슬라이딩 윈도우
+    if last_compact and new_compact and last_compact in new_compact:
+        # compact 기준으로 마지막 위치 찾기
+        compact_pos = new_compact.rfind(last_compact)
+        if compact_pos >= 0:
+            # compact 인덱스 이후의 원문 텍스트 추출
+            delta = slice_from_compact_index(new_text, compact_pos + len(last_compact))
+            if delta:
+                return delta.strip()
+            return ""
+    
+    # 6. [NEW] suffix 기반 매칭 - AI 자막 인식으로 텍스트가 약간씩 달라지는 경우
+    # last_compact의 끝부분이 new_compact에 포함되면 그 이후만 반환
+    # 예: last="...인수가 정당하다는 입장을 계속 얘기하는데"
+    #     new="...인수가 정당하다는 그런 입장을 계속 얘기하는데 그러다 보니까"
+    # -> 공통 suffix "입장을계속얘기하는데" 이후 "그러다 보니까"만 반환
+    if last_compact and new_compact and len(last_compact) >= 10:
+        # last_compact의 suffix를 new_compact에서 찾기 (최소 10자~최대 100자)
+        for suffix_len in range(min(100, len(last_compact)), 9, -1):
+            suffix = last_compact[-suffix_len:]
+            pos = new_compact.rfind(suffix)
+            if pos >= 0:
+                # suffix 이후의 텍스트 추출
+                delta = slice_from_compact_index(new_text, pos + suffix_len)
+                if delta:
+                    return delta.strip()
+                return ""
+    
+    # 7. 슬라이딩 윈도우 감지 - 앞부분이 탈락하고 뒷부분이 유지되는 케이스
+    # 예: last="A B C D", new="C D E F" -> delta="E F"
     overlap_len = find_compact_suffix_prefix_overlap(last_compact, new_compact, min_overlap=10)
     if overlap_len > 0:
         # 겹치는 부분 이후만 반환
         delta = slice_from_compact_index(new_text, overlap_len)
         return delta.strip() if delta else ""
 
-    # 4. 겹침 없음 -> 새 문장일 가능성 높음
+    # 7. [NEW] 역방향 윈도우 매칭 (Reverse Window Matching)
+    # 중간 내용이 수정되었거나(오타 등), 앞부분이 잘려나간 경우에도 대응
+    # last_text의 끝부분 청크가 new_text 어딘가에 존재한다면, 그 이후가 새로운 내용임
+    match_end_pos = _find_match_with_window(last_compact, new_compact, window_size=20)
+    if match_end_pos != -1:
+         # match_end_pos는 new_compact 기준 인덱스.
+         # 원문 텍스트 슬라이싱 필요.
+         delta = slice_from_compact_index(new_text, match_end_pos)
+         # 만약 delta가 너무 짧으면(예: 점 하나), 무의미한 변경일 수 있음
+         # 하지만 여기서는 일단 반환하고 상위 로직에서 판단하게 함
+         if delta:
+             return delta.strip()
+         return ""
+
+    # 8. 겹침 없음 -> 새 문장일 가능성 높음
+
     return new_text
 
 def reflow_subtitles(subtitles: List[SubtitleEntry]) -> List[SubtitleEntry]:

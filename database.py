@@ -327,21 +327,38 @@ class DatabaseManager:
             try:
                 cursor = conn.cursor()
                 
-                # FTS 검색 사용 (MATCH 연산자)
-                # FTS 테이블에서 검색 후 원본 테이블 조인
+                # FTS 검색 시도 (MATCH 연산자)
+                try:
+                    cursor.execute("""
+                        SELECT s.id as subtitle_id, s.text, s.timestamp, s.sequence,
+                               sess.id as session_id, sess.created_at, sess.committee_name
+                        FROM subtitles s
+                        JOIN sessions sess ON s.session_id = sess.id
+                        WHERE s.id IN (SELECT rowid FROM subtitles_fts WHERE text MATCH ? ORDER BY rank)
+                        ORDER BY sess.created_at DESC, s.sequence
+                        LIMIT ?
+                    """, (query, limit))
+                    results = [dict(row) for row in cursor.fetchall()]
+                    
+                    # FTS 검색 결과가 있으면 반환
+                    if results:
+                        return results
+                        
+                except sqlite3.OperationalError as fts_error:
+                    # FTS 검색 실패 시 LIKE으로 Fallback (#6)
+                    logger.debug(f"FTS 검색 실패, LIKE로 Fallback: {fts_error}")
+                
+                # Fallback: LIKE 검색 (특수문자, 따옴표 등 처리)
+                like_query = f"%{query}%"
                 cursor.execute("""
                     SELECT s.id as subtitle_id, s.text, s.timestamp, s.sequence,
                            sess.id as session_id, sess.created_at, sess.committee_name
                     FROM subtitles s
                     JOIN sessions sess ON s.session_id = sess.id
-                    WHERE s.id IN (SELECT rowid FROM subtitles_fts WHERE text MATCH ? ORDER BY rank)
+                    WHERE s.text LIKE ?
                     ORDER BY sess.created_at DESC, s.sequence
                     LIMIT ?
-                """, (query, limit))
-                
-                # FTS 검색이 잘 안 될 경우를 대비해 OR 조건을 넣거나, FTS가 비어있으면 LIKE로 fallback할 수도 있지만,
-                # 트리거가 잘 동작하면 FTS가 항상 최신이어야 함.
-                # 참고: 띄어쓰기 처리를 위해 쿼리를 변형할 필요 없음 (FTS5 기본 동작)
+                """, (like_query, limit))
                 
                 return [dict(row) for row in cursor.fetchall()]
                 

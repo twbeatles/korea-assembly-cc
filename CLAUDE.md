@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.10
+- **버전**: v16.11
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -148,7 +148,16 @@ assemblyccv3/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. v16.6에서 추가된 기능
+## 6. v16.10 신규 기능 (최신)
+
+### 6.1 안정화 및 최적화
+- **자동 재연결 메커니즘 개선**: WebDriver 연결 끊김 시 지수 백오프 및 UI 피드백 (#4, #5)
+- **실시간 저장 오류 감지**: 3회 연속 실패 시 토스트 경고, 데이터 손실 방지 (#3)
+- **종료 처리 완벽화**: `closeEvent` 시 자원(DB, WebDriver) 완전 정리 (#2)
+- **성능 최적화**: 렌더링 500개 제한 및 텍스트 비교 알고리즘 개선으로 CPU/메모리 효율화
+- **인코딩 호환성**: UTF-8 BOM 저장 지원 (#12)
+
+## 6-1. v16.6에서 추가된 기능 (이전)
 
 ### 6.1 연결 상태 모니터링 (#30)
 - 상태바에 연결 상태 표시: 🟢 연결됨, 🔴 끊김, 🟡 재연결 중
@@ -239,27 +248,47 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 5. ~~설정 UI~~: 메뉴에서 대부분 설정 가능
 6. **PyInstaller 패키징**: 독립 실행 파일 생성
 
-## 11. 자막 수집 알고리즘 (핵심 - 스트리밍 방식)
+## 11. 자막 수집 알고리즘 (🚨 절대 수정 금지 🚨)
 
-현재 잘 작동하는 자막 수집 알고리즘의 핵심 로직:
+> [!CAUTION]
+> **이 알고리즘을 수정하지 마세요!**
+> 
+> 글로벌 히스토리 Suffix 매칭 알고리즘은 수많은 시행착오 끝에 완성되었습니다.
+> 앵커 기반, 버퍼 비교, 문장 해시 등 다양한 접근법을 시도했지만 모두 실패했습니다.
+> 현재 알고리즘만이 웹사이트의 DOM 루핑에 완벽히 대응합니다.
+> 
+> **문제 해결 시 이 알고리즘을 변경하기보다 다른 부분을 먼저 검토하세요.**
+
+### 핵심 개념: 글로벌 히스토리 + Suffix 매칭
 
 ```python
-# 1. Diff & Append 방식 (대기 시간 없음)
+# 상태 변수
+self._confirmed_compact = ""   # 확정된 모든 텍스트 (공백 제거)
+self._trailing_suffix = ""     # 마지막 50자
+
+# 처리 흐름
 def _process_raw_text(self, raw):
-    # 빈 텍스트 무시
-    if not raw: return
-
-    # 이어붙이기: 이전 텍스트가 포함되어 있으면 뒷부분만 추출
-    if raw.startswith(self.last_subtitle):
-        delta = raw[len(self.last_subtitle):] 
-        self._append_stream_text(delta) # 즉시 반영
-
-    # 문맥 변경: 완전히 새로운 문장이면 새 엔트리 시작
-    else:
-        self._append_stream_text(new_text, force_new_entry=True)
-
-    self.last_subtitle = raw
+    raw_compact = compact(raw)
+    
+    # suffix가 raw에 있으면 그 이후만 추출
+    pos = raw_compact.find(self._trailing_suffix)
+    if pos >= 0:
+        new_part = raw[pos + len(suffix):]
+    
+    # 새 내용을 히스토리에 추가
+    self._confirmed_compact += new_part
+    self._trailing_suffix = self._confirmed_compact[-50:]
+    
+    # 자막에 추가
+    add_to_subtitles(new_part)
 ```
+
+### 과거 시도 및 실패 기록 (참고용)
+| 접근법 | 실패 이유 |
+|--------|-----------|
+| 앵커 기반 | 확정 전까지 앵커가 없어 모든 raw가 delta로 처리됨 |
+| 버퍼 비교 (startswith) | 공백/줄바꿈 차이로 매칭 실패 |
+| 문장 해시 | 문장이 섞여 들어오면 다른 해시가 됨 |
 
 ---
 

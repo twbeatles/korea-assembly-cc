@@ -39,6 +39,7 @@ from ui.dialogs import LiveBroadcastDialog
 from ui.themes import DARK_THEME, LIGHT_THEME
 from ui.widgets import CollapsibleGroupBox, ToastWidget
 from core import utils
+from core.subtitle_processor import SubtitleProcessor
 
 try:
     from database import DatabaseManager
@@ -82,8 +83,17 @@ class MainWindow(QMainWindow):
         self._last_processed_raw = ""
         self._stream_start_time = None
         
+        # [NEW] 글로벌 히스토리 + Suffix 매칭 (#GlobalHistorySuffix)
+        self._confirmed_compact = ""       # 확정된 모든 텍스트 (compact, 공백 제거)
+        self._trailing_suffix = ""         # 히스토리의 마지막 N자 (suffix 매칭용)
+        self._suffix_length = 50           # suffix 길이
+        
         # 자막 데이터 (타임스탬프 포함)
         self.subtitles = []  # List[SubtitleEntry]
+        
+        # [Fix] 자막 중복 방지 프로세서 (#SubtitleRepetitionFix)
+        self.subtitle_processor = SubtitleProcessor()
+        
         # 저장된 키워드 로드
         saved_keywords = self.settings.value("highlight_keywords", "")
         if not saved_keywords:
@@ -124,6 +134,7 @@ class MainWindow(QMainWindow):
         
         # 실시간 저장
         self.realtime_file = None
+        self._realtime_error_count = 0  # 실시간 저장 연속 오류 카운트 (#3)
 
         # 중지 시 브라우저 유지용 (종료 시 정리)
         self._detached_drivers = []
@@ -2094,8 +2105,8 @@ class MainWindow(QMainWindow):
                                 if elems and not btn:
                                     btn = elems[0]
                                     break
-                            except:
-                                pass
+                            except Exception:
+                                continue
                         
                         if btn:
                             # 2. 스크롤하여 요소 보이게 하기
@@ -2304,10 +2315,10 @@ class MainWindow(QMainWindow):
                             # 기존 드라이버 정리
                             if driver:
                                 try:
-                                    self._detached_drivers.append(driver)
                                     driver.quit()
-                                except:
-                                    pass
+                                except Exception as quit_err:
+                                    logger.debug(f"드라이버 종료 실패, detached 목록에 추가: {quit_err}")
+                                    self._detached_drivers.append(driver)
                             
                             # 대기 후 재연결
                             time.sleep(delay)
@@ -2462,18 +2473,76 @@ class MainWindow(QMainWindow):
             self._clear_preview()
 
     def _check_finalize(self):
-        """2초 동안 변경 없으면 현재 자막 확정"""
-        if not self.last_subtitle:
+        """앵커 기반 확정 타이머 체크 (#AnchorAlgorithm)
+        
+        일정 시간(SUBTITLE_FINALIZE_DELAY) 동안 변화가 없으면 버퍼를 확정합니다.
+        """
+        if not self._pending_buffer:
+            self.finalize_timer.stop()
             return
         
         elapsed = time.time() - self.last_update_time
-        if elapsed >= 2.0:  # 2초 동안 변경 없음
-            self._finalize_subtitle(self.last_subtitle)
-            self.last_subtitle = ""
-            # [Fix] 상태 초기화 - 다음 동일 텍스트 재수신 시 중복 가드 충돌 방지
-            self._last_processed_raw = ""
+        if elapsed >= Config.SUBTITLE_FINALIZE_DELAY:
+            self._finalize_buffer()
             self.finalize_timer.stop()
-            self._refresh_text()
+    
+    def _finalize_buffer(self):
+        """버퍼 확정 및 앵커 갱신 (#AnchorAlgorithm)
+        
+        현재 버퍼의 텍스트를 자막으로 저장하고, 앵커를 갱신합니다.
+        """
+        if not self._pending_buffer:
+            return
+        
+        buffer_text = self._pending_buffer.strip()
+        if not buffer_text:
+            self._pending_buffer = ""
+            self._buffer_start_time = None
+            self._clear_preview()
+            return
+        
+        # 자막으로 저장
+        with self.subtitle_lock:
+            entry = SubtitleEntry(buffer_text)
+            entry.start_time = datetime.fromtimestamp(self._buffer_start_time) if self._buffer_start_time else datetime.now()
+            entry.end_time = datetime.now()
+            self.subtitles.append(entry)
+            
+            # 통계 캐시 갱신
+            self._cached_total_chars += entry.char_count
+            self._cached_total_words += entry.word_count
+        
+        # 앵커 갱신: 확정된 텍스트의 마지막 N자를 앵커로 설정
+        buffer_compact = utils.compact_subtitle_text(buffer_text)
+        anchor_len = min(len(buffer_compact), Config.ANCHOR_SUFFIX_LENGTH)
+        self._anchor_text = buffer_compact[-anchor_len:] if anchor_len > 0 else ""
+        
+        # 해시 기반 중복 방지에도 등록 (이중 보호)
+        self.subtitle_processor.add_confirmed(buffer_text)
+        
+        # 키워드 알림 확인
+        self._check_keyword_alert(buffer_text)
+        
+        # 실시간 저장
+        if self.realtime_file:
+            try:
+                timestamp = entry.timestamp.strftime('%H:%M:%S')
+                self.realtime_file.write(f"[{timestamp}] {buffer_text}\n")
+                self.realtime_file.flush()
+                self._realtime_error_count = 0
+            except IOError as e:
+                self._realtime_error_count = getattr(self, '_realtime_error_count', 0) + 1
+                if self._realtime_error_count == 3:
+                    logger.error(f"실시간 저장 연속 실패: {e}")
+        
+        # 버퍼 초기화
+        self._pending_buffer = ""
+        self._buffer_start_time = None
+        self._clear_preview()
+        
+        # UI 갱신
+        self._refresh_text(force_full=False)
+        self._update_count_label()
     
     # ========== 메시지 큐 처리 ==========
     
@@ -2711,91 +2780,225 @@ class MainWindow(QMainWindow):
 
         return None
 
-    
-    def _process_raw_text(self, raw):
+    def _process_with_processor(self, raw: str) -> None:
+        """SubtitleProcessor를 사용하여 자막 처리
+        
+        문장 해시 기반으로 중복을 감지하고, 확정된 문장만 저장
+        """
         if not raw:
             return
-            
-        # [Fix] 중복 방지: 이미 처리한 텍스트와 동일하면 무시
-        if raw == self._last_processed_raw:
-            return
-
-        # [Fix] Streaming Logic Restore
-        # 1. Diff 계산 (이전 처리된 전체 텍스트 기준)
-        delta = utils.get_word_diff(self._last_processed_raw, raw)
         
-        if delta:
-            # 2. 자막 업데이트 (Append or Split)
-            with self.subtitle_lock:
-                if not self.subtitles:
-                    # 첫 자막
-                    entry = SubtitleEntry(delta)
+        # SubtitleProcessor로 처리
+        confirmed = self.subtitle_processor.process(raw)
+        
+        if confirmed:
+            # 확정된 문장을 SubtitleEntry로 저장
+            self._add_confirmed_sentence(confirmed)
+        
+        # 상태 업데이트 (UI 호환성)
+        self.last_subtitle = raw
+        self.last_update_time = time.time()
+        
+        # finalize_timer 시작 - 타임아웃 후 현재 문장 확정
+        if not self.finalize_timer.isActive():
+            self.finalize_timer.start(Config.FINALIZE_CHECK_INTERVAL)
+    
+    def _add_confirmed_sentence(self, sentence: str) -> None:
+        """확정된 문장을 SubtitleEntry로 변환하여 저장"""
+        if not sentence or len(sentence) < 5:
+            return
+        
+        with self.subtitle_lock:
+            entry = SubtitleEntry(sentence)
+            entry.start_time = datetime.now()
+            entry.end_time = datetime.now()
+            self.subtitles.append(entry)
+            
+            # 통계 캐시 갱신
+            self._cached_total_chars += entry.char_count
+            self._cached_total_words += entry.word_count
+        
+        # 키워드 알림 확인
+        self._check_keyword_alert(sentence)
+        
+        # 카운트 라벨 업데이트
+        self._update_count_label()
+        
+        # UI 갱신
+        self._refresh_text(force_full=False)
+        
+        # 실시간 저장
+        if self.realtime_file:
+            try:
+                timestamp = entry.timestamp.strftime('%H:%M:%S')
+                self.realtime_file.write(f"[{timestamp}] {sentence}\n")
+                self.realtime_file.flush()
+                self._realtime_error_count = 0
+            except IOError as e:
+                if not hasattr(self, '_realtime_error_count'):
+                    self._realtime_error_count = 0
+                self._realtime_error_count += 1
+                if self._realtime_error_count == 3:
+                    self._show_toast(f"⚠️ 실시간 저장 오류: {e}", "warning", 5000)
+                    logger.error(f"실시간 저장 연속 실패: {e}")
+
+    def _process_raw_text(self, raw):
+        """글로벌 히스토리 + Suffix 매칭 (#GlobalHistorySuffix)
+        
+        이 세션에서 확정된 모든 텍스트를 누적하고,
+        새 raw에서 히스토리의 마지막 부분(suffix) 이후만 추출합니다.
+        
+        DOM 루핑에 완전히 면역입니다.
+        """
+        if not raw:
+            return
+        
+        raw = raw.strip()
+        
+        # 동일한 raw면 무시 (빠른 경로)
+        if raw == self._last_raw_text:
+            return
+        self._last_raw_text = raw
+        
+        # raw를 compact (공백 제거)
+        raw_compact = utils.compact_subtitle_text(raw)
+        
+        if not raw_compact:
+            return
+        
+        # 새로운 부분 추출
+        new_part = self._extract_new_part(raw, raw_compact)
+        
+        if not new_part or len(new_part.strip()) < 3:
+            # 새 내용 없음
+            return
+        
+        new_part = new_part.strip()
+        
+        # 히스토리에 추가
+        new_compact = utils.compact_subtitle_text(new_part)
+        self._confirmed_compact += new_compact
+        
+        # suffix 갱신
+        if len(self._confirmed_compact) >= self._suffix_length:
+            self._trailing_suffix = self._confirmed_compact[-self._suffix_length:]
+        else:
+            self._trailing_suffix = self._confirmed_compact
+        
+        # 자막에 추가
+        self._add_text_to_subtitles(new_part)
+    
+    def _extract_new_part(self, raw: str, raw_compact: str) -> str:
+        """히스토리의 suffix 이후의 새 부분만 추출
+        
+        Args:
+            raw: 원본 텍스트
+            raw_compact: 공백 제거된 텍스트
+            
+        Returns:
+            새로운 부분 (원본 형태로)
+        """
+        # 히스토리가 없으면 전체가 새로운 것
+        if not self._trailing_suffix:
+            return raw
+        
+        # suffix가 raw_compact에 있는지 검색
+        pos = raw_compact.find(self._trailing_suffix)
+        
+        if pos >= 0:
+            # suffix 이후 부분만 반환
+            start_idx = pos + len(self._trailing_suffix)
+            if start_idx >= len(raw_compact):
+                return ""  # suffix 이후에 내용 없음
+            return utils.slice_from_compact_index(raw, start_idx)
+        
+        # suffix가 없으면 - suffix의 일부와 겹치는지 확인
+        # (suffix의 뒷부분 == raw_compact의 앞부분)
+        overlap = self._find_overlap(self._trailing_suffix, raw_compact)
+        if overlap > 0:
+            return utils.slice_from_compact_index(raw, overlap)
+        
+        # 전혀 겹치지 않음 - 문맥 전환으로 판단
+        # 하지만 전체를 새것으로 추가하면 중복 위험
+        # 안전하게: 히스토리의 마지막 일부가 raw의 어딘가에 있는지 확인
+        short_suffix = self._trailing_suffix[-20:] if len(self._trailing_suffix) >= 20 else self._trailing_suffix
+        pos = raw_compact.find(short_suffix)
+        if pos >= 0:
+            start_idx = pos + len(short_suffix)
+            if start_idx < len(raw_compact):
+                return utils.slice_from_compact_index(raw, start_idx)
+        
+        # 정말 새로운 문맥 - 전체 반환
+        return raw
+    
+    def _find_overlap(self, suffix: str, text: str) -> int:
+        """suffix의 뒷부분과 text의 앞부분이 겹치는 길이 반환"""
+        max_overlap = min(len(suffix), len(text))
+        for i in range(max_overlap, 0, -1):
+            if suffix[-i:] == text[:i]:
+                return i
+        return 0
+    
+    def _add_text_to_subtitles(self, text: str) -> None:
+        """확정된 텍스트를 SubtitleEntry로 변환하여 저장"""
+        if not text or len(text) < 3:
+            return
+        
+        with self.subtitle_lock:
+            # 마지막 엔트리에 이어붙일지, 새 엔트리 만들지 결정
+            if self.subtitles:
+                last_entry = self.subtitles[-1]
+                # [FIX] end_time이 None인 경우 방어 처리 (reflow 후 발생 가능)
+                can_append = False
+                if last_entry.end_time is not None:
+                    elapsed = (datetime.now() - last_entry.end_time).total_seconds()
+                    if elapsed < 5.0 and len(last_entry.text) + len(text) < 300:
+                        can_append = True
+                
+                if can_append:
+                    old_chars = last_entry.char_count
+                    old_words = last_entry.word_count
+                    last_entry.update_text(last_entry.text + " " + text)
+                    last_entry.end_time = datetime.now()
+                    self._cached_total_chars += last_entry.char_count - old_chars
+                    self._cached_total_words += last_entry.word_count - old_words
+                else:
+                    # 새 엔트리
+                    entry = SubtitleEntry(text)
                     entry.start_time = datetime.now()
                     entry.end_time = datetime.now()
                     self.subtitles.append(entry)
-                    # [Fix] 통계 캐시 즉시 갱신
                     self._cached_total_chars += entry.char_count
                     self._cached_total_words += entry.word_count
-                else:
-                    last_entry = self.subtitles[-1]
-                    # 이전 캐시 값 저장 (갱신용)
-                    old_chars = last_entry.char_count
-                    old_words = last_entry.word_count
-                    
-                    # [Length Check] 길이 제한 초과 시 분리
-                    if len(last_entry.text) + len(delta) > Config.STREAM_SUBTITLE_MAX_LENGTH:
-                        # 새 엔트리 생성 (타임스탬프 분리)
-                        entry = SubtitleEntry(delta)
-                        entry.start_time = datetime.now()
-                        entry.end_time = datetime.now()
-                        self.subtitles.append(entry)
-                        # [Fix] 통계 캐시 즉시 갱신
-                        self._cached_total_chars += entry.char_count
-                        self._cached_total_words += entry.word_count
-                    else:
-                        # 이어붙이기 - update_text()로 캐시 갱신 포함
-                        last_entry.update_text(last_entry.text + " " + delta)
-                        last_entry.end_time = datetime.now()
-                        # [Fix] 통계 캐시 증분 갱신
-                        self._cached_total_chars += last_entry.char_count - old_chars
-                        self._cached_total_words += last_entry.word_count - old_words
-            
-            # 3. 상태 업데이트
-            self._last_processed_raw = raw
-            self.last_subtitle = raw # UI 호환성
-            self.last_update_time = time.time()
-            
-            # [Fix] finalize_timer 시작 - 장시간 동일 텍스트 시 end_time 갱신 보장
-            if not self.finalize_timer.isActive():
-                self.finalize_timer.start(Config.FINALIZE_CHECK_INTERVAL)
-            
-            # 4. UI 갱신 (증분 렌더링 활용)
-            self._refresh_text(force_full=False)
-            self._update_count_label()
-            
-            # 5. 실시간 저장
-            if self.realtime_file:
-                try:
-                    self.realtime_file.write(f"+ {delta}\n")
-                    self.realtime_file.flush()
-                    self._realtime_error_count = 0  # 성공 시 초기화
-                except IOError as e:
-                    # 연속 실패 카운트 (#3)
-                    if not hasattr(self, '_realtime_error_count'):
-                        self._realtime_error_count = 0
-                    self._realtime_error_count += 1
-                    
-                    # 3회 이상 연속 실패 시 경고 (한 번만)
-                    if self._realtime_error_count == 3:
-                        self._show_toast(
-                            f"⚠️ 실시간 저장 오류: {e}\n파일 저장에 문제가 발생했습니다.",
-                            "warning", 5000
-                        )
-                        logger.error(f"실시간 저장 연속 실패 ({self._realtime_error_count}회): {e}")
-        else:
-            # 텍스트 변화는 없지만(delta=""), raw가 다를 수 있음 (공백 등)
-            # 상태만 업데이트
-            self._last_processed_raw = raw
+            else:
+                # 첫 엔트리
+                entry = SubtitleEntry(text)
+                entry.start_time = datetime.now()
+                entry.end_time = datetime.now()
+                self.subtitles.append(entry)
+                self._cached_total_chars += entry.char_count
+                self._cached_total_words += entry.word_count
+        
+        # 키워드 알림 확인
+        self._check_keyword_alert(text)
+        
+        # 카운트 라벨 업데이트
+        self._update_count_label()
+        
+        # UI 갱신
+        self._refresh_text(force_full=False)
+        
+        # 실시간 저장
+        if self.realtime_file:
+            try:
+                timestamp = datetime.now().strftime('%H:%M:%S')
+                self.realtime_file.write(f"[{timestamp}] {text}\n")
+                self.realtime_file.flush()
+                self._realtime_error_count = 0
+            except IOError as e:
+                self._realtime_error_count = getattr(self, '_realtime_error_count', 0) + 1
+                if self._realtime_error_count == 3:
+                    logger.error(f"실시간 저장 연속 실패: {e}")
 
     
     
@@ -2928,8 +3131,7 @@ class MainWindow(QMainWindow):
         """스크롤바 위치 변경 감지 - 스마트 스크롤용"""
         scrollbar = self.subtitle_text.verticalScrollBar()
         # 스크롤이 맨 아래에서 일정 거리 이내면 자동 스크롤 활성화
-        threshold = 50  # 픽셀 단위 허용치
-        at_bottom = scrollbar.value() >= scrollbar.maximum() - threshold
+        at_bottom = scrollbar.value() >= scrollbar.maximum() - Config.SCROLL_BOTTOM_THRESHOLD
         
         if at_bottom:
             self._user_scrolled_up = False
@@ -2985,6 +3187,9 @@ class MainWindow(QMainWindow):
         # _last_processed_raw가 동일하면 이미 _process_raw_text에서 자막이 추가됨
         if text == self._last_processed_raw:
             return
+            
+        # [Fix] 확정된 자막을 프로세서에 등록 (#SubtitleRepetitionFix)
+        self.subtitle_processor.add_confirmed(text)
         
         # 스레드 안전하게 자막 접근
         with self.subtitle_lock:
@@ -3526,9 +3731,21 @@ class MainWindow(QMainWindow):
             
             # 실제 저장 함수 정의
             def do_save(filepath):
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    for timestamp, text in subtitles_snapshot:
-                        f.write(f"[{timestamp.strftime('%H:%M:%S')}] {text}\n")
+                with open(filepath, 'w', encoding='utf-8-sig') as f:
+                    last_printed_ts = None
+                    for i, (timestamp, text) in enumerate(subtitles_snapshot):
+                        # 메인 윈도우와 동일: 1분 간격으로 타임스탬프 표시
+                        should_print_ts = False
+                        if last_printed_ts is None:
+                            should_print_ts = True
+                        elif (timestamp - last_printed_ts).total_seconds() >= 60:
+                            should_print_ts = True
+                        
+                        if should_print_ts:
+                            f.write(f"[{timestamp.strftime('%H:%M:%S')}] {text}\n")
+                            last_printed_ts = timestamp
+                        else:
+                            f.write(f"{text}\n")
             
             # 백그라운드에서 저장 실행
             self._save_in_background(do_save, path, "TXT 저장 완료!", "TXT 저장 실패")
@@ -3638,13 +3855,22 @@ class MainWindow(QMainWindow):
                 doc.add_paragraph(f"생성 일시: {generated_at}")
                 doc.add_paragraph()
                 
-                # 자막 내용
+                # 자막 내용 - 1분 간격으로 타임스탬프 표시
+                last_printed_ts = None
                 for timestamp, text in subtitles_snapshot:
-                    ts = timestamp.strftime('%H:%M:%S')
+                    should_print_ts = False
+                    if last_printed_ts is None:
+                        should_print_ts = True
+                    elif (timestamp - last_printed_ts).total_seconds() >= 60:
+                        should_print_ts = True
+                    
                     p = doc.add_paragraph()
-                    run = p.add_run(f"[{ts}] ")
-                    run.font.size = Pt(9)
-                    run.font.color.rgb = None  # 기본 색상
+                    if should_print_ts:
+                        ts = timestamp.strftime('%H:%M:%S')
+                        run = p.add_run(f"[{ts}] ")
+                        run.font.size = Pt(9)
+                        run.font.color.rgb = None  # 기본 색상
+                        last_printed_ts = timestamp
                     p.add_run(text)
                 
                 # 통계
@@ -3722,10 +3948,21 @@ class MainWindow(QMainWindow):
                 hwp.HParameterSet.HInsertText.Text = f"생성 일시: {generated_at}\r\n\r\n"
                 hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
                 
-                # 자막 내용
+                # 자막 내용 - 1분 간격으로 타임스탬프 표시
+                last_printed_ts = None
                 for timestamp, text in subtitles_snapshot:
-                    ts = timestamp.strftime('%H:%M:%S')
-                    hwp.HParameterSet.HInsertText.Text = f"[{ts}] {text}\r\n"
+                    should_print_ts = False
+                    if last_printed_ts is None:
+                        should_print_ts = True
+                    elif (timestamp - last_printed_ts).total_seconds() >= 60:
+                        should_print_ts = True
+                    
+                    if should_print_ts:
+                        ts = timestamp.strftime('%H:%M:%S')
+                        hwp.HParameterSet.HInsertText.Text = f"[{ts}] {text}\r\n"
+                        last_printed_ts = timestamp
+                    else:
+                        hwp.HParameterSet.HInsertText.Text = f"{text}\r\n"
                     hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
                 
                 # 통계
@@ -4589,6 +4826,19 @@ class MainWindow(QMainWindow):
             # 변경 적용 (Thread-safe)
             with self.subtitle_lock:
                 self.subtitles = new_subtitles
+                
+                # [FIX] 글로벌 히스토리 리셋 - reflow 후 자막 수집이 계속 작동하도록
+                # 새 자막 리스트의 마지막 텍스트를 기준으로 히스토리 재설정
+                if new_subtitles:
+                    last_text = new_subtitles[-1].text if new_subtitles else ""
+                    self._confirmed_compact = utils.compact_subtitle_text(last_text)
+                    if len(self._confirmed_compact) >= self._suffix_length:
+                        self._trailing_suffix = self._confirmed_compact[-self._suffix_length:]
+                    else:
+                        self._trailing_suffix = self._confirmed_compact
+                else:
+                    self._confirmed_compact = ""
+                    self._trailing_suffix = ""
                 
             # UI 갱신
             self._rebuild_stats_cache()

@@ -23,7 +23,8 @@ class Config:
     APP_NAME = "국회 의사중계 자막 추출기"
     
     # 타이밍 상수 (초)
-    SUBTITLE_FINALIZE_DELAY = 2.0      # 자막 확정까지 대기 시간
+    SUBTITLE_FINALIZE_DELAY = 3.0      # 자막 확정까지 대기 시간 (앵커 기반 알고리즘)
+    ANCHOR_SUFFIX_LENGTH = 80          # 앵커로 저장할 텍스트 길이 (compact 기준)
     SUBTITLE_KEEPALIVE_INTERVAL = 1.0  # 동일 자막 유지 시 end_time 갱신 간격 (초)
     FINALIZE_CHECK_INTERVAL = 500      # 자막 확정 체크 간격 (ms)
     QUEUE_PROCESS_INTERVAL = 100       # 메시지 큐 처리 간격 (ms)
@@ -162,6 +163,9 @@ class Config:
     
     # 연결 상태 모니터링 (#30)
     CONNECTION_CHECK_INTERVAL = 5000   # 연결 상태 체크 간격 (ms)
+    
+    # 스마트 스크롤
+    SCROLL_BOTTOM_THRESHOLD = 50       # 맨 아래 감지 임계값 (픽셀)
 
     # 생중계 갱신 감지 (초)
     LIVE_BROADCAST_REFRESH_INTERVAL = 30
