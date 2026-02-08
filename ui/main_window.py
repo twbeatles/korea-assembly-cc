@@ -138,6 +138,7 @@ class MainWindow(QMainWindow):
 
         # 중지 시 브라우저 유지용 (종료 시 정리)
         self._detached_drivers = []
+        self._detached_drivers_lock = threading.Lock()
         
         # 연결 상태 모니터링 (#30)
         self.connection_status = "disconnected"  # connected, disconnected, reconnecting
@@ -1638,8 +1639,8 @@ class MainWindow(QMainWindow):
             if self.realtime_file:
                 try:
                     self.realtime_file.close()
-                except Exception:
-                    pass
+                except Exception as close_err:
+                    logger.debug(f"실시간 저장 파일 닫기 오류: {close_err}")
                 self.realtime_file = None
             self._reset_ui()
             QMessageBox.critical(self, "오류", f"시작 중 오류 발생: {e}")
@@ -1658,7 +1659,7 @@ class MainWindow(QMainWindow):
             self.finalize_timer.stop()
 
             # 종료 직전 큐 preview 소진 + 마지막 자막 확정
-            self._drain_pending_previews()
+            self._drain_pending_previews(requeue_others=True)
             self._finalize_pending_subtitle()
 
             # 워커 스레드 종료 대기 (최대 3초)
@@ -1668,7 +1669,7 @@ class MainWindow(QMainWindow):
                     logger.warning("워커 스레드가 시간 내에 종료되지 않음")
 
             # 종료 후에도 남아있던 preview 처리
-            self._drain_pending_previews()
+            self._drain_pending_previews(requeue_others=True)
             self._finalize_pending_subtitle()
             self._clear_preview()
             
@@ -1690,13 +1691,14 @@ class MainWindow(QMainWindow):
                     logger.debug(f"WebDriver 종료 중 오류 (무시됨): {e}")
             
             # 분리된(detached) WebDriver 프로세스 정리 (#3)
-            if self._detached_drivers:
-                for drv in list(self._detached_drivers):
-                    try:
-                        drv.quit()
-                    except Exception as e:
-                        logger.debug(f"분리된 WebDriver 종료 오류: {e}")
+            with self._detached_drivers_lock:
+                detached_drivers = list(self._detached_drivers)
                 self._detached_drivers.clear()
+            for drv in detached_drivers:
+                try:
+                    drv.quit()
+                except Exception as e:
+                    logger.debug(f"분리된 WebDriver 종료 오류: {e}")
 
             self._clear_message_queue()
             self._reset_ui()
@@ -2012,8 +2014,8 @@ class MainWindow(QMainWindow):
                         wait = WebDriverWait(driver, 10)
                         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="xcgcd="]')))
                     except Exception:
-                        # 타임아웃 시 기본 대기
-                        time.sleep(3)
+                        # 타임아웃 시 기본 대기 (종료 신호에 즉시 반응)
+                        self.stop_event.wait(timeout=3)
                     
                     # 모든 생중계 링크 수집
                     all_broadcasts_script = """
@@ -2111,7 +2113,8 @@ class MainWindow(QMainWindow):
                         if btn:
                             # 2. 스크롤하여 요소 보이게 하기
                             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-                            time.sleep(1.0) # 스크롤 후 안정화 대기
+                            # 스크롤 후 안정화 대기 (종료 신호에 즉시 반응)
+                            self.stop_event.wait(timeout=1.0)
                             
                             # 3. 클릭 (JavaScript 사용이 더 안정적)
                             driver.execute_script("arguments[0].click();", btn)
@@ -2138,7 +2141,7 @@ class MainWindow(QMainWindow):
                                 # 이미 버튼 클릭 시도로 URL이 바뀌었을 수 있으므로 체크
                                 if original_url not in driver.current_url:
                                     driver.get(original_url)
-                                    time.sleep(2)
+                                    self.stop_event.wait(timeout=2)
                                     logger.info(f"원래 URL로 복귀: {original_url}")
                             except Exception as e:
                                 logger.debug(f"원래 URL 복귀 실패: {e}")
@@ -2231,7 +2234,7 @@ class MainWindow(QMainWindow):
             
             self.message_queue.put(("status", "페이지 로딩 중..."))
             driver.get(url)
-            time.sleep(3)
+            self.stop_event.wait(timeout=3)
             
             self.message_queue.put(("status", "AI 자막 활성화 중..."))
             self._activate_subtitle(driver)
@@ -2318,18 +2321,19 @@ class MainWindow(QMainWindow):
                                     driver.quit()
                                 except Exception as quit_err:
                                     logger.debug(f"드라이버 종료 실패, detached 목록에 추가: {quit_err}")
-                                    self._detached_drivers.append(driver)
+                                    with self._detached_drivers_lock:
+                                        self._detached_drivers.append(driver)
                             
-                            # 대기 후 재연결
-                            time.sleep(delay)
-                            if self.stop_event.is_set():
+                            # 대기 후 재연결 (종료 신호에 즉시 반응)
+                            if self.stop_event.wait(timeout=delay):
                                 break
                             
                             try:
                                 driver = webdriver.Chrome(options=options)
                                 self.driver = driver
                                 driver.get(url)
-                                time.sleep(2)
+                                if self.stop_event.wait(timeout=2):
+                                    break
                                 self._activate_subtitle(driver)
                                 self.message_queue.put(("status", f"✅ 재연결 성공 (시도 {reconnect_attempt})"))
                                 self.message_queue.put(("connection_status", {"status": "connected"}))
@@ -2344,7 +2348,7 @@ class MainWindow(QMainWindow):
                     else:
                         # 복구 불가능한 오류
                         logger.warning(f"모니터링 중 오류: {e}")
-                        time.sleep(0.5)
+                        self.stop_event.wait(timeout=0.5)
         
         except Exception as e:
             if not self.stop_event.is_set():
@@ -2355,7 +2359,7 @@ class MainWindow(QMainWindow):
                 try:
                     driver.quit()
                 except Exception as e:
-                    pass
+                    logger.debug(f"WebDriver 종료 오류: {e}")
                 self.driver = None
             self.message_queue.put(("finished", ""))
     
@@ -2384,12 +2388,12 @@ class MainWindow(QMainWindow):
                 if result:
                     logger.info(f"자막 활성화 성공: {script[:50]}...")
                     activated = True
-                time.sleep(0.5)
+                self.stop_event.wait(timeout=0.5)
             except Exception as e:
                 logger.debug(f"자막 활성화 스크립트 실패: {e}")
         
-        # 추가 대기 - 자막 레이어 로딩
-        time.sleep(2.0)
+        # 추가 대기 - 자막 레이어 로딩 (종료 신호에 즉시 반응)
+        self.stop_event.wait(timeout=2.0)
         return activated
     
     def _find_subtitle_selector(self, driver) -> str:
@@ -2443,7 +2447,7 @@ class MainWindow(QMainWindow):
         if isinstance(data, str):
             self._process_raw_text(data)
 
-    def _drain_pending_previews(self, max_items: int = 200, requeue_others: bool = False) -> None:
+    def _drain_pending_previews(self, max_items: int = 2000, requeue_others: bool = True) -> None:
         """큐에 남은 preview/segments 메시지를 소진해 마지막 자막 누락을 줄인다."""
         drained = 0
         pending = []
@@ -2460,6 +2464,9 @@ class MainWindow(QMainWindow):
         except queue.Empty:
             pass
 
+        if drained >= max_items:
+            logger.warning("preview 큐 소진 제한 도달: max_items=%s", max_items)
+
         if requeue_others and pending:
             for item in pending:
                 self.message_queue.put(item)
@@ -2473,76 +2480,9 @@ class MainWindow(QMainWindow):
             self._clear_preview()
 
     def _check_finalize(self):
-        """앵커 기반 확정 타이머 체크 (#AnchorAlgorithm)
-        
-        일정 시간(SUBTITLE_FINALIZE_DELAY) 동안 변화가 없으면 버퍼를 확정합니다.
-        """
-        if not self._pending_buffer:
+        """현재 스트리밍 알고리즘에서는 finalize 타이머를 사용하지 않는다."""
+        if self.finalize_timer.isActive():
             self.finalize_timer.stop()
-            return
-        
-        elapsed = time.time() - self.last_update_time
-        if elapsed >= Config.SUBTITLE_FINALIZE_DELAY:
-            self._finalize_buffer()
-            self.finalize_timer.stop()
-    
-    def _finalize_buffer(self):
-        """버퍼 확정 및 앵커 갱신 (#AnchorAlgorithm)
-        
-        현재 버퍼의 텍스트를 자막으로 저장하고, 앵커를 갱신합니다.
-        """
-        if not self._pending_buffer:
-            return
-        
-        buffer_text = self._pending_buffer.strip()
-        if not buffer_text:
-            self._pending_buffer = ""
-            self._buffer_start_time = None
-            self._clear_preview()
-            return
-        
-        # 자막으로 저장
-        with self.subtitle_lock:
-            entry = SubtitleEntry(buffer_text)
-            entry.start_time = datetime.fromtimestamp(self._buffer_start_time) if self._buffer_start_time else datetime.now()
-            entry.end_time = datetime.now()
-            self.subtitles.append(entry)
-            
-            # 통계 캐시 갱신
-            self._cached_total_chars += entry.char_count
-            self._cached_total_words += entry.word_count
-        
-        # 앵커 갱신: 확정된 텍스트의 마지막 N자를 앵커로 설정
-        buffer_compact = utils.compact_subtitle_text(buffer_text)
-        anchor_len = min(len(buffer_compact), Config.ANCHOR_SUFFIX_LENGTH)
-        self._anchor_text = buffer_compact[-anchor_len:] if anchor_len > 0 else ""
-        
-        # 해시 기반 중복 방지에도 등록 (이중 보호)
-        self.subtitle_processor.add_confirmed(buffer_text)
-        
-        # 키워드 알림 확인
-        self._check_keyword_alert(buffer_text)
-        
-        # 실시간 저장
-        if self.realtime_file:
-            try:
-                timestamp = entry.timestamp.strftime('%H:%M:%S')
-                self.realtime_file.write(f"[{timestamp}] {buffer_text}\n")
-                self.realtime_file.flush()
-                self._realtime_error_count = 0
-            except IOError as e:
-                self._realtime_error_count = getattr(self, '_realtime_error_count', 0) + 1
-                if self._realtime_error_count == 3:
-                    logger.error(f"실시간 저장 연속 실패: {e}")
-        
-        # 버퍼 초기화
-        self._pending_buffer = ""
-        self._buffer_start_time = None
-        self._clear_preview()
-        
-        # UI 갱신
-        self._refresh_text(force_full=False)
-        self._update_count_label()
     
     # ========== 메시지 큐 처리 ==========
     
@@ -2779,68 +2719,6 @@ class MainWindow(QMainWindow):
             return ""
 
         return None
-
-    def _process_with_processor(self, raw: str) -> None:
-        """SubtitleProcessor를 사용하여 자막 처리
-        
-        문장 해시 기반으로 중복을 감지하고, 확정된 문장만 저장
-        """
-        if not raw:
-            return
-        
-        # SubtitleProcessor로 처리
-        confirmed = self.subtitle_processor.process(raw)
-        
-        if confirmed:
-            # 확정된 문장을 SubtitleEntry로 저장
-            self._add_confirmed_sentence(confirmed)
-        
-        # 상태 업데이트 (UI 호환성)
-        self.last_subtitle = raw
-        self.last_update_time = time.time()
-        
-        # finalize_timer 시작 - 타임아웃 후 현재 문장 확정
-        if not self.finalize_timer.isActive():
-            self.finalize_timer.start(Config.FINALIZE_CHECK_INTERVAL)
-    
-    def _add_confirmed_sentence(self, sentence: str) -> None:
-        """확정된 문장을 SubtitleEntry로 변환하여 저장"""
-        if not sentence or len(sentence) < 5:
-            return
-        
-        with self.subtitle_lock:
-            entry = SubtitleEntry(sentence)
-            entry.start_time = datetime.now()
-            entry.end_time = datetime.now()
-            self.subtitles.append(entry)
-            
-            # 통계 캐시 갱신
-            self._cached_total_chars += entry.char_count
-            self._cached_total_words += entry.word_count
-        
-        # 키워드 알림 확인
-        self._check_keyword_alert(sentence)
-        
-        # 카운트 라벨 업데이트
-        self._update_count_label()
-        
-        # UI 갱신
-        self._refresh_text(force_full=False)
-        
-        # 실시간 저장
-        if self.realtime_file:
-            try:
-                timestamp = entry.timestamp.strftime('%H:%M:%S')
-                self.realtime_file.write(f"[{timestamp}] {sentence}\n")
-                self.realtime_file.flush()
-                self._realtime_error_count = 0
-            except IOError as e:
-                if not hasattr(self, '_realtime_error_count'):
-                    self._realtime_error_count = 0
-                self._realtime_error_count += 1
-                if self._realtime_error_count == 3:
-                    self._show_toast(f"⚠️ 실시간 저장 오류: {e}", "warning", 5000)
-                    logger.error(f"실시간 저장 연속 실패: {e}")
 
     def _process_raw_text(self, raw):
         """글로벌 히스토리 + Suffix 매칭 (#GlobalHistorySuffix)
@@ -4916,12 +4794,26 @@ class MainWindow(QMainWindow):
             )
             event.ignore()
             return
+
+        # 추출 중이면 종료 확인 후 먼저 안전 중지(큐 소진/마지막 자막 확정)
+        if self.is_running:
+            reply = QMessageBox.question(
+                self, "종료", "추출 중입니다. 종료하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                event.ignore()
+                return
+            self._stop()
+
+        with self.subtitle_lock:
+            subtitle_count = len(self.subtitles)
         
         # 저장하지 않은 자막이 있으면 확인
-        if self.subtitles:
+        if subtitle_count:
             reply = QMessageBox.question(
                 self, "종료 확인",
-                f"저장하지 않은 자막 {len(self.subtitles)}개가 있습니다.\n\n"
+                f"저장하지 않은 자막 {subtitle_count}개가 있습니다.\n\n"
                 "저장하시겠습니까?",
                 QMessageBox.StandardButton.Save | 
                 QMessageBox.StandardButton.Discard | 
@@ -4951,16 +4843,6 @@ class MainWindow(QMainWindow):
                     event.ignore()
                     return
         
-        # 추출 중이면 확인
-        if self.is_running:
-            reply = QMessageBox.question(
-                self, "종료", "추출 중입니다. 종료하시겠습니까?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply == QMessageBox.StandardButton.No:
-                event.ignore()
-                return
-        
         # 창 위치/크기 저장
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("windowState", self.saveState())
@@ -4987,13 +4869,14 @@ class MainWindow(QMainWindow):
                 self.driver.quit()
             except Exception as e:
                 logger.debug(f"WebDriver 종료 오류: {e}")
-        if self._detached_drivers:
-            for drv in list(self._detached_drivers):
-                try:
-                    drv.quit()
-                except Exception as e:
-                    logger.debug(f"분리된 WebDriver 종료 오류: {e}")
+        with self._detached_drivers_lock:
+            detached_drivers = list(self._detached_drivers)
             self._detached_drivers.clear()
+        for drv in detached_drivers:
+            try:
+                drv.quit()
+            except Exception as e:
+                logger.debug(f"분리된 WebDriver 종료 오류: {e}")
         
         # 데이터베이스 연결 정리
         if getattr(self, 'db', None):
