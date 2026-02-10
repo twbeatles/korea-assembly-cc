@@ -279,7 +279,7 @@ class DatabaseManager:
                 }
                 
             except Exception as e:
-                logger.error(f"세션 로드 오류: {e}")
+                logger.exception("세션 로드 오류")
                 return None
             # 연결은 캐싱되므로 닫지 않음
     
@@ -308,7 +308,7 @@ class DatabaseManager:
                 return [dict(row) for row in cursor.fetchall()]
                 
             except Exception as e:
-                logger.error(f"세션 목록 조회 오류: {e}")
+                logger.exception("세션 목록 조회 오류")
                 return []
             # 연결은 캐싱되므로 닫지 않음
     
@@ -363,7 +363,7 @@ class DatabaseManager:
                 return [dict(row) for row in cursor.fetchall()]
                 
             except Exception as e:
-                logger.error(f"자막 검색 오류: {e}")
+                logger.exception("자막 검색 오류")
                 return []
             # 연결은 캐싱되므로 닫지 않음
     
@@ -390,7 +390,7 @@ class DatabaseManager:
                 
             except Exception as e:
                 conn.rollback()
-                logger.error(f"세션 삭제 오류: {e}")
+                logger.exception("세션 삭제 오류")
                 return False
             # 연결은 캐싱되므로 닫지 않음
     
@@ -423,6 +423,6 @@ class DatabaseManager:
                 }
                 
             except Exception as e:
-                logger.error(f"통계 조회 오류: {e}")
+                logger.exception("통계 조회 오류")
                 return {}
             # 연결은 캐싱되므로 닫지 않음
