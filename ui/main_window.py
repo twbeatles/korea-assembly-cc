@@ -2464,6 +2464,9 @@ class MainWindow(QMainWindow):
 
             self.message_queue.put(("status", "자막 모니터링 중"))
 
+            # MutationObserver 주입 (하이브리드 아키텍처)
+            observer_active = self._inject_mutation_observer(driver, selector)
+
             last_check = time.time()
             last_connection_check = time.time()
             # [Fix] 지역 변수로 변경 - 스레드 안전성 확보 (Race condition 방지)
@@ -2494,27 +2497,73 @@ class MainWindow(QMainWindow):
                         last_connection_check = now
 
                     if now - last_check >= 0.2:
-                        try:
-                            text = driver.find_element(
-                                By.CSS_SELECTOR, selector
-                            ).text.strip()
-                            reconnect_attempt = 0  # 정상 동작 시 재연결 횟수 초기화
-                        except (NoSuchElementException, StaleElementReferenceException):
-                            text = ""
+                        changes_processed = False
 
-                        # utils 사용으로 변경 (Legacy의 _clean_text 대체)
-                        text = utils.clean_text_display(text)
-                        text_compact = utils.compact_subtitle_text(text)
+                        # 1단계: MutationObserver 버퍼에서 수집 (이벤트 기반)
+                        if observer_active:
+                            observer_changes = self._collect_observer_changes(
+                                driver
+                            )
+                            if observer_changes is None:
+                                # Observer가 죽었으면 비활성화 후 폴링 fallback
+                                observer_active = False
+                                logger.warning("MutationObserver 비활성화, 폴링 fallback")
+                            elif observer_changes:
+                                for change_text in observer_changes:
+                                    # 클리어 마커 감지 (발언자 전환)
+                                    if change_text == "__SUBTITLE_CLEARED__":
+                                        self.message_queue.put(
+                                            ("subtitle_reset", "observer_cleared")
+                                        )
+                                        worker_last_raw_text = ""
+                                        worker_last_raw_compact = ""
+                                        continue
+                                    c_text = utils.clean_text_display(change_text)
+                                    c_compact = utils.compact_subtitle_text(c_text)
+                                    if (
+                                        c_text
+                                        and c_compact
+                                        and c_compact != worker_last_raw_compact
+                                    ):
+                                        worker_last_raw_text = c_text
+                                        worker_last_raw_compact = c_compact
+                                        self.message_queue.put(("preview", c_text))
+                                        changes_processed = True
 
-                        # [Fix] Worker 내부 지역 변수로 중복 전송 방지 (스레드 안전)
-                        if (
-                            text
-                            and text_compact
-                            and text_compact != worker_last_raw_compact
-                        ):
-                            worker_last_raw_text = text
-                            worker_last_raw_compact = text_compact
-                            self.message_queue.put(("preview", text))
+                        # 2단계: Observer 결과가 없으면 기존 폴링 fallback
+                        if not changes_processed:
+                            try:
+                                text = driver.find_element(
+                                    By.CSS_SELECTOR, selector
+                                ).text.strip()
+                                reconnect_attempt = 0
+                            except (
+                                NoSuchElementException,
+                                StaleElementReferenceException,
+                            ):
+                                text = ""
+
+                            text = utils.clean_text_display(text)
+                            text_compact = utils.compact_subtitle_text(text)
+
+                            if (
+                                text
+                                and text_compact
+                                and text_compact != worker_last_raw_compact
+                            ):
+                                worker_last_raw_text = text
+                                worker_last_raw_compact = text_compact
+                                self.message_queue.put(("preview", text))
+                            elif (
+                                not text
+                                and worker_last_raw_compact
+                            ):
+                                # 폴링에서도 빈 텍스트 감지 (발언자 전환)
+                                self.message_queue.put(
+                                    ("subtitle_reset", "polling_cleared")
+                                )
+                                worker_last_raw_text = ""
+                                worker_last_raw_compact = ""
 
                         last_check = now
 
@@ -2580,6 +2629,10 @@ class MainWindow(QMainWindow):
                                 )
                                 last_check = time.time()
                                 last_connection_check = time.time()
+                                # 재연결 후 MutationObserver 재주입
+                                observer_active = self._inject_mutation_observer(
+                                    driver, selector
+                                )
                                 continue
                             except Exception as reconnect_error:
                                 logger.error(f"재연결 실패: {reconnect_error}")
@@ -2608,6 +2661,92 @@ class MainWindow(QMainWindow):
                     logger.debug(f"WebDriver 종료 오류: {e}")
                 self.driver = None
             self.message_queue.put(("finished", ""))
+
+    def _inject_mutation_observer(self, driver, selector: str) -> bool:
+        """MutationObserver를 페이지에 주입하여 자막 변경을 이벤트 기반으로 캡처한다.
+
+        Returns:
+            bool: 주입 성공 여부. 실패 시 폴링 fallback으로 동작.
+        """
+        try:
+            result = driver.execute_script(
+                """
+                (function() {
+                    // 기존 Observer가 있으면 제거
+                    if (window.__subtitleObserver) {
+                        try { window.__subtitleObserver.disconnect(); } catch(e) {}
+                    }
+                    window.__subtitleBuffer = [];
+                    window.__subtitleLastText = '';
+
+                    var selectors = arguments[0].split(',');
+                    var target = null;
+                    for (var i = 0; i < selectors.length; i++) {
+                        target = document.querySelector(selectors[i].trim());
+                        if (target) break;
+                    }
+                    if (!target) return false;
+
+                    window.__subtitleObserver = new MutationObserver(function() {
+                        var text = target.innerText || target.textContent || '';
+                        text = text.trim();
+                        if (!text && window.__subtitleLastText) {
+                            // 자막 영역 클리어 감지 (발언자 전환)
+                            window.__subtitleBuffer.push('__SUBTITLE_CLEARED__');
+                            window.__subtitleLastText = '';
+                            return;
+                        }
+                        if (text && text !== window.__subtitleLastText) {
+                            window.__subtitleLastText = text;
+                            window.__subtitleBuffer.push(text);
+                            // 버퍼 크기 제한
+                            if (window.__subtitleBuffer.length > 100) {
+                                window.__subtitleBuffer = window.__subtitleBuffer.slice(-50);
+                            }
+                        }
+                    });
+
+                    window.__subtitleObserver.observe(target, {
+                        childList: true,
+                        subtree: true,
+                        characterData: true
+                    });
+                    return true;
+                })();
+                """,
+                selector,
+            )
+            if result:
+                logger.info("MutationObserver 주입 성공: %s", selector)
+            else:
+                logger.warning("MutationObserver 주입 실패: 대상 요소 없음")
+            return bool(result)
+        except Exception as e:
+            logger.warning("MutationObserver 주입 오류: %s", e)
+            return False
+
+    def _collect_observer_changes(self, driver) -> list | None:
+        """MutationObserver 버퍼에서 변경된 텍스트를 수집한다.
+
+        Returns:
+            list: 변경된 텍스트 목록 (비어있을 수 있음)
+            None: Observer가 죽었거나 오류 발생 (폴링 fallback 필요)
+        """
+        try:
+            result = driver.execute_script(
+                """
+                if (!window.__subtitleBuffer) return null;
+                var buf = window.__subtitleBuffer;
+                window.__subtitleBuffer = [];
+                return buf;
+                """
+            )
+            if result is None:
+                return None  # Observer가 없음
+            return result if isinstance(result, list) else []
+        except Exception as e:
+            logger.debug("Observer 버퍼 수집 오류: %s", e)
+            return None
 
     def _activate_subtitle(self, driver) -> bool:
         """자막 레이어 활성화 - 다양한 방법 시도
@@ -2752,8 +2891,7 @@ class MainWindow(QMainWindow):
                 logger.warning(
                     "preview suffix desync reset: count=%s", self._preview_desync_count
                 )
-                self._confirmed_compact = ""
-                self._trailing_suffix = ""
+                self._soft_resync()
                 return accept(normalized)
             return None
 
@@ -2786,8 +2924,7 @@ class MainWindow(QMainWindow):
                         self._preview_ambiguous_skip_count,
                         predicted_append,
                     )
-                    self._confirmed_compact = ""
-                    self._trailing_suffix = ""
+                    self._soft_resync()
                     return accept(normalized)
                 return None
 
@@ -2881,6 +3018,22 @@ class MainWindow(QMainWindow):
                 prepared = self._prepare_preview_raw(data)
                 if prepared:
                     self._process_raw_text(prepared)
+
+            elif msg_type == "subtitle_reset":
+                # 발언자 전환으로 자막 영역이 클리어됨 → 완전 리셋
+                # (자막 영역이 빈 상태이므로 중복 유입 위험 없음)
+                logger.info("subtitle_reset 감지: %s", data)
+                # 이전 발언자의 마지막 버퍼 확정
+                if self.last_subtitle:
+                    self._finalize_subtitle(self.last_subtitle)
+                    self.last_subtitle = ""
+                    self._stream_start_time = None
+                self._confirmed_compact = ""
+                self._trailing_suffix = ""
+                self._last_raw_text = ""
+                self._last_processed_raw = ""
+                self._preview_desync_count = 0
+                self._preview_ambiguous_skip_count = 0
 
             elif msg_type == "keepalive":
                 self._handle_keepalive(data)
@@ -3173,8 +3326,8 @@ class MainWindow(QMainWindow):
         if not self._trailing_suffix:
             return raw
 
-        # suffix가 raw_compact에 있는지 검색
-        pos = raw_compact.find(self._trailing_suffix)
+        # suffix가 raw_compact에 있는지 검색 (rfind: 마지막 위치 기준으로 과잉 추출 방지)
+        pos = raw_compact.rfind(self._trailing_suffix)
 
         if pos >= 0:
             # suffix 이후 부분만 반환
@@ -3185,6 +3338,36 @@ class MainWindow(QMainWindow):
 
         # 정말 새로운 문맥 - 전체 반환
         return raw
+
+    def _soft_resync(self) -> None:
+        """전체 리셋 대신, 최근 확정 자막에서 히스토리를 재구성한다.
+
+        desync/ambiguous 리셋 시 _confirmed_compact를 완전 초기화하면
+        이미 처리된 텍스트가 재유입되어 대량 중복이 발생할 수 있다.
+        최근 자막의 compact를 기반으로 suffix를 복원하면 이를 방지한다.
+        """
+        with self.subtitle_lock:
+            if self.subtitles:
+                # 최근 5개 자막의 compact로 히스토리 재구성
+                recent = " ".join(
+                    e.text for e in self.subtitles[-5:] if e and e.text
+                )
+                self._confirmed_compact = utils.compact_subtitle_text(recent)
+                if len(self._confirmed_compact) >= self._suffix_length:
+                    self._trailing_suffix = self._confirmed_compact[
+                        -self._suffix_length :
+                    ]
+                else:
+                    self._trailing_suffix = self._confirmed_compact
+                logger.info(
+                    "소프트 리셋: suffix=%s",
+                    self._trailing_suffix[-20:] if self._trailing_suffix else "(empty)",
+                )
+            else:
+                # 자막이 없으면 어쩔 수 없이 전체 리셋
+                self._confirmed_compact = ""
+                self._trailing_suffix = ""
+                logger.info("소프트 리셋: 자막 없음, 전체 리셋")
 
     def _find_overlap(self, suffix: str, text: str) -> int:
         """suffix의 뒷부분과 text의 앞부분이 겹치는 길이 반환"""
