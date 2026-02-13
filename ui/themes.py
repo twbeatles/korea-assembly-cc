@@ -126,7 +126,6 @@ QTextEdit {
 }
 QTextEdit:focus {
     border-color: #58a6ff;
-    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
 }
 
 /* 그룹박스 - 카드 스타일 */
@@ -401,7 +400,6 @@ QTextEdit {
 }
 QTextEdit:focus {
     border-color: #0969da;
-    box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.1);
 }
 
 /* 그룹박스 - 카드 스타일 */

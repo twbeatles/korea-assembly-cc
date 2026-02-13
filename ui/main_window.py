@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -192,6 +193,7 @@ class MainWindow(QMainWindow):
         # 중지 시 브라우저 유지용 (종료 시 정리)
         self._detached_drivers = []
         self._detached_drivers_lock = threading.Lock()
+        self._last_subtitle_frame_path = ()
 
         # 연결 상태 모니터링 (#30)
         self.connection_status = "disconnected"  # connected, disconnected, reconnecting
@@ -241,6 +243,7 @@ class MainWindow(QMainWindow):
 
         # 데이터베이스 매니저 초기화 (#26)
         self.db = None
+        self._db_tasks_inflight = set()
         if DB_AVAILABLE:
             try:
                 self.db = DatabaseManager(Config.DATABASE_PATH)
@@ -724,9 +727,7 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(selector_label, 1, 0)
         self.selector_combo = QComboBox()
         self.selector_combo.setEditable(True)
-        self.selector_combo.addItems(
-            ["#viewSubtit .incont", "#viewSubtit", ".subtitle_area"]
-        )
+        self.selector_combo.addItems(Config.DEFAULT_SELECTORS)
         self.selector_combo.setToolTip(
             "자막 텍스트가 표시되는 HTML 요소의 CSS 선택자\n기본값을 사용하거나 직접 입력하세요"
         )
@@ -1766,7 +1767,7 @@ class MainWindow(QMainWindow):
             self._reset_ui()
             QMessageBox.critical(self, "오류", f"시작 중 오류 발생: {e}")
 
-    def _stop(self):
+    def _stop(self, for_app_exit: bool = False):
         if not self.is_running:
             return
 
@@ -1783,11 +1784,32 @@ class MainWindow(QMainWindow):
             self._drain_pending_previews(requeue_others=True)
             self._finalize_pending_subtitle()
 
-            # 워커 스레드 종료 대기 (최대 3초)
-            if self.worker and self.worker.is_alive():
-                self.worker.join(timeout=Config.THREAD_STOP_TIMEOUT)
-                if self.worker.is_alive():
-                    logger.warning("워커 스레드가 시간 내에 종료되지 않음")
+            force_driver_quit = for_app_exit or (not Config.KEEP_BROWSER_ON_STOP)
+
+            # 앱 종료 또는 브라우저 미유지 설정일 때는 워커 대기 전에 드라이버를 먼저 정리
+            if force_driver_quit and self.driver:
+                driver = self.driver
+                self.driver = None
+                self._force_quit_driver_with_timeout(
+                    driver, timeout=2.0, source="stop_initial"
+                )
+
+            worker_stopped = self._wait_worker_shutdown(
+                timeout=Config.THREAD_STOP_TIMEOUT
+            )
+
+            # 수동 중지 + 브라우저 유지 모드에서 종료가 지연되면 1회 에스컬레이션
+            if not worker_stopped and not force_driver_quit and self.driver:
+                logger.warning("워커 스레드 종료 지연 감지 - 드라이버 강제 종료 후 재대기")
+                driver = self.driver
+                self.driver = None
+                self._force_quit_driver_with_timeout(
+                    driver, timeout=2.0, source="stop_escalation"
+                )
+                worker_stopped = self._wait_worker_shutdown(timeout=1.0)
+
+            if not worker_stopped:
+                logger.warning("워커 스레드가 시간 내에 종료되지 않음(종료 계속 진행)")
 
             # 종료 후에도 남아있던 preview 처리
             self._drain_pending_previews(requeue_others=True)
@@ -1802,24 +1824,8 @@ class MainWindow(QMainWindow):
                     logger.debug(f"파일 닫기 오류: {e}")
                 self.realtime_file = None
 
-            # WebDriver 종료 (중지 시 브라우저 유지 옵션)
-            if self.driver and not Config.KEEP_BROWSER_ON_STOP:
-                try:
-                    driver = self.driver
-                    self.driver = None  # 먼저 None 설정
-                    driver.quit()
-                except Exception as e:
-                    logger.debug(f"WebDriver 종료 중 오류 (무시됨): {e}")
-
-            # 분리된(detached) WebDriver 프로세스 정리 (#3)
-            with self._detached_drivers_lock:
-                detached_drivers = list(self._detached_drivers)
-                self._detached_drivers.clear()
-            for drv in detached_drivers:
-                try:
-                    drv.quit()
-                except Exception as e:
-                    logger.debug(f"분리된 WebDriver 종료 오류: {e}")
+            # 중지 이후 남아있을 수 있는 detached WebDriver 정리
+            self._cleanup_detached_drivers_with_timeout(timeout=2.0)
 
             self._clear_message_queue()
             self._reset_ui()
@@ -1830,6 +1836,68 @@ class MainWindow(QMainWindow):
             self._reset_ui()
         finally:
             self._is_stopping = False
+
+    def _force_quit_driver_with_timeout(
+        self, driver, timeout: float = 2.0, source: str = "shutdown"
+    ) -> bool:
+        """WebDriver quit()를 타임박스로 실행해 UI 스레드 무기한 대기를 방지한다."""
+        if not driver:
+            return True
+
+        done = threading.Event()
+        error_holder = {"error": None}
+
+        def _quit_driver():
+            try:
+                driver.quit()
+            except Exception as e:
+                error_holder["error"] = e
+            finally:
+                done.set()
+
+        threading.Thread(
+            target=_quit_driver,
+            daemon=True,
+            name=f"DriverQuitThread-{source}",
+        ).start()
+
+        if not done.wait(timeout=timeout):
+            logger.warning(
+                "WebDriver 종료 타임아웃 (source=%s, timeout=%.1fs)",
+                source,
+                timeout,
+            )
+            return False
+
+        if error_holder["error"] is not None:
+            logger.debug(
+                "WebDriver 종료 오류 (source=%s): %s",
+                source,
+                error_holder["error"],
+            )
+            return False
+
+        return True
+
+    def _wait_worker_shutdown(self, timeout: float) -> bool:
+        """워커 스레드 종료를 제한 시간 동안 대기한다."""
+        if not self.worker or not self.worker.is_alive():
+            return True
+        self.worker.join(timeout=timeout)
+        return not self.worker.is_alive()
+
+    def _cleanup_detached_drivers_with_timeout(self, timeout: float = 2.0) -> None:
+        """분리된(detached) 드라이버를 타임박스로 종료한다."""
+        with self._detached_drivers_lock:
+            detached_drivers = list(self._detached_drivers)
+            self._detached_drivers.clear()
+
+        for idx, drv in enumerate(detached_drivers, start=1):
+            self._force_quit_driver_with_timeout(
+                drv,
+                timeout=timeout,
+                source=f"detached_{idx}",
+            )
 
     def _reset_ui(self):
         self.is_running = False
@@ -2444,19 +2512,29 @@ class MainWindow(QMainWindow):
             wait = WebDriverWait(driver, 20)
 
             found = False
-            for sel in [
-                selector,
-                "#viewSubtit .incont",
-                "#viewSubtit",
-                ".subtitle_area",
-            ]:
+            selector_candidates = self._build_subtitle_selector_candidates(selector)
+            active_selector = ""
+            for sel in selector_candidates:
                 try:
                     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, sel)))
                     self.message_queue.put(("status", f"자막 요소 찾음: {sel}"))
+                    active_selector = sel
                     found = True
                     break
                 except Exception:
                     continue
+
+            if not found:
+                detected_selector = self._find_subtitle_selector(driver)
+                if detected_selector:
+                    selector_candidates = self._build_subtitle_selector_candidates(
+                        detected_selector, selector_candidates
+                    )
+                    active_selector = selector_candidates[0]
+                    self.message_queue.put(
+                        ("status", f"자막 요소 자동 감지: {active_selector}")
+                    )
+                    found = True
 
             if not found:
                 self.message_queue.put(("error", "자막 요소를 찾을 수 없습니다."))
@@ -2465,7 +2543,12 @@ class MainWindow(QMainWindow):
             self.message_queue.put(("status", "자막 모니터링 중"))
 
             # MutationObserver 주입 (하이브리드 아키텍처)
-            observer_active = self._inject_mutation_observer(driver, selector)
+            observer_active, observer_frame_path = self._inject_mutation_observer(
+                driver, ",".join(selector_candidates)
+            )
+            observer_retry_interval = 3.0
+            last_observer_retry = time.time()
+            last_selector_refresh = time.time()
 
             last_check = time.time()
             last_connection_check = time.time()
@@ -2502,7 +2585,7 @@ class MainWindow(QMainWindow):
                         # 1단계: MutationObserver 버퍼에서 수집 (이벤트 기반)
                         if observer_active:
                             observer_changes = self._collect_observer_changes(
-                                driver
+                                driver, observer_frame_path
                             )
                             if observer_changes is None:
                                 # Observer가 죽었으면 비활성화 후 폴링 fallback
@@ -2532,16 +2615,43 @@ class MainWindow(QMainWindow):
 
                         # 2단계: Observer 결과가 없으면 기존 폴링 fallback
                         if not changes_processed:
-                            try:
-                                text = driver.find_element(
-                                    By.CSS_SELECTOR, selector
-                                ).text.strip()
+                            text, matched_selector, selector_found = (
+                                self._read_subtitle_text_by_selectors(
+                                    driver, selector_candidates
+                                )
+                            )
+                            if selector_found:
                                 reconnect_attempt = 0
-                            except (
-                                NoSuchElementException,
-                                StaleElementReferenceException,
+                                if matched_selector and matched_selector != active_selector:
+                                    active_selector = matched_selector
+                                    selector_candidates = (
+                                        self._build_subtitle_selector_candidates(
+                                            active_selector, selector_candidates
+                                        )
+                                    )
+                            elif now - last_selector_refresh >= 5.0:
+                                # 셀렉터 변화 대응: 주기적 자동 재탐색
+                                detected_selector = self._find_subtitle_selector(driver)
+                                if detected_selector:
+                                    selector_candidates = (
+                                        self._build_subtitle_selector_candidates(
+                                            detected_selector, selector_candidates
+                                        )
+                                    )
+                                    active_selector = selector_candidates[0]
+                                    logger.info(
+                                        "자막 셀렉터 자동 전환: %s", active_selector
+                                    )
+                                last_selector_refresh = now
+
+                            if (
+                                not observer_active
+                                and now - last_observer_retry >= observer_retry_interval
                             ):
-                                text = ""
+                                observer_active, observer_frame_path = self._inject_mutation_observer(
+                                    driver, ",".join(selector_candidates)
+                                )
+                                last_observer_retry = now
 
                             text = utils.clean_text_display(text)
                             text_compact = utils.compact_subtitle_text(text)
@@ -2556,6 +2666,7 @@ class MainWindow(QMainWindow):
                                 self.message_queue.put(("preview", text))
                             elif (
                                 not text
+                                and selector_found
                                 and worker_last_raw_compact
                             ):
                                 # 폴링에서도 빈 텍스트 감지 (발언자 전환)
@@ -2629,10 +2740,19 @@ class MainWindow(QMainWindow):
                                 )
                                 last_check = time.time()
                                 last_connection_check = time.time()
+                                detected_selector = self._find_subtitle_selector(driver)
+                                if detected_selector:
+                                    selector_candidates = (
+                                        self._build_subtitle_selector_candidates(
+                                            detected_selector, selector_candidates
+                                        )
+                                    )
+                                    active_selector = selector_candidates[0]
                                 # 재연결 후 MutationObserver 재주입
-                                observer_active = self._inject_mutation_observer(
-                                    driver, selector
+                                observer_active, observer_frame_path = self._inject_mutation_observer(
+                                    driver, ",".join(selector_candidates)
                                 )
+                                last_observer_retry = time.time()
                                 continue
                             except Exception as reconnect_error:
                                 logger.error(f"재연결 실패: {reconnect_error}")
@@ -2662,70 +2782,463 @@ class MainWindow(QMainWindow):
                 self.driver = None
             self.message_queue.put(("finished", ""))
 
-    def _inject_mutation_observer(self, driver, selector: str) -> bool:
-        """MutationObserver를 페이지에 주입하여 자막 변경을 이벤트 기반으로 캡처한다.
+    def _build_subtitle_selector_candidates(
+        self, primary_selector: str, extras: list[str] | None = None
+    ) -> list[str]:
+        """우선순위가 반영된 자막 CSS 셀렉터 후보 목록을 생성한다."""
+        candidates = []
+
+        def _add(sel: str) -> None:
+            if not isinstance(sel, str):
+                return
+            norm = sel.strip()
+            if not norm or norm in candidates:
+                return
+            candidates.append(norm)
+
+        _add(primary_selector or "")
+        for sel in [
+            "#viewSubtit .smi_word:last-child",
+            "#viewSubtit .smi_word",
+            "#viewSubtit .incont",
+            "#viewSubtit span",
+            "#viewSubtit",
+            ".subtitle_area",
+            ".ai_subtitle",
+            "[class*='subtitle']",
+        ]:
+            _add(sel)
+
+        if extras:
+            for sel in extras:
+                _add(sel)
+
+        # 컨테이너형 셀렉터보다 실제 자막 라인(.smi_word)을 우선한다.
+        broad_selectors = {
+            "#viewSubtit .incont",
+            "#viewSubtit",
+            ".subtitle_area",
+            ".ai_subtitle",
+            "[class*='subtitle']",
+        }
+        priority = {
+            "#viewSubtit .smi_word:last-child": 0,
+            "#viewSubtit .smi_word": 1,
+            "#viewSubtit span": 2,
+            "#viewSubtit .incont": 7,
+            "#viewSubtit": 8,
+            ".subtitle_area": 9,
+            ".ai_subtitle": 10,
+            "[class*='subtitle']": 11,
+        }
+        primary_norm = (primary_selector or "").strip()
+
+        order_map = {sel: idx for idx, sel in enumerate(candidates)}
+
+        def _weight(sel: str) -> tuple[int, int]:
+            original_idx = order_map.get(sel, 999)
+            if sel in priority:
+                return priority[sel], original_idx
+            if sel == primary_norm and sel not in broad_selectors:
+                return 3, original_idx
+            if sel in broad_selectors:
+                return 12, original_idx
+            return 4, original_idx
+
+        return sorted(candidates, key=_weight)
+
+    def _join_stream_text(self, base: str, addition: str) -> str:
+        """스트리밍 텍스트를 공백/문장부호를 보존해 결합한다."""
+        left = str(base or "")
+        right = str(addition or "")
+        if not left:
+            return right.strip()
+        if not right:
+            return left.strip()
+
+        left = left.rstrip()
+        right = right.lstrip()
+        if not left:
+            return right
+        if not right:
+            return left
+
+        no_space_before = set(".,!?;:)]}%\"'”’…")
+        no_space_after = set("([{<\"'“‘")
+        if right[0] in no_space_before or left[-1] in no_space_after:
+            return left + right
+        return left + " " + right
+
+    def _read_subtitle_text_by_selectors(
+        self,
+        driver,
+        selectors: list[str],
+        preferred_frame_path: tuple[int, ...] = (),
+    ) -> tuple[str, str, bool]:
+        """여러 셀렉터를 순차 시도해 자막 텍스트를 읽는다.
 
         Returns:
-            bool: 주입 성공 여부. 실패 시 폴링 fallback으로 동작.
+            (text, matched_selector, found_element)
         """
+        def _read_in_current_context() -> tuple[str, str, bool]:
+            for sel in selectors:
+                try:
+                    element = driver.find_element(By.CSS_SELECTOR, sel)
+                except (NoSuchElementException, StaleElementReferenceException):
+                    continue
+                except Exception as e:
+                    logger.debug("셀렉터 조회 오류 (%s): %s", sel, e)
+                    continue
+
+                try:
+                    text = (element.text or "").strip()
+                except StaleElementReferenceException:
+                    continue
+                except Exception:
+                    text = ""
+                return text, sel, True
+            return "", "", False
+
+        # 선호 프레임(Observer가 설치된 프레임)을 우선 확인
+        if preferred_frame_path:
+            try:
+                if self._switch_to_frame_path(driver, preferred_frame_path):
+                    result = _read_in_current_context()
+                    if result[2]:
+                        self._last_subtitle_frame_path = preferred_frame_path
+                        return result
+            finally:
+                driver.switch_to.default_content()
+
+        # 기본 문서 확인
         try:
-            result = driver.execute_script(
-                """
-                (function() {
-                    // 기존 Observer가 있으면 제거
-                    if (window.__subtitleObserver) {
-                        try { window.__subtitleObserver.disconnect(); } catch(e) {}
-                    }
-                    window.__subtitleBuffer = [];
-                    window.__subtitleLastText = '';
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+        result = _read_in_current_context()
+        if result[2]:
+            self._last_subtitle_frame_path = ()
+            return result
 
-                    var selectors = arguments[0].split(',');
-                    var target = null;
-                    for (var i = 0; i < selectors.length; i++) {
-                        target = document.querySelector(selectors[i].trim());
-                        if (target) break;
-                    }
-                    if (!target) return false;
+        # 중첩 iframe/frame 순회 확인
+        for frame_path in self._iter_frame_paths(driver, max_depth=3, max_frames=60):
+            try:
+                if self._switch_to_frame_path(driver, frame_path):
+                    result = _read_in_current_context()
+                    if result[2]:
+                        self._last_subtitle_frame_path = frame_path
+                        return result
+            finally:
+                try:
+                    driver.switch_to.default_content()
+                except Exception:
+                    pass
 
-                    window.__subtitleObserver = new MutationObserver(function() {
-                        var text = target.innerText || target.textContent || '';
-                        text = text.trim();
-                        if (!text && window.__subtitleLastText) {
-                            // 자막 영역 클리어 감지 (발언자 전환)
-                            window.__subtitleBuffer.push('__SUBTITLE_CLEARED__');
-                            window.__subtitleLastText = '';
-                            return;
+        return "", "", False
+
+    def _switch_to_frame_path(self, driver, frame_path: tuple[int, ...]) -> bool:
+        """frame index 경로로 이동한다. 실패 시 False."""
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            return False
+
+        for idx in frame_path:
+            try:
+                frames = driver.find_elements(By.CSS_SELECTOR, "iframe,frame")
+                if idx < 0 or idx >= len(frames):
+                    return False
+                driver.switch_to.frame(frames[idx])
+            except Exception:
+                return False
+        return True
+
+    def _iter_frame_paths(
+        self, driver, max_depth: int = 3, max_frames: int = 60
+    ) -> list[tuple[int, ...]]:
+        """중첩 iframe/frame 경로 목록을 반환한다."""
+        paths: list[tuple[int, ...]] = []
+
+        def _walk(path: tuple[int, ...], depth: int) -> None:
+            if len(paths) >= max_frames or depth > max_depth:
+                return
+            if not self._switch_to_frame_path(driver, path):
+                return
+            try:
+                frames = driver.find_elements(By.CSS_SELECTOR, "iframe,frame")
+            except Exception:
+                return
+
+            for idx in range(len(frames)):
+                child = path + (idx,)
+                paths.append(child)
+                if len(paths) >= max_frames:
+                    return
+                _walk(child, depth + 1)
+
+        try:
+            _walk((), 0)
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
+
+        return paths
+
+    def _inject_mutation_observer_here(
+        self, driver, selector: str, allow_poll_fallback: bool = False
+    ) -> bool:
+        """현재 문맥(현재 frame)에서 Observer를 주입한다."""
+        default_selector = (
+            "#viewSubtit .smi_word:last-child, #viewSubtit .smi_word, "
+            "#viewSubtit .incont, #viewSubtit, .subtitle_area"
+        )
+        safe_selector = (
+            selector if isinstance(selector, str) and selector.strip() else default_selector
+        )
+        result = driver.execute_script(
+            """
+            return (function(selectorArg, allowPollFallbackArg) {
+                if (window.__subtitleObserver) {
+                    try { window.__subtitleObserver.disconnect(); } catch(e) {}
+                }
+                if (window.__subtitlePollTimer) {
+                    try { clearInterval(window.__subtitlePollTimer); } catch(e) {}
+                    window.__subtitlePollTimer = null;
+                }
+                window.__subtitleBuffer = [];
+                window.__subtitleLastText = '';
+                window.__subtitleLastEmitTs = 0;
+
+                var rawSelector = (typeof selectorArg === 'string') ? selectorArg : '';
+                var allowPollFallback = !!allowPollFallbackArg;
+                var selectors = rawSelector
+                    .split(',')
+                    .map(function(s) { return (s || '').trim(); })
+                    .filter(function(s) { return s.length > 0; });
+                if (!selectors.length) {
+                    selectors = [
+                        '#viewSubtit .smi_word:last-child',
+                        '#viewSubtit .smi_word',
+                        '#viewSubtit .incont',
+                        '#viewSubtit',
+                        '.subtitle_area',
+                        '.ai_subtitle',
+                        "[class*='subtitle']"
+                    ];
+                }
+
+                var target = null;
+                for (var i = 0; i < selectors.length; i++) {
+                    try {
+                        target = document.querySelector(selectors[i]);
+                    } catch (e) {
+                        target = null;
+                    }
+                    if (target) break;
+                }
+
+                function normalizeText(text) {
+                    return String(text || '').replace(/\\s+/g, ' ').trim();
+                }
+
+                function isLikelySubtitleText(text) {
+                    if (!text) return false;
+                    if (text.length < 3 || text.length > 320) return false;
+                    if (!/[가-힣A-Za-z]/.test(text)) return false;
+                    if (/^[\\d\\s:.,\\-_/()%]+$/.test(text)) return false;
+                    return true;
+                }
+
+                function pickBestMutationText(mutations) {
+                    var bestText = '';
+                    var bestScore = -1;
+                    for (var i = 0; i < mutations.length; i++) {
+                        var m = mutations[i];
+                        var node = m && m.target ? m.target : null;
+                        var el = null;
+                        if (node && node.nodeType === 1) el = node;
+                        else if (node && node.parentElement) el = node.parentElement;
+                        if (!el) continue;
+                        if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') continue;
+                        if (typeof el.closest === 'function') {
+                            var bad = el.closest('script,style,head,noscript');
+                            if (bad) continue;
                         }
-                        if (text && text !== window.__subtitleLastText) {
-                            window.__subtitleLastText = text;
-                            window.__subtitleBuffer.push(text);
-                            // 버퍼 크기 제한
-                            if (window.__subtitleBuffer.length > 100) {
-                                window.__subtitleBuffer = window.__subtitleBuffer.slice(-50);
+
+                        var text = normalizeText(el.innerText || el.textContent || '');
+                        if (!isLikelySubtitleText(text)) continue;
+
+                        if (text.length > 120) {
+                            var lines = String(el.innerText || '').split('\\n')
+                                .map(function(v) { return normalizeText(v); })
+                                .filter(function(v) { return !!v; });
+                            if (lines.length) {
+                                var tail = lines[lines.length - 1];
+                                if (isLikelySubtitleText(tail)) text = tail;
                             }
                         }
+
+                        var score = 0;
+                        try {
+                            var idClass = ((el.id || '') + ' ' + (el.className || '')).toLowerCase();
+                            if (/subtit|subtitle|caption|script|stt|transcript|incont|viewsubtit/.test(idClass)) score += 6;
+                            var rect = el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+                            if (rect && rect.width > 0 && rect.height > 0) score += 2;
+                            if (rect && rect.bottom >= (window.innerHeight * 0.35)) score += 1;
+                        } catch (e) {}
+
+                        score += Math.min(4, Math.floor(text.length / 25));
+
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestText = text;
+                        }
+                    }
+                    return bestText;
+                }
+
+                if (target) {
+                    window.__subtitleObserver = new MutationObserver(function() {
+                        try {
+                            var text = target.innerText || target.textContent || '';
+                            text = normalizeText(text);
+                            if (!text && window.__subtitleLastText) {
+                                window.__subtitleBuffer.push('__SUBTITLE_CLEARED__');
+                                window.__subtitleLastText = '';
+                                return;
+                            }
+                            if (text && text !== window.__subtitleLastText) {
+                                window.__subtitleLastText = text;
+                                window.__subtitleBuffer.push(text);
+                                if (window.__subtitleBuffer.length > 100) {
+                                    window.__subtitleBuffer = window.__subtitleBuffer.slice(-50);
+                                }
+                            }
+                        } catch (e) {}
                     });
 
                     window.__subtitleObserver.observe(target, {
                         childList: true,
                         subtree: true,
-                        characterData: true
+                        characterData: true,
+                        attributes: true
                     });
                     return true;
-                })();
-                """,
-                selector,
-            )
-            if result:
-                logger.info("MutationObserver 주입 성공: %s", selector)
-            else:
-                logger.warning("MutationObserver 주입 실패: 대상 요소 없음")
-            return bool(result)
+                }
+
+                var root = document.body || document.documentElement;
+                if (!root || !allowPollFallback) return false;
+
+                // 타겟을 못 찾은 경우: 주기적 selector 스캔으로 Observer 버퍼 브리지
+                window.__subtitlePollTimer = setInterval(function() {
+                    try {
+                        var now = Date.now();
+                        if (now - (window.__subtitleLastEmitTs || 0) < 100) {
+                            return;
+                        }
+                        var liveTarget = null;
+                        for (var i = 0; i < selectors.length; i++) {
+                            try {
+                                liveTarget = document.querySelector(selectors[i]);
+                            } catch (e) {
+                                liveTarget = null;
+                            }
+                            if (liveTarget) break;
+                        }
+                        if (!liveTarget) {
+                            return;
+                        }
+
+                        var text = normalizeText(liveTarget.innerText || liveTarget.textContent || '');
+                        if (!text && window.__subtitleLastText) {
+                            window.__subtitleBuffer.push('__SUBTITLE_CLEARED__');
+                            window.__subtitleLastText = '';
+                            window.__subtitleLastEmitTs = now;
+                            return;
+                        }
+                        if (!text || !isLikelySubtitleText(text)) {
+                            return;
+                        }
+                        if (text && text !== window.__subtitleLastText) {
+                            window.__subtitleLastText = text;
+                            window.__subtitleLastEmitTs = now;
+                            window.__subtitleBuffer.push(text);
+                            if (window.__subtitleBuffer.length > 100) {
+                                window.__subtitleBuffer = window.__subtitleBuffer.slice(-50);
+                            }
+                        }
+                    } catch (e) {
+                    }
+                }, 180);
+                return true;
+            })(arguments[0], arguments[1]);
+            """,
+            safe_selector,
+            allow_poll_fallback,
+        )
+        return bool(result)
+
+    def _inject_mutation_observer(self, driver, selector: str) -> tuple[bool, tuple[int, ...]]:
+        """MutationObserver를 페이지에 주입하여 자막 변경을 이벤트 기반으로 캡처한다.
+
+        Returns:
+            (주입 성공 여부, observer frame 경로)
+        """
+        try:
+            safe_selector = selector if isinstance(selector, str) else ""
+            priority_paths: list[tuple[int, ...]] = []
+            last_path = getattr(self, "_last_subtitle_frame_path", ())
+            if isinstance(last_path, tuple):
+                priority_paths.append(last_path)
+            priority_paths.append(())
+            for p in self._iter_frame_paths(driver, max_depth=3, max_frames=60):
+                if p not in priority_paths:
+                    priority_paths.append(p)
+
+            # 1) 타겟 기반 Observer 우선 시도
+            for frame_path in priority_paths:
+                if not self._switch_to_frame_path(driver, frame_path):
+                    continue
+                if self._inject_mutation_observer_here(
+                    driver, safe_selector, allow_poll_fallback=False
+                ):
+                    location = "default" if frame_path == () else f"frame={frame_path}"
+                    logger.info(
+                        "MutationObserver 주입 성공: %s (%s)", location, safe_selector
+                    )
+                    return True, frame_path
+
+            # 2) 타겟 미탐색 시 JS 폴링 브리지 fallback
+            for frame_path in priority_paths:
+                if not self._switch_to_frame_path(driver, frame_path):
+                    continue
+                if self._inject_mutation_observer_here(
+                    driver, safe_selector, allow_poll_fallback=True
+                ):
+                    location = "default" if frame_path == () else f"frame={frame_path}"
+                    logger.info(
+                        "MutationObserver 폴링 브리지 활성화: %s (%s)",
+                        location,
+                        safe_selector,
+                    )
+                    return True, frame_path
+
+            logger.warning("MutationObserver 주입 실패: 대상 요소 없음 (%s)", safe_selector)
+            return False, ()
         except Exception as e:
             logger.warning("MutationObserver 주입 오류: %s", e)
-            return False
+            return False, ()
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
 
-    def _collect_observer_changes(self, driver) -> list | None:
+    def _collect_observer_changes(
+        self, driver, frame_path: tuple[int, ...] = ()
+    ) -> list | None:
         """MutationObserver 버퍼에서 변경된 텍스트를 수집한다.
 
         Returns:
@@ -2733,6 +3246,8 @@ class MainWindow(QMainWindow):
             None: Observer가 죽었거나 오류 발생 (폴링 fallback 필요)
         """
         try:
+            if not self._switch_to_frame_path(driver, frame_path):
+                return None
             result = driver.execute_script(
                 """
                 if (!window.__subtitleBuffer) return null;
@@ -2747,6 +3262,11 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.debug("Observer 버퍼 수집 오류: %s", e)
             return None
+        finally:
+            try:
+                driver.switch_to.default_content()
+            except Exception:
+                pass
 
     def _activate_subtitle(self, driver) -> bool:
         """자막 레이어 활성화 - 다양한 방법 시도
@@ -2785,10 +3305,12 @@ class MainWindow(QMainWindow):
         """사용 가능한 자막 셀렉터 자동 감지
 
         Returns:
-            str: 찾은 셀렉터 또는 기본 셀렉터
+            str: 찾은 셀렉터. 찾지 못하면 빈 문자열.
         """
         # 우선순위대로 셀렉터 확인
         selectors = [
+            "#viewSubtit .smi_word:last-child",
+            "#viewSubtit .smi_word",
             "#viewSubtit .incont",
             "#viewSubtit span",
             "#viewSubtit",
@@ -2797,18 +3319,14 @@ class MainWindow(QMainWindow):
             "[class*='subtitle']",
         ]
 
-        for sel in selectors:
-            try:
-                elements = driver.find_elements(By.CSS_SELECTOR, sel)
-                for elem in elements:
-                    text = elem.text.strip()
-                    if text and len(text) > 2:  # 의미 있는 텍스트가 있는 경우
-                        logger.info(f"자막 셀렉터 발견: {sel}")
-                        return sel
-            except Exception:
-                continue
-
-        return "#viewSubtit .incont"  # 기본값
+        text, matched_selector, found = self._read_subtitle_text_by_selectors(
+            driver, selectors
+        )
+        if found and matched_selector:
+            if text and len(text) > 2:
+                logger.info(f"자막 셀렉터 발견: {matched_selector}")
+            return matched_selector
+        return ""
 
     def _clear_message_queue(self) -> None:
         """메시지 큐 비우기 (중지/재시작 안정성용)"""
@@ -2970,6 +3488,43 @@ class MainWindow(QMainWindow):
             self._stream_start_time = None
             self._clear_preview()
 
+    def _reset_stream_state_after_subtitle_change(
+        self, keep_history_from_subtitles: bool
+    ) -> None:
+        """외부 편집/로드 후 스트리밍 파이프라인 상태를 재동기화한다."""
+        self.last_subtitle = ""
+        self._stream_start_time = None
+        self._last_raw_text = ""
+        self._last_processed_raw = ""
+        self._preview_desync_count = 0
+        self._preview_ambiguous_skip_count = 0
+        self._last_good_raw_compact = ""
+        self.finalize_timer.stop()
+        self._clear_preview()
+
+        if keep_history_from_subtitles:
+            self._soft_resync()
+        else:
+            self._confirmed_compact = ""
+            self._trailing_suffix = ""
+
+    def _replace_subtitles_and_refresh(
+        self, new_subtitles: list, keep_history_from_subtitles: bool | None = None
+    ) -> None:
+        """자막 전체 교체 후 상태/통계/UI를 일관되게 갱신한다."""
+        if keep_history_from_subtitles is None:
+            keep_history_from_subtitles = bool(new_subtitles)
+
+        with self.subtitle_lock:
+            self.subtitles = list(new_subtitles)
+
+        self._reset_stream_state_after_subtitle_change(
+            keep_history_from_subtitles=keep_history_from_subtitles
+        )
+        self._rebuild_stats_cache()
+        self._refresh_text(force_full=True)
+        self._update_count_label()
+
     def _check_finalize(self):
         """현재 스트리밍 알고리즘에서는 finalize 타이머를 사용하지 않는다."""
         if self.finalize_timer.isActive():
@@ -2993,7 +3548,7 @@ class MainWindow(QMainWindow):
     def _handle_message(self, msg_type, data):
         """개별 메시지 처리"""
         try:
-            if self._is_stopping:
+            if self._is_stopping and msg_type not in ("db_task_result", "db_task_error"):
                 return
             if msg_type == "status":
                 self.status_label.setText(str(data)[:200])
@@ -3120,6 +3675,21 @@ class MainWindow(QMainWindow):
             elif msg_type == "hwp_save_failed":
                 error = data.get("error") if isinstance(data, dict) else data
                 self._handle_hwp_save_failure(error)
+
+            elif msg_type == "db_task_result":
+                task_name = data.get("task") if isinstance(data, dict) else None
+                result = data.get("result") if isinstance(data, dict) else None
+                context = data.get("context") if isinstance(data, dict) else {}
+                if task_name:
+                    self._db_tasks_inflight.discard(task_name)
+                    self._handle_db_task_result(task_name, result, context or {})
+
+            elif msg_type == "db_task_error":
+                task_name = data.get("task") if isinstance(data, dict) else "db_unknown"
+                error = data.get("error") if isinstance(data, dict) else str(data)
+                context = data.get("context") if isinstance(data, dict) else {}
+                self._db_tasks_inflight.discard(task_name)
+                self._handle_db_task_error(task_name, error, context or {})
 
         except Exception as e:
             logger.error(f"메시지 처리 오류 ({msg_type}): {e}")
@@ -3396,7 +3966,9 @@ class MainWindow(QMainWindow):
                 if can_append:
                     old_chars = last_entry.char_count
                     old_words = last_entry.word_count
-                    last_entry.update_text(last_entry.text + " " + text)
+                    last_entry.update_text(
+                        self._join_stream_text(last_entry.text, text)
+                    )
                     last_entry.end_time = datetime.now()
                     self._cached_total_chars += last_entry.char_count - old_chars
                     self._cached_total_words += last_entry.word_count - old_words
@@ -3685,7 +4257,7 @@ class MainWindow(QMainWindow):
                         old_chars = self.subtitles[-1].char_count
                         old_words = self.subtitles[-1].word_count
                         self.subtitles[-1].update_text(
-                            self.subtitles[-1].text + " " + new_part
+                            self._join_stream_text(self.subtitles[-1].text, new_part)
                         )
                         self.subtitles[-1].end_time = datetime.now()
                         # 통계 캐시 갱신
@@ -3831,33 +4403,23 @@ class MainWindow(QMainWindow):
     def _clear_subtitles(self) -> None:
         """자막 목록 초기화"""
         with self.subtitle_lock:
-            if not self.subtitles:
-                self._show_toast("지울 자막이 없습니다", "warning")
-                return
-
             count = len(self.subtitles)
+        if not count:
+            self._show_toast("지울 자막이 없습니다", "warning")
+            return
 
-            # 확인 다이얼로그
-            reply = QMessageBox.question(
-                self,
-                "자막 지우기",
-                f"현재 {count}개의 자막을 모두 지우시겠습니까?\n이 작업은 되돌릴 수 없습니다.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
+        reply = QMessageBox.question(
+            self,
+            "자막 지우기",
+            f"현재 {count}개의 자막을 모두 지우시겠습니까?\n이 작업은 되돌릴 수 없습니다.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
 
-            if reply != QMessageBox.StandardButton.Yes:
-                return
+        if reply != QMessageBox.StandardButton.Yes:
+            return
 
-            self.subtitles.clear()
-            self._cached_total_chars = 0
-            self._cached_total_words = 0
-            self.last_subtitle = ""
-            self._last_processed_raw = ""
-            self._stream_start_time = None
-            self._clear_preview()
-        self._refresh_text(force_full=True)
-        self._update_count_label()
+        self._replace_subtitles_and_refresh([], keep_history_from_subtitles=False)
         self._show_toast(f"🗑️ {count}개 자막 삭제됨", "success")
 
     def _toggle_theme_from_button(self) -> None:
@@ -4753,18 +5315,11 @@ class MainWindow(QMainWindow):
                         new_subtitles.append(SubtitleEntry.from_dict(item))
                     except ValueError as e:
                         logger.warning(f"손상된 자막 항목 건너뜀: {e}")
-                with self.subtitle_lock:
-                    self.subtitles = new_subtitles
-                self.last_subtitle = ""
-                self._stream_start_time = None
-                self.finalize_timer.stop()
-                self._rebuild_stats_cache()
+                self._replace_subtitles_and_refresh(new_subtitles)
 
                 if data.get("url"):
                     self.url_combo.setCurrentText(data["url"])
 
-                self._refresh_text(force_full=True)
-                self._update_count_label()
                 self._show_toast(
                     f"세션 불러오기 완료! {len(self.subtitles)}개 문장", "success"
                 )
@@ -4785,17 +5340,9 @@ class MainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.StandardButton.Yes:
-            with self.subtitle_lock:
-                self.subtitles = []
-            self._cached_total_chars = 0
-            self._cached_total_words = 0
-            self.last_subtitle = ""
-            self._last_processed_raw = ""
-            self._stream_start_time = None
-            self.finalize_timer.stop()
-            self._clear_preview()
-            self._refresh_text(force_full=True)
-            self._update_count_label()
+            self._replace_subtitles_and_refresh(
+                [], keep_history_from_subtitles=False
+            )
             self.status_label.setText("내용 삭제됨")
 
     def _edit_subtitle(self):
@@ -5108,17 +5655,108 @@ class MainWindow(QMainWindow):
 
     # ========== 데이터베이스 기능 (#26) ==========
 
-    def _show_db_history(self):
-        """세션 히스토리 다이얼로그 표시"""
+    def _run_db_task(
+        self,
+        task_name: str,
+        worker,
+        context: dict | None = None,
+        loading_text: str = "",
+    ) -> bool:
+        """DB 작업을 백그라운드 스레드에서 실행하고 결과를 큐로 전달한다."""
         if not self.db:
             QMessageBox.warning(self, "알림", "데이터베이스가 초기화되지 않았습니다.")
+            return False
+
+        if task_name in self._db_tasks_inflight:
+            self._show_toast("이미 같은 DB 작업이 실행 중입니다.", "info")
+            return False
+
+        self._db_tasks_inflight.add(task_name)
+        if loading_text:
+            self._set_status(loading_text, "running")
+
+        payload_context = dict(context or {})
+
+        def _work():
+            try:
+                result = worker()
+                self.message_queue.put(
+                    (
+                        "db_task_result",
+                        {
+                            "task": task_name,
+                            "result": result,
+                            "context": payload_context,
+                        },
+                    )
+                )
+            except Exception as e:
+                logger.exception("DB 작업 실패 (%s)", task_name)
+                self.message_queue.put(
+                    (
+                        "db_task_error",
+                        {"task": task_name, "error": str(e), "context": payload_context},
+                    )
+                )
+
+        threading.Thread(target=_work, daemon=True, name=f"DBTask-{task_name}").start()
+        return True
+
+    def _handle_db_task_result(
+        self, task_name: str, result: Any, context: dict | None = None
+    ) -> None:
+        """DB 비동기 작업 완료 처리 (UI 스레드)."""
+        context = context or {}
+        if task_name == "db_history_list":
+            sessions = result if isinstance(result, list) else []
+            if not sessions:
+                QMessageBox.information(self, "세션 히스토리", "저장된 세션이 없습니다.")
+                self._set_status("세션 히스토리 없음", "info")
+                return
+            self._open_db_history_dialog(sessions)
+            self._set_status("세션 히스토리 조회 완료", "success")
             return
 
-        sessions = self.db.list_sessions(limit=50)
-        if not sessions:
-            QMessageBox.information(self, "세션 히스토리", "저장된 세션이 없습니다.")
+        if task_name == "db_search":
+            query = str(context.get("query", "")).strip()
+            results = result if isinstance(result, list) else []
+            if not results:
+                QMessageBox.information(
+                    self, "검색 결과", f"'{query}'에 대한 검색 결과가 없습니다."
+                )
+                self._set_status("자막 검색 결과 없음", "info")
+                return
+            self._show_db_search_results(query, results)
+            self._set_status(f"자막 검색 완료 ({len(results)}건)", "success")
             return
 
+        if task_name == "db_stats":
+            stats = result if isinstance(result, dict) else {}
+            self._show_db_stats_dialog(stats)
+            self._set_status("DB 통계 조회 완료", "success")
+            return
+
+    def _handle_db_task_error(
+        self, task_name: str, error: str, context: dict | None = None
+    ) -> None:
+        """DB 비동기 작업 실패 처리 (UI 스레드)."""
+        context = context or {}
+        query_hint = str(context.get("query", "")).strip()
+        message = f"DB 작업 실패 ({task_name}): {error}"
+        if task_name == "db_search" and query_hint:
+            message = f"검색 실패 ('{query_hint}'): {error}"
+        self._set_status(message, "error")
+        QMessageBox.warning(self, "데이터베이스 오류", message)
+
+    def _show_db_history(self):
+        """세션 히스토리 다이얼로그 표시"""
+        self._run_db_task(
+            "db_history_list",
+            worker=lambda: self.db.list_sessions(limit=50),
+            loading_text="DB 세션 히스토리 조회 중...",
+        )
+
+    def _open_db_history_dialog(self, sessions: list[dict]) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("📋 세션 히스토리")
         dialog.setMinimumSize(700, 500)
@@ -5148,26 +5786,20 @@ class MainWindow(QMainWindow):
             if idx >= 0:
                 session_id = sessions[idx].get("id")
                 session_data = self.db.load_session(session_id)
-                if session_data:
-                    new_subtitles = []
-                    for item in session_data.get("subtitles", []):
-                        try:
-                            new_subtitles.append(SubtitleEntry.from_dict(item))
-                        except ValueError as e:
-                            logger.warning(f"DB 자막 항목 건너뜀: {e}")
-                    with self.subtitle_lock:
-                        self.subtitles = new_subtitles
-                    self.last_subtitle = ""
-                    self._stream_start_time = None
-                    self.finalize_timer.stop()
-                    self._clear_preview()
-                    self._rebuild_stats_cache()
-                    self._refresh_text(force_full=True)
-                    self._update_count_label()
-                    self._show_toast(
-                        f"세션 불러오기 완료! {len(new_subtitles)}개 문장", "success"
-                    )
-                    dialog.accept()
+                if not session_data:
+                    self._show_toast("세션을 불러오지 못했습니다.", "error")
+                    return
+                new_subtitles = []
+                for item in session_data.get("subtitles", []):
+                    try:
+                        new_subtitles.append(SubtitleEntry.from_dict(item))
+                    except ValueError as e:
+                        logger.warning(f"DB 자막 항목 건너뜀: {e}")
+                self._replace_subtitles_and_refresh(new_subtitles)
+                self._show_toast(
+                    f"세션 불러오기 완료! {len(new_subtitles)}개 문장", "success"
+                )
+                dialog.accept()
 
         load_btn.clicked.connect(load_selected)
         btn_layout.addWidget(load_btn)
@@ -5207,14 +5839,18 @@ class MainWindow(QMainWindow):
             return
 
         query, ok = QInputDialog.getText(self, "자막 검색", "검색어:")
-        if not ok or not query.strip():
+        query = query.strip() if ok and query else ""
+        if not query:
             return
 
-        results = self.db.search_subtitles(query.strip())
-        if not results:
-            QMessageBox.information(self, "검색 결과", "검색 결과가 없습니다.")
-            return
+        self._run_db_task(
+            "db_search",
+            worker=lambda q=query: self.db.search_subtitles(q),
+            context={"query": query},
+            loading_text=f"DB 자막 검색 중... ({query[:15]})",
+        )
 
+    def _show_db_search_results(self, query: str, results: list[dict]) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle(f"🔍 검색 결과 - '{query}'")
         dialog.setMinimumSize(700, 500)
@@ -5239,11 +5875,13 @@ class MainWindow(QMainWindow):
 
     def _show_db_stats(self):
         """데이터베이스 전체 통계"""
-        if not self.db:
-            QMessageBox.warning(self, "알림", "데이터베이스가 초기화되지 않았습니다.")
-            return
+        self._run_db_task(
+            "db_stats",
+            worker=lambda: self.db.get_statistics(),
+            loading_text="DB 통계 조회 중...",
+        )
 
-        stats = self.db.get_statistics()
+    def _show_db_stats_dialog(self, stats: dict) -> None:
         msg = f"""
 <h2>📊 데이터베이스 통계</h2>
 <table>
@@ -5342,7 +5980,8 @@ class MainWindow(QMainWindow):
                     return
 
                 if reply == QMessageBox.StandardButton.Yes:
-                    existing_subtitles = list(self.subtitles)
+                    with self.subtitle_lock:
+                        existing_subtitles = list(self.subtitles)
 
             merged = self._merge_sessions(
                 file_paths,
@@ -5352,15 +5991,7 @@ class MainWindow(QMainWindow):
             )
 
             if merged:
-                with self.subtitle_lock:
-                    self.subtitles = merged
-                self.last_subtitle = ""
-                self._stream_start_time = None
-                self.finalize_timer.stop()
-                self._clear_preview()
-                self._rebuild_stats_cache()
-                self._refresh_text(force_full=True)
-                self._update_count_label()
+                self._replace_subtitles_and_refresh(merged)
                 self._show_toast(f"병합 완료! {len(merged)}개 문장", "success")
                 dialog.accept()
 
@@ -5413,29 +6044,7 @@ class MainWindow(QMainWindow):
             # 원본과 개수 차이 확인
             logger.info(f"스마트 리플로우: {old_count} -> {len(new_subtitles)}")
 
-            # 변경 적용 (Thread-safe)
-            with self.subtitle_lock:
-                self.subtitles = new_subtitles
-
-                # [FIX] 글로벌 히스토리 리셋 - reflow 후 자막 수집이 계속 작동하도록
-                # 새 자막 리스트의 마지막 텍스트를 기준으로 히스토리 재설정
-                if new_subtitles:
-                    last_text = new_subtitles[-1].text if new_subtitles else ""
-                    self._confirmed_compact = utils.compact_subtitle_text(last_text)
-                    if len(self._confirmed_compact) >= self._suffix_length:
-                        self._trailing_suffix = self._confirmed_compact[
-                            -self._suffix_length :
-                        ]
-                    else:
-                        self._trailing_suffix = self._confirmed_compact
-                else:
-                    self._confirmed_compact = ""
-                    self._trailing_suffix = ""
-
-            # UI 갱신
-            self._rebuild_stats_cache()
-            self._refresh_text(force_full=True)
-            self._update_count_label()
+            self._replace_subtitles_and_refresh(new_subtitles)
 
             # 결과 알림
             self._show_toast(f"정리 완료! ({len(new_subtitles)}개 문장)", "success")
@@ -5525,7 +6134,7 @@ class MainWindow(QMainWindow):
             if reply == QMessageBox.StandardButton.No:
                 event.ignore()
                 return
-            self._stop()
+            self._stop(for_app_exit=True)
 
         with self.subtitle_lock:
             subtitle_count = len(self.subtitles)
@@ -5577,30 +6186,21 @@ class MainWindow(QMainWindow):
         self.finalize_timer.stop()
         self.backup_timer.stop()
 
-        # 워커 스레드 종료
-        self.is_running = False
-        self.stop_event.set()
-        if self.worker and self.worker.is_alive():
-            self.worker.join(timeout=Config.THREAD_STOP_TIMEOUT)
-
         if self.realtime_file:
             try:
                 self.realtime_file.close()
             except Exception as e:
                 logger.debug(f"파일 닫기 오류: {e}")
+            self.realtime_file = None
+
+        # closeEvent 시에는 실행 여부와 무관하게 드라이버 정리를 시도한다.
         if self.driver:
-            try:
-                self.driver.quit()
-            except Exception as e:
-                logger.debug(f"WebDriver 종료 오류: {e}")
-        with self._detached_drivers_lock:
-            detached_drivers = list(self._detached_drivers)
-            self._detached_drivers.clear()
-        for drv in detached_drivers:
-            try:
-                drv.quit()
-            except Exception as e:
-                logger.debug(f"분리된 WebDriver 종료 오류: {e}")
+            driver = self.driver
+            self.driver = None
+            self._force_quit_driver_with_timeout(
+                driver, timeout=2.0, source="close_event_idle"
+            )
+        self._cleanup_detached_drivers_with_timeout(timeout=2.0)
 
         # 데이터베이스 연결 정리
         if getattr(self, "db", None):

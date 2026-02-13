@@ -25,7 +25,6 @@ class CollapsibleGroupBox(QGroupBox):
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 8px;
-                cursor: pointer;
             }
         """)
     

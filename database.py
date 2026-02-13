@@ -6,9 +6,7 @@ SQLite 데이터베이스 관리 모듈 (#26)
 
 import sqlite3
 from pathlib import Path
-from datetime import datetime
 from typing import List, Dict, Optional, Any, Union
-import json
 import threading
 import logging
 
@@ -19,6 +17,7 @@ class DatabaseManager:
     """자막 세션 데이터베이스 관리 클래스"""
     
     DEFAULT_DB_PATH = "subtitle_history.db"
+    MAX_QUERY_LIMIT = 500
     
     def __init__(self, db_path: str = None):
         """데이터베이스 매니저 초기화
@@ -32,6 +31,10 @@ class DatabaseManager:
             self.db_path = str(base_dir / self.DEFAULT_DB_PATH)
         else:
             self.db_path = db_path
+
+        # 상위 폴더가 없으면 생성
+        db_parent = Path(self.db_path).resolve().parent
+        db_parent.mkdir(parents=True, exist_ok=True)
             
         self.lock = threading.RLock()
         self._thread_connections = {}  # 스레드별 연결 캐시 (thread_id -> connection)
@@ -47,17 +50,83 @@ class DatabaseManager:
                     logger.error(f"DB 연결 종료 오류 (Thread {thread_id}): {e}")
             self._thread_connections.clear()
             logger.info("모든 DB 연결이 종료되었습니다.")
+
+    @staticmethod
+    def _sanitize_limit(limit: Any, default: int) -> int:
+        """LIMIT 값을 안전한 범위로 정규화"""
+        try:
+            value = int(limit)
+        except (TypeError, ValueError):
+            return default
+        if value <= 0:
+            return default
+        return min(value, DatabaseManager.MAX_QUERY_LIMIT)
+
+    @staticmethod
+    def _sanitize_offset(offset: Any) -> int:
+        """OFFSET 값을 0 이상 정수로 정규화"""
+        try:
+            value = int(offset)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, value)
+
+    @staticmethod
+    def _sanitize_positive_id(value: Any) -> Optional[int]:
+        """양수 ID만 허용하고, 그 외는 None 반환"""
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed > 0 else None
+
+    @staticmethod
+    def _sanitize_query(query: Any) -> str:
+        """검색어 문자열 정규화"""
+        if query is None:
+            return ""
+        return str(query).strip()
+
+    @staticmethod
+    def _sanitize_duration(value: Any) -> int:
+        """duration_seconds 정규화"""
+        try:
+            duration = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, duration)
+
+    def _cleanup_stale_connections_locked(self) -> None:
+        """종료된 스레드의 캐시 연결을 정리한다. (lock 내부 전용)"""
+        if not self._thread_connections:
+            return
+        alive_ids = {t.ident for t in threading.enumerate() if t.ident is not None}
+        stale_ids = [tid for tid in self._thread_connections if tid not in alive_ids]
+        for thread_id in stale_ids:
+            conn = self._thread_connections.pop(thread_id, None)
+            if conn is None:
+                continue
+            try:
+                conn.close()
+            except Exception as e:
+                logger.debug(f"stale DB 연결 종료 오류 (Thread {thread_id}): {e}")
+        if stale_ids:
+            logger.debug("stale DB 연결 정리: %s개", len(stale_ids))
     
     def _get_connection(self) -> sqlite3.Connection:
         """스레드 안전한 연결 생성 및 캐싱"""
         thread_id = threading.get_ident()
         with self.lock:
+            self._cleanup_stale_connections_locked()
             if thread_id not in self._thread_connections:
                 try:
-                    conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                    conn = sqlite3.connect(
+                        self.db_path, check_same_thread=False, timeout=10
+                    )
                     conn.row_factory = sqlite3.Row
                     conn.execute("PRAGMA foreign_keys = ON")
                     conn.execute("PRAGMA journal_mode = WAL")  # 성능 향상을 위해 WAL 모드 사용 권장
+                    conn.execute("PRAGMA busy_timeout = 5000")
                     self._thread_connections[thread_id] = conn
                 except Exception as e:
                     logger.error(f"DB 연결 생성 오류: {e}")
@@ -168,13 +237,23 @@ class DatabaseManager:
         Returns:
             int: 생성된 session_id
         """
+        if not isinstance(session_data, dict):
+            raise ValueError("session_data는 dict여야 합니다.")
+
         with self.lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
                 
-                subtitles = session_data.get("subtitles", [])
+                subtitles_raw = session_data.get("subtitles", [])
+                if isinstance(subtitles_raw, (list, tuple)):
+                    subtitles = [s for s in subtitles_raw if isinstance(s, dict)]
+                else:
+                    subtitles = []
                 total_chars = sum(len(s.get("text", "")) for s in subtitles)
+                duration_seconds = self._sanitize_duration(
+                    session_data.get("duration_seconds", 0)
+                )
                 
                 # 세션 삽입
                 cursor.execute("""
@@ -187,7 +266,7 @@ class DatabaseManager:
                     session_data.get("committee_name", ""),
                     len(subtitles),
                     total_chars,
-                    session_data.get("duration_seconds", 0),
+                    duration_seconds,
                     session_data.get("version", ""),
                     session_data.get("notes", "")
                 ))
@@ -234,6 +313,10 @@ class DatabaseManager:
         Returns:
             dict: 세션 데이터 또는 None
         """
+        safe_session_id = self._sanitize_positive_id(session_id)
+        if safe_session_id is None:
+            return None
+
         with self.lock:
             conn = self._get_connection()
             try:
@@ -242,7 +325,7 @@ class DatabaseManager:
                 # 세션 조회
                 cursor.execute("""
                     SELECT * FROM sessions WHERE id = ?
-                """, (session_id,))
+                """, (safe_session_id,))
                 
                 session_row = cursor.fetchone()
                 if not session_row:
@@ -253,7 +336,7 @@ class DatabaseManager:
                     SELECT * FROM subtitles 
                     WHERE session_id = ? 
                     ORDER BY sequence
-                """, (session_id,))
+                """, (safe_session_id,))
                 
                 subtitle_rows = cursor.fetchall()
                 
@@ -293,6 +376,9 @@ class DatabaseManager:
         Returns:
             List[dict]: 세션 요약 리스트
         """
+        safe_limit = self._sanitize_limit(limit, default=50)
+        safe_offset = self._sanitize_offset(offset)
+
         with self.lock:
             conn = self._get_connection()
             try:
@@ -303,7 +389,7 @@ class DatabaseManager:
                     FROM sessions 
                     ORDER BY created_at DESC
                     LIMIT ? OFFSET ?
-                """, (limit, offset))
+                """, (safe_limit, safe_offset))
                 
                 return [dict(row) for row in cursor.fetchall()]
                 
@@ -322,6 +408,11 @@ class DatabaseManager:
         Returns:
             List[dict]: 검색 결과 (세션 정보 포함)
         """
+        safe_query = self._sanitize_query(query)
+        if not safe_query:
+            return []
+        safe_limit = self._sanitize_limit(limit, default=100)
+
         with self.lock:
             conn = self._get_connection()
             try:
@@ -337,7 +428,7 @@ class DatabaseManager:
                         WHERE s.id IN (SELECT rowid FROM subtitles_fts WHERE text MATCH ? ORDER BY rank)
                         ORDER BY sess.created_at DESC, s.sequence
                         LIMIT ?
-                    """, (query, limit))
+                    """, (safe_query, safe_limit))
                     results = [dict(row) for row in cursor.fetchall()]
                     
                     # FTS 검색 결과가 있으면 반환
@@ -349,7 +440,7 @@ class DatabaseManager:
                     logger.debug(f"FTS 검색 실패, LIKE로 Fallback: {fts_error}")
                 
                 # Fallback: LIKE 검색 (특수문자, 따옴표 등 처리)
-                like_query = f"%{query}%"
+                like_query = f"%{safe_query}%"
                 cursor.execute("""
                     SELECT s.id as subtitle_id, s.text, s.timestamp, s.sequence,
                            sess.id as session_id, sess.created_at, sess.committee_name
@@ -358,7 +449,7 @@ class DatabaseManager:
                     WHERE s.text LIKE ?
                     ORDER BY sess.created_at DESC, s.sequence
                     LIMIT ?
-                """, (like_query, limit))
+                """, (like_query, safe_limit))
                 
                 return [dict(row) for row in cursor.fetchall()]
                 
@@ -376,16 +467,20 @@ class DatabaseManager:
         Returns:
             bool: 삭제 성공 여부
         """
+        safe_session_id = self._sanitize_positive_id(session_id)
+        if safe_session_id is None:
+            return False
+
         with self.lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+                cursor.execute("DELETE FROM sessions WHERE id = ?", (safe_session_id,))
                 conn.commit()
                 
                 deleted = cursor.rowcount > 0
                 if deleted:
-                    logger.info(f"세션 삭제 완료: ID={session_id}")
+                    logger.info(f"세션 삭제 완료: ID={safe_session_id}")
                 return deleted
                 
             except Exception as e:

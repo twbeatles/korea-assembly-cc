@@ -338,6 +338,7 @@ def reflow_subtitles(subtitles: List[SubtitleEntry]) -> List[SubtitleEntry]:
         text = entry.text
         # 원본 타임스탬프의 날짜 부분 (시간은 텍스트에서 추출할 것이므로)
         base_date = entry.timestamp.date()
+        current_timestamp = entry.timestamp
         
         last_pos = 0
         for match in ts_pattern.finditer(text):
@@ -348,7 +349,7 @@ def reflow_subtitles(subtitles: List[SubtitleEntry]) -> List[SubtitleEntry]:
                 # 첫 덩어리면 원본 시간, 아니면 직전 분리된 시간...
                 # 여기서는 단순화를 위해 첫 덩어리는 원본 시간을 씁니다.
                 # (중간 텍스트의 정확한 시간 추정은 어려움)
-                expanded_entries.append(SubtitleEntry(pre_text, entry.timestamp))
+                expanded_entries.append(SubtitleEntry(pre_text, current_timestamp))
             
             # 타임스탬프 시간 파싱
             ts_str = match.group(1)
@@ -365,8 +366,8 @@ def reflow_subtitles(subtitles: List[SubtitleEntry]) -> List[SubtitleEntry]:
                 # 다음 텍스트 덩어리의 시작 시간으로 설정합니다.
                 
                 # 타임스탬프 텍스트 자체는 제거 (깔끔한 자막을 위해)
-                # entry.timestamp = new_dt (다음에 올 텍스트를 위해 저장해둬야 함)
-                entry.timestamp = new_dt 
+                # 입력 엔트리 원본은 수정하지 않고 로컬 타임스탬프만 갱신한다.
+                current_timestamp = new_dt
                 
             except ValueError:
                 pass # 파싱 실패 시 무시
@@ -376,7 +377,7 @@ def reflow_subtitles(subtitles: List[SubtitleEntry]) -> List[SubtitleEntry]:
         # 남은 텍스트
         remaining_text = text[last_pos:].strip()
         if remaining_text:
-            expanded_entries.append(SubtitleEntry(remaining_text, entry.timestamp))
+            expanded_entries.append(SubtitleEntry(remaining_text, current_timestamp))
 
     if not expanded_entries:
         return []

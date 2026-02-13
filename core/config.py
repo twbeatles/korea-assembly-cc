@@ -58,9 +58,11 @@ class Config:
     
     # 기본 CSS 선택자
     DEFAULT_SELECTORS = [
+        "#viewSubtit .smi_word:last-child",
+        "#viewSubtit .smi_word",
         "#viewSubtit .incont",
         "#viewSubtit",
-        ".subtitle_area"
+        ".subtitle_area",
     ]
     
     # 기본 URL
