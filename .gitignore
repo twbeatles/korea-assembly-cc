@@ -48,6 +48,8 @@ tmp_extension.crx
 # -----------------------------------------------------------------------------
 # Local database/state files
 # -----------------------------------------------------------------------------
+*.db
+*.json
 subtitle_history.db
 subtitle_history.db-*
 *.db-shm
@@ -63,6 +65,8 @@ committee_presets.json
 *.srt
 *.vtt
 *.rtf
+*.hwp
+*.docx
 국회자막_*.hwp
 자막통계_*.txt
 backup_*.json
@@ -73,4 +77,3 @@ backup_*.json
 .DS_Store
 Thumbs.db
 desktop.ini
-
