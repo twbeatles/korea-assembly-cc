@@ -1312,8 +1312,8 @@ class MainWindow(QMainWindow):
     def _load_url_history(self):
         """URL 히스토리 로드 - {url: tag} 형태"""
         try:
-            if Path("url_history.json").exists():
-                with open("url_history.json", "r", encoding="utf-8") as f:
+            if Path(Config.URL_HISTORY_FILE).exists():
+                with open(Config.URL_HISTORY_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     # dict 형태인지 확인 (새로운 형식)
                     if isinstance(data, dict):
@@ -1330,8 +1330,12 @@ class MainWindow(QMainWindow):
         try:
             if not isinstance(self.url_history, dict):
                 self.url_history = {}
-            with open("url_history.json", "w", encoding="utf-8") as f:
-                json.dump(self.url_history, f, ensure_ascii=False, indent=2)
+            utils.atomic_write_json(
+                Config.URL_HISTORY_FILE,
+                self.url_history,
+                ensure_ascii=False,
+                indent=2,
+            )
         except Exception as e:
             logger.warning(f"URL 히스토리 저장 오류: {e}")
 
@@ -1468,8 +1472,12 @@ class MainWindow(QMainWindow):
         """프리셋을 파일에 저장"""
         try:
             data = {"presets": self.committee_presets, "custom": self.custom_presets}
-            with open(Config.PRESET_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            utils.atomic_write_json(
+                Config.PRESET_FILE,
+                data,
+                ensure_ascii=False,
+                indent=2,
+            )
         except Exception as e:
             logger.warning(f"프리셋 저장 오류: {e}")
 
@@ -2705,7 +2713,7 @@ class MainWindow(QMainWindow):
 
                     # 자동 재연결 로직 (#4)
                     if (
-                        Config.AUTO_RECONNECT_ENABLED
+                        self.auto_reconnect_enabled
                         and self._is_recoverable_webdriver_error(e)
                     ):
                         reconnect_attempt += 1
@@ -3305,12 +3313,18 @@ class MainWindow(QMainWindow):
         ]
 
         activated = False
-        for script in activation_scripts:
+        for idx, script in enumerate(activation_scripts, start=1):
             try:
                 result = driver.execute_script(script)
                 if result:
-                    logger.info(f"자막 활성화 성공: {script[:50]}...")
+                    logger.info(
+                        "자막 활성화 성공 (step=%s/%s): %s...",
+                        idx,
+                        len(activation_scripts),
+                        script[:50],
+                    )
                     activated = True
+                    break
                 self.stop_event.wait(timeout=0.5)
             except Exception as e:
                 logger.debug(f"자막 활성화 스크립트 실패: {e}")
@@ -4735,8 +4749,12 @@ class MainWindow(QMainWindow):
 
         def write_backup():
             try:
-                with open(backup_file, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                utils.atomic_write_json(
+                    backup_file,
+                    data,
+                    ensure_ascii=False,
+                    indent=2,
+                )
 
                 # 오래된 백업 삭제 (최대 개수 유지)
                 self._cleanup_old_backups()
@@ -5408,8 +5426,12 @@ class MainWindow(QMainWindow):
                     "subtitles": subtitles_copy,
                 }
 
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                utils.atomic_write_json(
+                    path,
+                    data,
+                    ensure_ascii=False,
+                    indent=2,
+                )
 
                 db_saved = False
                 db_error = ""

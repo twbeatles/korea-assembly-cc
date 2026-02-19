@@ -1,6 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
 
 import re
+import sys
 from pathlib import Path
 
 
@@ -17,10 +18,18 @@ def _load_version_from_readme(default: str = "unknown") -> str:
     except Exception:
         return default
 
+
+def _resolve_app_base_dir() -> Path:
+    """앱 데이터/설정 파일의 기준 디렉터리를 계산한다."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
 class Config:
     """프로그램 설정 상수"""
     VERSION = _load_version_from_readme()
     APP_NAME = "국회 의사중계 자막 추출기"
+    APP_BASE_DIR = _resolve_app_base_dir()
     
     # 타이밍 상수 (초)
     SUBTITLE_FINALIZE_DELAY = 3.0      # 자막 확정까지 대기 시간 (앵커 기반 알고리즘)
@@ -50,11 +59,12 @@ class Config:
     MAX_WORD_DIFF_OVERLAP = 200        # get_word_diff 최대 겹침 탐색 길이
     
     # 경로
-    LOG_DIR = "logs"
-    SESSION_DIR = "sessions"
-    REALTIME_DIR = "realtime_output"
-    BACKUP_DIR = "backups"
-    PRESET_FILE = "committee_presets.json"
+    LOG_DIR = str(APP_BASE_DIR / "logs")
+    SESSION_DIR = str(APP_BASE_DIR / "sessions")
+    REALTIME_DIR = str(APP_BASE_DIR / "realtime_output")
+    BACKUP_DIR = str(APP_BASE_DIR / "backups")
+    PRESET_FILE = str(APP_BASE_DIR / "committee_presets.json")
+    URL_HISTORY_FILE = str(APP_BASE_DIR / "url_history.json")
     
     # 기본 CSS 선택자
     DEFAULT_SELECTORS = [
@@ -195,7 +205,7 @@ class Config:
     FILENAME_TIME_FORMAT = "%H%M%S"
     
     # 데이터베이스 (#26)
-    DATABASE_PATH = "subtitle_history.db"
+    DATABASE_PATH = str(APP_BASE_DIR / "subtitle_history.db")
     
     # 성능 최적화: 사전 컴파일된 정규식 패턴
     RE_YEAR = re.compile(r'\b\d{4}년\b')              # 년도 제거용
