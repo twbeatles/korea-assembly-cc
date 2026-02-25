@@ -33,11 +33,31 @@ class _ReconnectEvent:
         return True
 
 
+class _StopAfterFirstWaitEvent:
+    def __init__(self):
+        self._wait_calls = 0
+        self._is_set = False
+
+    def is_set(self):
+        return self._is_set
+
+    def wait(self, timeout=None):
+        self._wait_calls += 1
+        if self._wait_calls >= 1:
+            self._is_set = True
+            return True
+        return False
+
+
 class _FakeDriver:
     def __init__(self):
         self.quit_calls = 0
+        self.get_calls = []
+        self.current_url = ""
 
-    def get(self, _url):
+    def get(self, url):
+        self.get_calls.append(url)
+        self.current_url = url
         return None
 
     def execute_script(self, _script):
@@ -67,6 +87,18 @@ def _build_window(auto_reconnect_enabled: bool):
     return win
 
 
+def _configure_basic_worker_stubs(win):
+    win._activate_subtitle = lambda _driver: True
+    win._build_subtitle_selector_candidates = (
+        lambda selector, extras=None: [selector]
+    )
+    win._inject_mutation_observer = lambda _driver, _selector: (False, ())
+    win._read_subtitle_text_by_selectors = (
+        lambda _driver, _selectors: ("", "", False)
+    )
+    win._find_subtitle_selector = lambda _driver: ""
+
+
 def test_activate_subtitle_stops_after_first_success():
     class ToggleDriver:
         def __init__(self):
@@ -90,15 +122,7 @@ def test_extraction_worker_respects_auto_reconnect_setting(monkeypatch):
     win = _build_window(auto_reconnect_enabled=False)
     delay_calls = []
 
-    win._activate_subtitle = lambda _driver: True
-    win._build_subtitle_selector_candidates = (
-        lambda selector, extras=None: [selector]
-    )
-    win._inject_mutation_observer = lambda _driver, _selector: (False, ())
-    win._read_subtitle_text_by_selectors = (
-        lambda _driver, _selectors: ("", "", False)
-    )
-    win._find_subtitle_selector = lambda _driver: ""
+    _configure_basic_worker_stubs(win)
     win._get_reconnect_delay = lambda attempt: delay_calls.append(attempt) or 0.0
 
     monkeypatch.setattr(mw_mod.webdriver, "Chrome", lambda options=None: _FakeDriver())
@@ -107,3 +131,59 @@ def test_extraction_worker_respects_auto_reconnect_setting(monkeypatch):
     MainWindow._extraction_worker(win, "https://example.com/live", "#viewSubtit", False)
 
     assert delay_calls == []
+
+
+def test_extraction_worker_detects_live_url_when_xcgcd_missing(monkeypatch):
+    driver = _FakeDriver()
+    win = _build_window(auto_reconnect_enabled=False)
+    win.stop_event = _StopAfterFirstWaitEvent()
+    _configure_basic_worker_stubs(win)
+
+    original_url = "https://example.com/live?xcode=10"
+    resolved_url = "https://example.com/live?xcode=10&xcgcd=DCM0000101234567890"
+    detect_calls = []
+
+    def fake_detect(_driver, url):
+        detect_calls.append(url)
+        return resolved_url
+
+    win._detect_live_broadcast = fake_detect
+
+    monkeypatch.setattr(mw_mod.webdriver, "Chrome", lambda options=None: driver)
+    monkeypatch.setattr(mw_mod, "WebDriverWait", _FakeWebDriverWait)
+
+    MainWindow._extraction_worker(win, original_url, "#viewSubtit", False)
+
+    assert detect_calls == [original_url]
+    assert driver.get_calls[:2] == [original_url, resolved_url]
+
+    queued = []
+    while not win.message_queue.empty():
+        queued.append(win.message_queue.get_nowait())
+    assert ("resolved_url", resolved_url) in queued
+
+
+def test_extraction_worker_skips_live_detect_when_xcgcd_exists(monkeypatch):
+    driver = _FakeDriver()
+    win = _build_window(auto_reconnect_enabled=False)
+    win.stop_event = _StopAfterFirstWaitEvent()
+    _configure_basic_worker_stubs(win)
+
+    url_with_xcgcd = "https://example.com/live?xcode=10&xcgcd=DCM0000101234567890"
+
+    def should_not_call(*_args, **_kwargs):
+        raise AssertionError("_detect_live_broadcast should not be called")
+
+    win._detect_live_broadcast = should_not_call
+
+    monkeypatch.setattr(mw_mod.webdriver, "Chrome", lambda options=None: driver)
+    monkeypatch.setattr(mw_mod, "WebDriverWait", _FakeWebDriverWait)
+
+    MainWindow._extraction_worker(win, url_with_xcgcd, "#viewSubtit", False)
+
+    assert driver.get_calls == [url_with_xcgcd]
+
+    queued = []
+    while not win.message_queue.empty():
+        queued.append(win.message_queue.get_nowait())
+    assert not any(msg_type == "resolved_url" for msg_type, _ in queued)

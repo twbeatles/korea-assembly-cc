@@ -1,0 +1,64 @@
+import json
+
+import pytest
+
+from core.models import SubtitleEntry
+
+mw_mod = pytest.importorskip("ui.main_window")
+MainWindow = mw_mod.MainWindow
+
+
+def test_subtitle_entry_from_dict_rejects_non_dict():
+    with pytest.raises(ValueError):
+        SubtitleEntry.from_dict("not-a-dict")
+
+
+def test_deserialize_subtitles_skips_corrupted_items():
+    win = MainWindow.__new__(MainWindow)
+
+    items = [
+        {"text": "정상 자막", "timestamp": "2026-02-12T10:00:00"},
+        "잘못된 타입",
+        None,
+        {"text": "타임스탬프 누락"},
+    ]
+
+    parsed, skipped = MainWindow._deserialize_subtitles(
+        win, items, source="test-mixed"
+    )
+
+    assert len(parsed) == 1
+    assert parsed[0].text == "정상 자막"
+    assert skipped == 3
+
+
+def test_merge_sessions_skips_corrupted_items(tmp_path):
+    win = MainWindow.__new__(MainWindow)
+
+    valid_and_invalid = tmp_path / "mixed.json"
+    valid_and_invalid.write_text(
+        json.dumps(
+            {
+                "subtitles": [
+                    {"text": "정상 항목", "timestamp": "2026-02-12T11:00:00"},
+                    "깨진 항목",
+                    {"timestamp": "2026-02-12T11:00:01"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    broken_json = tmp_path / "broken.json"
+    broken_json.write_text("{not-json", encoding="utf-8")
+
+    merged = MainWindow._merge_sessions(
+        win,
+        [str(valid_and_invalid), str(broken_json)],
+        remove_duplicates=False,
+        sort_by_time=True,
+    )
+
+    assert len(merged) == 1
+    assert merged[0].text == "정상 항목"

@@ -7,11 +7,13 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from core.config import Config
+
 
 def setup_logging():
     """로깅 시스템 초기화 - 파일 및 콘솔 출력"""
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
+    log_dir = Path(Config.LOG_DIR)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     log_file = log_dir / f"subtitle_{datetime.now().strftime('%Y%m%d')}.log"
 

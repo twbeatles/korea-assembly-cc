@@ -54,6 +54,9 @@ class SubtitleEntry:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'SubtitleEntry':
         """딕셔너리에서 생성 - 방어 코드 포함"""
+        if not isinstance(data, dict):
+            raise ValueError("자막 항목은 dict 타입이어야 합니다")
+
         # 필수 필드 검증
         text = data.get('text', '')
         timestamp_str = data.get('timestamp')

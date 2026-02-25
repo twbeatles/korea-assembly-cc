@@ -52,13 +52,14 @@
 
 ### 4.2 자막 처리 흐름
 1. Worker: MutationObserver 우선, 폴링 fallback → compact 기준 중복 전송 억제 후 `preview` 전송
-2. Worker: 선택자 우선순위(`.smi_word:last-child` 우선) + 기본 문서/iframe 순회로 자막 요소 탐색
-3. Worker: 타겟 미탐색 시 `allow_poll_fallback` 기반 JS 폴링 브리지 활성화
-4. UI: `_prepare_preview_raw`에서 정규화/게이팅/재동기화 처리 (desync 시 `_soft_resync`)
-5. Core: `_process_raw_text`(GlobalHistory + Suffix, `rfind` 기반)로 새 부분 추출
-6. 후단 정제: `get_word_diff` + recent compact tail 체크로 대량 반복 누적 2차 방지
-7. 중지 시: `_drain_pending_previews`로 큐를 소진하고 강제 플러시로 누락 방지
-8. 동일 자막 유지 시: 마지막 엔트리 `end_time` 주기 갱신
+2. Worker: 시작/재연결 시 URL에 `xcgcd`가 없으면 `xcode` 기준 자동 감지를 1회 수행해 보완 URL로 재접속
+3. Worker: 선택자 우선순위(`.smi_word:last-child` 우선) + 기본 문서/iframe 순회로 자막 요소 탐색
+4. Worker: 타겟 미탐색 시 `allow_poll_fallback` 기반 JS 폴링 브리지 활성화
+5. UI: `_prepare_preview_raw`에서 정규화/게이팅/재동기화 처리 (desync 시 `_soft_resync`)
+6. Core: `_process_raw_text`(GlobalHistory + Suffix, `rfind` 기반)로 새 부분 추출
+7. 후단 정제: `get_word_diff` + recent compact tail 체크 + 유의미 텍스트 게이트(짧은 발화 허용/노이즈 차단)
+8. 중지 시: `_drain_pending_previews`로 큐를 소진하고 강제 플러시로 누락 방지
+9. 동일 자막 유지 시: 마지막 엔트리 `end_time` 주기 갱신
 
 ### 4.3 예외 처리
 - 파일 I/O: `try-except` 필수
@@ -153,6 +154,7 @@ pip install pywin32  # HWP 저장
 ### #31 자동 재연결
 - 지수 백오프 알고리즘 (2→4→8→16→32초)
 - 최대 5회 재시도, 토스트 알림
+- URL에 `xcgcd`가 없는 경우에만 자동 감지를 연결하고, 이미 있으면 기존 URL 유지
 
 ### #28 자동 파일명 생성
 - 형식: `20260122_법제사법위원회_134500.txt`
@@ -249,6 +251,13 @@ pip install pywin32  # HWP 저장
 - **프레임 경로 탐색**: 최근 성공 프레임 + 중첩 iframe/frame 순회
 - **폴링 브리지 fallback**: 타겟 요소 미탐색 시 JS 내부 180ms 주기 selector 스캔 브리지 활성화
 - **재연결 시 자동 재주입**: WebDriver 재연결 후 Observer 자동 재주입
+
+## 9.6 v16.12.1 안정화 패치 (2026-02-25)
+
+- **짧은 발화 수집 보강**: `네/예/ok` 같은 1~2글자 발화를 허용하고, 기호-only/숫자-only 노이즈를 차단
+- **세션 내결함성 개선**: 세션 로드/DB 로드/병합에서 손상 항목만 건너뛰고 나머지 항목은 유지
+- **저장 비차단화 확장**: RTF 저장, 통계 내보내기를 `_save_in_background` 경로로 전환
+- **로그 경로 정합성**: 로그 디렉터리를 `Config.LOG_DIR` 기준으로 통일
 
 
 ## 10. 자막 수집 알고리즘

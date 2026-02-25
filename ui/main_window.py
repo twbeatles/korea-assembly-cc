@@ -2529,6 +2529,22 @@ class MainWindow(QMainWindow):
 
             self.message_queue.put(("status", "페이지 로딩 중..."))
             driver.get(url)
+
+            if not self._get_query_param(url, "xcgcd").strip():
+                try:
+                    resolved_url = self._detect_live_broadcast(driver, url)
+                    if isinstance(resolved_url, str):
+                        resolved_url = resolved_url.strip()
+                    if resolved_url and resolved_url != url:
+                        url = resolved_url
+                        self.message_queue.put(("resolved_url", url))
+                        self.message_queue.put(
+                            ("status", "감지된 생중계 URL로 재접속 중...")
+                        )
+                        driver.get(url)
+                except Exception as live_err:
+                    logger.warning("생중계 자동 감지 실패: %s", live_err)
+
             self.stop_event.wait(timeout=3)
 
             self.message_queue.put(("status", "AI 자막 활성화 중..."))
@@ -2752,6 +2768,30 @@ class MainWindow(QMainWindow):
                                 driver = webdriver.Chrome(options=options)
                                 self.driver = driver
                                 driver.get(url)
+                                if not self._get_query_param(url, "xcgcd").strip():
+                                    try:
+                                        resolved_url = self._detect_live_broadcast(
+                                            driver, url
+                                        )
+                                        if isinstance(resolved_url, str):
+                                            resolved_url = resolved_url.strip()
+                                        if resolved_url and resolved_url != url:
+                                            url = resolved_url
+                                            self.message_queue.put(
+                                                ("resolved_url", url)
+                                            )
+                                            self.message_queue.put(
+                                                (
+                                                    "status",
+                                                    "감지된 생중계 URL로 재접속 중...",
+                                                )
+                                            )
+                                            driver.get(url)
+                                    except Exception as live_err:
+                                        logger.warning(
+                                            "재연결 후 생중계 자동 감지 실패: %s",
+                                            live_err,
+                                        )
                                 if self.stop_event.wait(timeout=2):
                                     break
                                 self._activate_subtitle(driver)
@@ -3596,6 +3636,17 @@ class MainWindow(QMainWindow):
                     self.status_label.setText(status_text)
                     self._last_status_message = status_text
 
+            elif msg_type == "resolved_url":
+                resolved_url = str(data or "").strip()
+                if resolved_url:
+                    self.current_url = resolved_url
+                    self._add_to_history(resolved_url)
+                    idx = self.url_combo.findData(resolved_url)
+                    if idx >= 0:
+                        self.url_combo.setCurrentIndex(idx)
+                    else:
+                        self.url_combo.setEditText(resolved_url)
+
             elif msg_type == "toast":
                 # 다른 스레드에서 온 UI 알림은 Queue로 전달받아 UI 스레드에서 처리한다.
                 if isinstance(data, dict):
@@ -3970,11 +4021,11 @@ class MainWindow(QMainWindow):
         # 새로운 부분 추출
         new_part = self._extract_new_part(raw, raw_compact)
 
-        if not new_part or len(new_part.strip()) < 3:
-            # 새 내용 없음
+        if not new_part:
             return
-
         new_part = new_part.strip()
+        if not utils.is_meaningful_subtitle_text(new_part):
+            return
 
         # 코어 알고리즘 결과를 최근 확정 자막 기준으로 한 번 더 정제해
         # 대량 반복 블록이 그대로 누적되는 것을 방지한다.
@@ -3983,9 +4034,11 @@ class MainWindow(QMainWindow):
 
         if last_text:
             refined_part = utils.get_word_diff(last_text, new_part)
-            if not refined_part or len(refined_part.strip()) < 3:
+            if not refined_part:
                 return
             new_part = refined_part.strip()
+            if not utils.is_meaningful_subtitle_text(new_part):
+                return
 
         new_compact = utils.compact_subtitle_text(new_part)
         recent_compact_tail = self._confirmed_history_compact_tail(
@@ -4078,8 +4131,9 @@ class MainWindow(QMainWindow):
 
     def _add_text_to_subtitles(self, text: str) -> None:
         """확정된 텍스트를 SubtitleEntry로 변환하여 저장"""
-        if not text or len(text) < 3:
+        if not utils.is_meaningful_subtitle_text(text):
             return
+        text = text.strip()
 
         with self.subtitle_lock:
             # 마지막 엔트리에 이어붙일지, 새 엔트리 만들지 결정
@@ -4837,20 +4891,10 @@ class MainWindow(QMainWindow):
         # 스레드 안전하게 자막 스냅샷 생성
         with self.subtitle_lock:
             subtitles_snapshot = list(self.subtitles)
-
-        # 통계 계산
-        total_chars = sum(len(s.text) for s in subtitles_snapshot)
-        total_words = sum(len(s.text.split()) for s in subtitles_snapshot)
-
-        # 시간대별 통계
-        hour_counts = {}
-        for entry in subtitles_snapshot:
-            hour = entry.timestamp.hour
-            hour_counts[hour] = hour_counts.get(hour, 0) + 1
-
-        # 가장 긴/짧은 문장
-        longest = max(subtitles_snapshot, key=lambda s: len(s.text))
-        shortest = min(subtitles_snapshot, key=lambda s: len(s.text))
+        if not subtitles_snapshot:
+            QMessageBox.warning(self, "알림", "내보낼 내용이 없습니다.")
+            return
+        keywords_snapshot = list(self.keywords)
 
         # 파일 저장
         filename = f"자막통계_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
@@ -4859,15 +4903,27 @@ class MainWindow(QMainWindow):
         )
 
         if path:
-            try:
-                with open(path, "w", encoding="utf-8") as f:
+            def do_save(filepath):
+                # 통계 계산
+                total_chars = sum(len(s.text) for s in subtitles_snapshot)
+                total_words = sum(len(s.text.split()) for s in subtitles_snapshot)
+
+                hour_counts = {}
+                for entry in subtitles_snapshot:
+                    hour = entry.timestamp.hour
+                    hour_counts[hour] = hour_counts.get(hour, 0) + 1
+
+                longest = max(subtitles_snapshot, key=lambda s: len(s.text))
+                shortest = min(subtitles_snapshot, key=lambda s: len(s.text))
+
+                generated_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
+
+                with open(filepath, "w", encoding="utf-8") as f:
                     f.write("=" * 50 + "\n")
                     f.write("        🏛️ 국회 자막 통계 보고서\n")
                     f.write("=" * 50 + "\n\n")
 
-                    f.write(
-                        f"생성 일시: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M:%S')}\n\n"
-                    )
+                    f.write(f"생성 일시: {generated_at}\n\n")
 
                     f.write("📊 기본 통계\n")
                     f.write("-" * 30 + "\n")
@@ -4899,11 +4955,11 @@ class MainWindow(QMainWindow):
                         f.write("\n")
 
                     # 하이라이트 키워드 통계
-                    if self.keywords:
+                    if keywords_snapshot:
                         f.write("🔍 키워드 빈도\n")
                         f.write("-" * 30 + "\n")
                         all_text = " ".join(s.text for s in subtitles_snapshot).lower()
-                        for kw in self.keywords:
+                        for kw in keywords_snapshot:
                             count = all_text.count(kw.lower())
                             if count > 0:
                                 f.write(f"  {kw}: {count}회\n")
@@ -4911,9 +4967,12 @@ class MainWindow(QMainWindow):
 
                     f.write("=" * 50 + "\n")
 
-                self._show_toast("통계 내보내기 완료!", "success")
-            except Exception as e:
-                QMessageBox.critical(self, "오류", f"통계 저장 실패: {e}")
+            self._save_in_background(
+                do_save,
+                path,
+                "통계 내보내기 완료!",
+                "통계 저장 실패",
+            )
 
     def _generate_smart_filename(self, extension: str) -> str:
         """URL과 현재 시간 기반 스마트 파일명 생성 (#28)"""
@@ -5306,12 +5365,17 @@ class MainWindow(QMainWindow):
         )
 
         if path:
-            try:
-                # 스레드 안전하게 자막 스냅샷 생성
-                with self.subtitle_lock:
-                    subtitles_snapshot = list(self.subtitles)
+            # 스레드 안전하게 자막 스냅샷 생성
+            with self.subtitle_lock:
+                subtitles_snapshot = list(self.subtitles)
+            if not subtitles_snapshot:
+                QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
+                return
 
-                with open(path, "wb") as f:  # 바이너리 모드로 변경
+            generated_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
+
+            def do_save(filepath):
+                with open(filepath, "wb") as f:  # 바이너리 모드
                     # RTF 헤더 (유니코드 지원)
                     f.write(b"{\\rtf1\\ansi\\ansicpg949\\deff0")
                     f.write(
@@ -5329,9 +5393,7 @@ class MainWindow(QMainWindow):
                     f.write(b"\\b0\\par\n")
 
                     # 생성 일시
-                    date_str = self._rtf_encode(
-                        f"생성 일시: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M:%S')}"
-                    )
+                    date_str = self._rtf_encode(f"생성 일시: {generated_at}")
                     f.write(b"\\pard\\ql\\fs20 ")
                     f.write(date_str.encode("cp949", errors="replace"))
                     f.write(b"\\par\\par\n")
@@ -5355,14 +5417,12 @@ class MainWindow(QMainWindow):
                     f.write(stats.encode("cp949", errors="replace"))
                     f.write(b"\\par}")
 
-                QMessageBox.information(
-                    self,
-                    "성공",
-                    f"RTF 저장 완료!\n\n파일: {path}\n\n이 파일은 한글(HWP)에서 열 수 있습니다.",
-                )
-
-            except Exception as e:
-                QMessageBox.critical(self, "오류", f"RTF 저장 실패: {e}")
+            self._save_in_background(
+                do_save,
+                path,
+                "RTF 저장 완료! (한글에서 열 수 있습니다)",
+                "RTF 저장 실패",
+            )
 
     # ========== 세션 ==========
 
@@ -5501,14 +5561,10 @@ class MainWindow(QMainWindow):
                     return
 
                 session_version = data.get("version", "unknown")
-                new_subtitles = []
-                skipped = 0
-                for item in data.get("subtitles", []):
-                    try:
-                        new_subtitles.append(SubtitleEntry.from_dict(item))
-                    except ValueError as e:
-                        logger.warning(f"손상된 자막 항목 건너뜀: {e}")
-                        skipped += 1
+                new_subtitles, skipped = self._deserialize_subtitles(
+                    data.get("subtitles", []),
+                    source=f"session:{path}",
+                )
 
                 self.message_queue.put(
                     (
@@ -5534,6 +5590,29 @@ class MainWindow(QMainWindow):
         self._show_toast(f"📂 세션 불러오기 시작: {Path(path).name}", "info", 1500)
 
     # ========== 유틸리티 ==========
+    def _deserialize_subtitles(
+        self, serialized_items, source: str = ""
+    ) -> tuple[list[SubtitleEntry], int]:
+        """직렬화된 자막 목록을 SubtitleEntry 리스트로 변환한다."""
+        entries: list[SubtitleEntry] = []
+        skipped = 0
+
+        if serialized_items is None:
+            return entries, skipped
+
+        if not isinstance(serialized_items, (list, tuple)):
+            logger.warning("자막 목록 타입 오류 (%s): %s", source, type(serialized_items))
+            return entries, 1
+
+        for item in serialized_items:
+            try:
+                entries.append(SubtitleEntry.from_dict(item))
+            except (ValueError, TypeError, KeyError) as e:
+                logger.warning("손상된 자막 항목 건너뜀 (%s): %s", source, e)
+                skipped += 1
+
+        return entries, skipped
+
     def _clear_text(self):
         if not self.subtitles:
             return
@@ -6091,14 +6170,10 @@ class MainWindow(QMainWindow):
                 session_data = self.db.load_session(sid)
                 if not session_data:
                     return {"ok": False, "subtitles": [], "skipped": 0}
-                new_subtitles = []
-                skipped = 0
-                for item in session_data.get("subtitles", []):
-                    try:
-                        new_subtitles.append(SubtitleEntry.from_dict(item))
-                    except ValueError as e:
-                        logger.warning(f"DB 자막 항목 건너뜀: {e}")
-                        skipped += 1
+                new_subtitles, skipped = self._deserialize_subtitles(
+                    session_data.get("subtitles", []),
+                    source=f"db_session:{sid}",
+                )
                 return {"ok": True, "subtitles": new_subtitles, "skipped": skipped}
 
             started = self._run_db_task(
@@ -6416,12 +6491,13 @@ class MainWindow(QMainWindow):
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
-                for item in data.get("subtitles", []):
-                    try:
-                        entry = SubtitleEntry.from_dict(item)
-                        all_entries.append(entry)
-                    except ValueError as e:
-                        logger.warning(f"자막 항목 건너뜀 ({path}): {e}")
+                entries, skipped = self._deserialize_subtitles(
+                    data.get("subtitles", []),
+                    source=str(path),
+                )
+                all_entries.extend(entries)
+                if skipped:
+                    logger.warning("자막 항목 %s개 건너뜀 (%s)", skipped, path)
 
             except Exception as e:
                 logger.warning(f"파일 로드 실패 ({path}): {e}")

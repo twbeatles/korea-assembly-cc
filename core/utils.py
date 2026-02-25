@@ -73,6 +73,31 @@ def compact_subtitle_text(text: str) -> str:
     text = Config.RE_ZERO_WIDTH.sub('', text)
     return Config.RE_MULTI_SPACE.sub('', text).strip()
 
+def is_meaningful_subtitle_text(text: str) -> bool:
+    """자막으로 볼 수 있는 유의미 텍스트인지 판별한다.
+
+    규칙:
+    - 빈값/공백/순수 기호/순수 숫자는 제외
+    - 한글/영문이 1자라도 있으면 길이와 무관하게 허용
+    """
+    if text is None:
+        return False
+
+    normalized = clean_text_display(str(text)).strip()
+    if not normalized:
+        return False
+
+    if re.search(r"[가-힣A-Za-z]", normalized):
+        return True
+
+    if re.fullmatch(r"[\d\s.,:;+\-*/()%]+", normalized):
+        return False
+
+    if re.fullmatch(r"[\W_]+", normalized, flags=re.UNICODE):
+        return False
+
+    return False
+
 def slice_from_compact_index(text: str, compact_index: int) -> str:
     """compact 인덱스(공백 제거 기준) 위치부터 원문 슬라이스를 반환"""
     if not text:

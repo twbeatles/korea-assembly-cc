@@ -31,6 +31,11 @@
 - `_extraction_worker`: MutationObserver 하이브리드 아키텍처 도입
 - `subtitle_reset` 메커니즘: 발언자 전환(자막 영역 클리어) 감지 시 즉시 완전 리셋 + 버퍼 확정
 
+### 2.2 안정화 이력 (v16.12.1, 2026-02-25)
+- `_extraction_worker`: URL에 `xcgcd`가 없을 때만 `xcode` 기반 자동 감지를 연결
+- `_process_raw_text`/`_add_text_to_subtitles`: 1~2글자 발화 허용 + 기호/숫자-only 노이즈 차단 게이트 적용
+- 세션 로드/병합 경로: 손상 항목만 건너뛰는 내결함성 강화
+
 ---
 
 ## 3. 현재 고정 파이프라인
@@ -112,6 +117,7 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 ### 4.5 후단 정제
 - `get_word_diff` 기반 2차 정제
 - recent compact tail 포함 여부 확인으로 대량 재누적 차단
+- 유의미 텍스트 게이트로 짧은 발화(한글/영문 포함) 허용 및 노이즈(기호-only/숫자-only) 차단
 
 ### 4.6 종료 보정
 함수: `_drain_pending_previews`
@@ -165,6 +171,7 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - ambiguous large append 기준: `max(200, len(raw_compact) // 3)`
 - 누락 완화를 위해 fallback delta는 1자 이상 허용
 - `_add_text_to_subtitles` 병합 조건: `elapsed < 5.0 and len < 300`
+- 짧은 발화 정책: 한글/영문 포함 텍스트는 길이와 무관하게 허용
 - Observer 재시도 간격: `3.0초`
 - 폴링 브리지 간격: `180ms`
 
