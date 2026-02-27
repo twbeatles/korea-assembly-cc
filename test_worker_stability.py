@@ -49,6 +49,26 @@ class _StopAfterFirstWaitEvent:
         return False
 
 
+class _ReconnectOnceEvent:
+    def __init__(self):
+        self._wait_calls = 0
+        self._is_set = False
+
+    def is_set(self):
+        return self._is_set
+
+    def wait(self, timeout=None):
+        self._wait_calls += 1
+        if self._wait_calls in (1, 2):
+            return False
+        if self._wait_calls == 3:
+            raise RuntimeError("disconnected")
+        if self._wait_calls in (4, 5):
+            return False
+        self._is_set = True
+        return True
+
+
 class _FakeDriver:
     def __init__(self):
         self.quit_calls = 0
@@ -75,10 +95,10 @@ class _FakeWebDriverWait:
         return True
 
 
-def _build_window(auto_reconnect_enabled: bool):
+def _build_window(auto_reconnect_enabled: bool, stop_event=None):
     win = MainWindow.__new__(MainWindow)
     win.message_queue = queue.Queue()
-    win.stop_event = _ReconnectEvent()
+    win.stop_event = stop_event or _ReconnectEvent()
     win.auto_reconnect_enabled = auto_reconnect_enabled
     win._detached_drivers = []
     win._detached_drivers_lock = threading.Lock()
@@ -154,7 +174,7 @@ def test_extraction_worker_detects_live_url_when_xcgcd_missing(monkeypatch):
 
     MainWindow._extraction_worker(win, original_url, "#viewSubtit", False)
 
-    assert detect_calls == [original_url]
+    assert detect_calls[:2] == [original_url, resolved_url]
     assert driver.get_calls[:2] == [original_url, resolved_url]
 
     queued = []
@@ -187,3 +207,36 @@ def test_extraction_worker_skips_live_detect_when_xcgcd_exists(monkeypatch):
     while not win.message_queue.empty():
         queued.append(win.message_queue.get_nowait())
     assert not any(msg_type == "resolved_url" for msg_type, _ in queued)
+
+
+def test_extraction_worker_reconnect_reuses_detected_url(monkeypatch):
+    original_url = "https://example.com/live?xcode=25"
+    detected_url = "https://example.com/live?xcode=25&xcgcd=DCM0000251234567890"
+
+    win = _build_window(auto_reconnect_enabled=True, stop_event=_ReconnectOnceEvent())
+    drivers = []
+    detect_calls = []
+
+    def create_driver(options=None):
+        driver = _FakeDriver()
+        drivers.append(driver)
+        return driver
+
+    def detect_live(_driver, input_url):
+        detect_calls.append(input_url)
+        return detected_url
+
+    _configure_basic_worker_stubs(win)
+    win._detect_live_broadcast = detect_live
+    win._get_reconnect_delay = lambda attempt: 0.0
+
+    monkeypatch.setattr(mw_mod.webdriver, "Chrome", create_driver)
+    monkeypatch.setattr(mw_mod, "WebDriverWait", _FakeWebDriverWait)
+
+    MainWindow._extraction_worker(win, original_url, "#viewSubtit", False)
+
+    assert len(drivers) >= 2
+    assert drivers[0].get_calls[:2] == [original_url, detected_url]
+    assert drivers[1].get_calls[0] == detected_url
+    assert detect_calls[0] == original_url
+    assert detect_calls[1] == detected_url

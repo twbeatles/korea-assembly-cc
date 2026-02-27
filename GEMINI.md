@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.12
+- **버전**: v16.13
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ## 2. 기술 스택
@@ -32,6 +32,7 @@
 │         Worker Thread (Background)           │
 │  - Selenium 구동                              │
 │  - MutationObserver 우선 + 폴링 fallback     │
+│  - keepalive 기반 end_time 연장                │
 │  - 자동 재연결 (지수 백오프)                   │
 │  - stop_event 기반 안전 종료                  │
 └───────────────────────┬──────────────────────┘
@@ -99,7 +100,8 @@
 | `_finalize_subtitle()` | 종료 시 마지막 버퍼 확정 |
 | `_drain_pending_previews()` | 종료 직전 preview 큐 소진 |
 | `_render_subtitles()` | 자막 렌더링 + 하이라이트 |
-| `_save_in_background()` | 비동기 파일 저장 헬퍼 |
+| `_save_in_background()` | 비동기 파일 저장 헬퍼 (스레드 추적/종료 대기 연동) |
+| `_wait_active_save_threads()` | 종료 시 저장 스레드 제한시간 대기 |
 | `_update_connection_status()` | 연결 상태 UI 업데이트 (#30) |
 | `_generate_smart_filename()` | 자동 파일명 생성 (#28) |
 | `_show_merge_dialog()` | 자막 병합 다이얼로그 (#20) |
@@ -258,6 +260,25 @@ pip install pywin32  # HWP 저장
 - **세션 내결함성 개선**: 세션 로드/DB 로드/병합에서 손상 항목만 건너뛰고 나머지 항목은 유지
 - **저장 비차단화 확장**: RTF 저장, 통계 내보내기를 `_save_in_background` 경로로 전환
 - **로그 경로 정합성**: 로그 디렉터리를 `Config.LOG_DIR` 기준으로 통일
+
+## 9.7 v16.13 운영 안정화
+
+### 🔧 기능 경로 연결
+- **`xcgcd` 자동 보완 실연결**: `_detect_live_broadcast`를 워커 시작 직후/재연결 경로에서 실제 호출
+- **URL 재사용 일관화**: 감지된 URL을 지역 `url`에 반영해 최초 경로와 재연결 경로를 통일
+
+### ⏱️ keepalive 및 타이밍 보정
+- **keepalive 활성화**: 동일 `raw_compact` 유지 시 `Config.SUBTITLE_KEEPALIVE_INTERVAL` 주기로 `keepalive` 발행
+- **타이머 dead path 정리**: 미사용 finalize 타이머 경로 제거, 즉시 확정 + keepalive 보정으로 단일화
+
+### 💾 저장/종료 안전성
+- **원자적 텍스트 저장**: `atomic_write_text` 도입, TXT/SRT/VTT/RTF 저장에 적용
+- **저장 스레드 추적**: non-daemon 저장 스레드 등록/해제 및 종료 시 제한시간 대기
+- **로그 경로 통일**: `core/logging_utils.py`가 `Config.LOG_DIR`를 사용하도록 정렬
+
+### 🧩 UI 안정성/노이즈 필터
+- **LiveBroadcastDialog 종료 단일화**: `done`/`closeEvent` 모두 `_shutdown_fetch_thread()` 사용
+- **짧은 발화 허용 + 노이즈 차단**: `is_meaningful_subtitle_text`로 1~2자 한글/영문 허용, 숫자/기호-only 차단
 
 
 ## 10. 자막 수집 알고리즘

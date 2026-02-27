@@ -48,6 +48,7 @@ class Config:
     API_TIMEOUT = 5           # API 호출
     PAGE_LOAD_TIMEOUT = 30    # 페이지 로딩
     ELEMENT_WAIT_TIMEOUT = 10 # 요소 대기
+    SAVE_THREAD_SHUTDOWN_TIMEOUT = 5.0  # 저장 스레드 종료 대기 시간 (초)
     
     # 자동 백업
     AUTO_BACKUP_INTERVAL = 300000      # 5분 (ms)

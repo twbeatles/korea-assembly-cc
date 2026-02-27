@@ -40,6 +40,80 @@ def atomic_write_json(
             pass
         raise
 
+def atomic_write_text(
+    path: Union[str, Path],
+    content: str,
+    *,
+    encoding: str = "utf-8",
+    newline: Optional[str] = None,
+) -> None:
+    """텍스트 파일을 원자적으로 저장한다."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+    )
+    temp_file = Path(temp_path)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline=newline) as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(temp_file), str(target))
+    except Exception:
+        try:
+            temp_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+def atomic_write_bytes(path: Union[str, Path], content: bytes) -> None:
+    """바이너리 파일을 원자적으로 저장한다."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+    )
+    temp_file = Path(temp_path)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(temp_file), str(target))
+    except Exception:
+        try:
+            temp_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+def is_meaningful_subtitle_text(text: str) -> bool:
+    """자막으로 저장할 의미 있는 텍스트인지 판단한다.
+
+    - 한글/영문 문자가 하나라도 있으면 1~2글자라도 허용
+    - 숫자/기호-only 문자열은 차단
+    """
+    if text is None:
+        return False
+    cleaned = clean_text_display(str(text)).strip()
+    if not cleaned:
+        return False
+
+    compact = compact_subtitle_text(cleaned)
+    if not compact:
+        return False
+
+    has_letter = bool(re.search(r"[가-힣A-Za-z]", compact))
+    if not has_letter:
+        return False
+
+    return True
+
 def clean_text(text: str) -> str:
     """자막 텍스트 정리 (성능 최적화: 사전 컴파일된 정규식 사용)"""
     if not text:

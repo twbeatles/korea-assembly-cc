@@ -21,15 +21,20 @@
 - `ui/main_window.py`의 `_inject_mutation_observer` — 타겟 기반 주입 후 폴링 브리지 fallback 유지
 - `ui/main_window.py`의 `_collect_observer_changes` — Observer 버퍼 우선 수집 유지
 - `ui/main_window.py`의 `_join_stream_text` — 공백/문장부호 보존 결합 유지
+- `ui/main_window.py`의 `_handle_keepalive` — 동일 자막 구간 end_time 연장 유지
+- `core/utils.py`의 `is_meaningful_subtitle_text` — 짧은 발화 허용 + 노이즈 차단 규칙 유지
 
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 
-### 2.1 코어 수정 이력 (v16.12)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.13)
 - `_extract_new_part`: `find()` → `rfind()` 전환 — suffix 충돌 시 과잉 추출 방지
 - `_prepare_preview_raw`: 전체 리셋 → `_soft_resync()` 소프트 리셋 — 대량 중복 유입 방지
 - `_extraction_worker`: MutationObserver 하이브리드 아키텍처 도입
 - `subtitle_reset` 메커니즘: 발언자 전환(자막 영역 클리어) 감지 시 즉시 완전 리셋 + 버퍼 확정
+- `_extraction_worker`: 시작/재연결 시 `_detect_live_broadcast` 실연결 (`xcode` → `xcgcd` 보완 URL 반영)
+- `_extraction_worker`/`_handle_keepalive`: 동일 raw 유지 시 keepalive 큐 발행 및 end_time 주기 갱신 활성화
+- `is_meaningful_subtitle_text`: 의미 있는 1~2자 발화 허용, 숫자/기호-only 문자열 차단
 
 ### 2.2 안정화 이력 (v16.12.1, 2026-02-25)
 - `_extraction_worker`: URL에 `xcgcd`가 없을 때만 `xcode` 기반 자동 감지를 연결
@@ -42,16 +47,19 @@
 
 ```text
 Worker(raw) [MutationObserver 우선 + 폴링 fallback]
+  -> 시작/재연결 시 _detect_live_broadcast로 xcgcd 보완 URL 확정
   -> selector 후보 우선순위 정렬 (.smi_word:last-child 우선)
   -> 기본 문서 + 중첩 iframe/frame 순회
   -> clean/compact 기준 중복 전송 억제
+  -> 동일 raw 유지 구간 keepalive 메시지 발행
   -> 자막 영역 클리어 감지 → subtitle_reset (완전 리셋)
   -> Queue(preview)
   -> _prepare_preview_raw(정규화, 게이트, 재동기화, fallback)
      (desync/ambiguous 반복 시 _soft_resync 소프트 리셋)
   -> _process_raw_text(GlobalHistory+Suffix core, rfind 기반)
   -> 후단 정제(get_word_diff, recent compact tail)
-  -> _add_text_to_subtitles
+  -> _add_text_to_subtitles (is_meaningful_subtitle_text 필터)
+  -> Queue(keepalive) -> _handle_keepalive(end_time 연장)
   -> 종료 시 _drain_pending_previews 강제 플러시
 ```
 
@@ -60,6 +68,7 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 ## 4. 단계별 책임
 
 ### 4.1 Worker 입력 안정화 (하이브리드)
+- 시작/재연결 시 `_detect_live_broadcast`로 최종 URL(`xcgcd`) 우선 확정
 - MutationObserver 우선 → 폴링 fallback — `_inject_mutation_observer`, `_collect_observer_changes`
 - 고정 선택자 우선순위
   - `#viewSubtit .smi_word:last-child`
@@ -79,6 +88,7 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
   - 2차: 타겟 미탐색 시 폴링 브리지 (`allow_poll_fallback=True`)
 - `clean_text_display` 적용
 - compact 기준으로 동일 입력 반복 전송 억제
+- 동일 raw 유지 시 keepalive 주기 발행 (`Config.SUBTITLE_KEEPALIVE_INTERVAL`)
 - **자막 영역 클리어 감지 (발언자 전환)**
   - Observer: `__SUBTITLE_CLEARED__` 마커 → `subtitle_reset` 메시지
   - 폴링: 텍스트 빈 문자열 + 이전에 내용 있었음 → `subtitle_reset` 메시지
@@ -118,6 +128,7 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - `get_word_diff` 기반 2차 정제
 - recent compact tail 포함 여부 확인으로 대량 재누적 차단
 - 유의미 텍스트 게이트로 짧은 발화(한글/영문 포함) 허용 및 노이즈(기호-only/숫자-only) 차단
+- `is_meaningful_subtitle_text` 기준으로 의미 텍스트만 반영
 
 ### 4.6 종료 보정
 함수: `_drain_pending_previews`
@@ -172,6 +183,7 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - 누락 완화를 위해 fallback delta는 1자 이상 허용
 - `_add_text_to_subtitles` 병합 조건: `elapsed < 5.0 and len < 300`
 - 짧은 발화 정책: 한글/영문 포함 텍스트는 길이와 무관하게 허용
+- keepalive 간격: `Config.SUBTITLE_KEEPALIVE_INTERVAL = 1.0초`
 - Observer 재시도 간격: `3.0초`
 - 폴링 브리지 간격: `180ms`
 

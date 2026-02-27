@@ -42,6 +42,7 @@ class LiveBroadcastDialog(QDialog):
         self.setWindowTitle("실시간 국회 생중계 목록")
         self.resize(700, 450)
         self.selected_broadcast = None
+        self._is_closing = False
         
         # UI 구성
         layout = QVBoxLayout(self)
@@ -105,6 +106,8 @@ class LiveBroadcastDialog(QDialog):
         
     def load_broadcasts(self):
         """API 호출 요청"""
+        if self._is_closing:
+            return
         # 중복 요청 방지 (UI 상태로 제어)
         if not self.refresh_btn.isEnabled():
             return
@@ -119,6 +122,8 @@ class LiveBroadcastDialog(QDialog):
 
     def _on_fetch_done(self, payload):
         """live_list fetch 완료 콜백 (UI 스레드)."""
+        if self._is_closing:
+            return
         self.refresh_btn.setEnabled(True)
 
         if not isinstance(payload, dict) or not payload.get("ok"):
@@ -188,28 +193,36 @@ class LiveBroadcastDialog(QDialog):
 
     def done(self, r):
         """다이얼로그 종료 시 호출 (accept, reject 모두 포함)"""
-        # 스레드 안전하게 종료
-        if hasattr(self, '_fetch_thread') and self._fetch_thread.isRunning():
-            self._fetch_thread.quit()
-            self._fetch_thread.wait(1000)
-            
-        # 워커 제거
-        if hasattr(self, '_fetch_worker'):
-            self._fetch_worker.deleteLater()
-            del self._fetch_worker
-            
-        # 스레드 제거 (deleteLater는 이벤트 루프 의존적이므로 주의 필요, 여기선 quit/wait로 충분)
-        if hasattr(self, '_fetch_thread'):
-            # self._fetch_thread.deleteLater() # 크래시 위험으로 제거 -> 부모(self) 소멸 시 자동 정리됨
-            pass
-
+        self._shutdown_fetch_thread()
         super().done(r)
 
     def closeEvent(self, event):
         """창 닫기 이벤트"""
-        # done()이 호출되지 않는 경우를 대비 (보통 close -> reject -> done 순서임)
-        # 하지만 명시적으로 여기서도 체크
-        if hasattr(self, '_fetch_thread') and self._fetch_thread.isRunning():
-            self._fetch_thread.quit()
-            self._fetch_thread.wait(1000)
+        self._shutdown_fetch_thread()
         super().closeEvent(event)
+
+    def _shutdown_fetch_thread(self):
+        """live list 워커 스레드를 안전하게 종료한다."""
+        if self._is_closing:
+            return
+        self._is_closing = True
+
+        try:
+            if hasattr(self, "sig_fetch_request") and hasattr(self, "_fetch_worker"):
+                try:
+                    self.sig_fetch_request.disconnect(self._fetch_worker.fetch)
+                except Exception:
+                    pass
+            if hasattr(self, "_fetch_worker"):
+                try:
+                    self._fetch_worker.finished.disconnect(self._on_fetch_done)
+                except Exception:
+                    pass
+            if hasattr(self, "_fetch_thread") and self._fetch_thread.isRunning():
+                self._fetch_thread.quit()
+                wait_ms = int((Config.API_TIMEOUT + 1) * 1000)
+                self._fetch_thread.wait(wait_ms)
+            if hasattr(self, "_fetch_worker"):
+                self._fetch_worker.deleteLater()
+        except Exception:
+            pass

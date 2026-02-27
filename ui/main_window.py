@@ -220,6 +220,8 @@ class MainWindow(QMainWindow):
         self._session_save_in_progress = False
         self._session_load_in_progress = False
         self._db_history_dialog_state = None
+        self._active_save_threads = set()
+        self._active_save_threads_lock = threading.Lock()
 
         # URL 히스토리
         self.url_history = self._load_url_history()
@@ -237,10 +239,6 @@ class MainWindow(QMainWindow):
 
         self.stats_timer = QTimer(self)
         self.stats_timer.timeout.connect(self._update_stats)
-
-        # 자막 확정 타이머
-        self.finalize_timer = QTimer(self)
-        self.finalize_timer.timeout.connect(self._check_finalize)
 
         # 자동 백업 타이머
         self.backup_timer = QTimer(self)
@@ -1730,7 +1728,6 @@ class MainWindow(QMainWindow):
             self._preview_ambiguous_skip_count = 0
             self._last_good_raw_compact = ""
             self._is_stopping = False
-            self.finalize_timer.stop()
             self._clear_preview()
             self.start_time = time.time()
 
@@ -1802,9 +1799,6 @@ class MainWindow(QMainWindow):
             self.stop_event.set()  # 워커 스레드에 종료 신호
             self._set_status("중지 중...", "warning")
             self._is_stopping = True
-
-            # 확정 타이머 중지
-            self.finalize_timer.stop()
 
             # 종료 직전 큐 preview 소진 + 마지막 자막 확정
             self._drain_pending_previews(requeue_others=True)
@@ -1925,6 +1919,32 @@ class MainWindow(QMainWindow):
                 source=f"detached_{idx}",
             )
 
+    def _wait_active_save_threads(self, timeout: float) -> None:
+        """실행 중인 저장 스레드 종료를 제한 시간 동안 대기한다."""
+        deadline = time.time() + max(0.0, float(timeout))
+        current_thread = threading.current_thread()
+
+        while True:
+            with self._active_save_threads_lock:
+                live_threads = [
+                    t
+                    for t in self._active_save_threads
+                    if t is not None and t is not current_thread and t.is_alive()
+                ]
+                if not live_threads:
+                    self._active_save_threads = {
+                        t for t in self._active_save_threads if t.is_alive()
+                    }
+                    return
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                logger.warning("저장 스레드 종료 대기 타임아웃: %s개", len(live_threads))
+                return
+
+            for thread in live_threads:
+                thread.join(timeout=min(0.2, remaining))
+
     def _reset_ui(self):
         self.is_running = False
         self.start_btn.setEnabled(True)
@@ -1934,7 +1954,6 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         self.stats_timer.stop()
         self.backup_timer.stop()
-        self.finalize_timer.stop()
 
     # ========== 워커 스레드 ==========
 
@@ -2546,6 +2565,12 @@ class MainWindow(QMainWindow):
                     logger.warning("생중계 자동 감지 실패: %s", live_err)
 
             self.stop_event.wait(timeout=3)
+            resolved_url = self._detect_live_broadcast(driver, url)
+            if resolved_url and resolved_url != url:
+                url = resolved_url
+                self.message_queue.put(("status", "감지된 생중계 주소로 재진입 중..."))
+                driver.get(url)
+                self.stop_event.wait(timeout=2)
 
             self.message_queue.put(("status", "AI 자막 활성화 중..."))
             self._activate_subtitle(driver)
@@ -2598,6 +2623,7 @@ class MainWindow(QMainWindow):
             worker_last_raw_text = ""
             worker_last_raw_compact = ""
             reconnect_attempt = 0
+            last_keepalive_emit = 0.0
 
             # stop_event 사용으로 더 빠른 종료 응답
             while not self.stop_event.is_set():
@@ -2642,6 +2668,7 @@ class MainWindow(QMainWindow):
                                         )
                                         worker_last_raw_text = ""
                                         worker_last_raw_compact = ""
+                                        last_keepalive_emit = 0.0
                                         continue
                                     c_text = utils.clean_text_display(change_text)
                                     c_compact = utils.compact_subtitle_text(c_text)
@@ -2652,6 +2679,7 @@ class MainWindow(QMainWindow):
                                     ):
                                         worker_last_raw_text = c_text
                                         worker_last_raw_compact = c_compact
+                                        last_keepalive_emit = now
                                         self.message_queue.put(("preview", c_text))
                                         changes_processed = True
 
@@ -2705,7 +2733,19 @@ class MainWindow(QMainWindow):
                             ):
                                 worker_last_raw_text = text
                                 worker_last_raw_compact = text_compact
+                                last_keepalive_emit = now
                                 self.message_queue.put(("preview", text))
+                            elif (
+                                text
+                                and text_compact
+                                and text_compact == worker_last_raw_compact
+                                and (
+                                    now - last_keepalive_emit
+                                    >= Config.SUBTITLE_KEEPALIVE_INTERVAL
+                                )
+                            ):
+                                self.message_queue.put(("keepalive", text))
+                                last_keepalive_emit = now
                             elif (
                                 not text
                                 and selector_found
@@ -2717,6 +2757,7 @@ class MainWindow(QMainWindow):
                                 )
                                 worker_last_raw_text = ""
                                 worker_last_raw_compact = ""
+                                last_keepalive_emit = 0.0
 
                         last_check = now
 
@@ -2794,6 +2835,12 @@ class MainWindow(QMainWindow):
                                         )
                                 if self.stop_event.wait(timeout=2):
                                     break
+                                resolved_url = self._detect_live_broadcast(driver, url)
+                                if resolved_url and resolved_url != url:
+                                    url = resolved_url
+                                    driver.get(url)
+                                    if self.stop_event.wait(timeout=2):
+                                        break
                                 self._activate_subtitle(driver)
                                 self.message_queue.put(
                                     (
@@ -2806,6 +2853,9 @@ class MainWindow(QMainWindow):
                                 )
                                 last_check = time.time()
                                 last_connection_check = time.time()
+                                worker_last_raw_text = ""
+                                worker_last_raw_compact = ""
+                                last_keepalive_emit = 0.0
                                 detected_selector = self._find_subtitle_selector(driver)
                                 if detected_selector:
                                     selector_candidates = (
@@ -3571,7 +3621,6 @@ class MainWindow(QMainWindow):
         self._preview_desync_count = 0
         self._preview_ambiguous_skip_count = 0
         self._last_good_raw_compact = ""
-        self.finalize_timer.stop()
         self._clear_preview()
 
         if keep_history_from_subtitles:
@@ -3596,11 +3645,6 @@ class MainWindow(QMainWindow):
         self._rebuild_stats_cache()
         self._refresh_text(force_full=True)
         self._update_count_label()
-
-    def _check_finalize(self):
-        """현재 스트리밍 알고리즘에서는 finalize 타이머를 사용하지 않는다."""
-        if self.finalize_timer.isActive():
-            self.finalize_timer.stop()
 
     # ========== 메시지 큐 처리 ==========
 
@@ -3700,7 +3744,6 @@ class MainWindow(QMainWindow):
                     self._finalize_subtitle(self.last_subtitle)
                     self.last_subtitle = ""
                     self._stream_start_time = None
-                self.finalize_timer.stop()
                 self._clear_preview()
 
                 self._refresh_text()
@@ -4022,6 +4065,7 @@ class MainWindow(QMainWindow):
         new_part = self._extract_new_part(raw, raw_compact)
 
         if not new_part:
+            # 새 내용 없음
             return
         new_part = new_part.strip()
         if not utils.is_meaningful_subtitle_text(new_part):
@@ -4036,9 +4080,10 @@ class MainWindow(QMainWindow):
             refined_part = utils.get_word_diff(last_text, new_part)
             if not refined_part:
                 return
-            new_part = refined_part.strip()
-            if not utils.is_meaningful_subtitle_text(new_part):
+            refined_part = refined_part.strip()
+            if not utils.is_meaningful_subtitle_text(refined_part):
                 return
+            new_part = refined_part
 
         new_compact = utils.compact_subtitle_text(new_part)
         recent_compact_tail = self._confirmed_history_compact_tail(
@@ -4131,7 +4176,7 @@ class MainWindow(QMainWindow):
 
     def _add_text_to_subtitles(self, text: str) -> None:
         """확정된 텍스트를 SubtitleEntry로 변환하여 저장"""
-        if not utils.is_meaningful_subtitle_text(text):
+        if not text or not utils.is_meaningful_subtitle_text(text):
             return
         text = text.strip()
 
@@ -4851,6 +4896,8 @@ class MainWindow(QMainWindow):
             error_prefix: 실패 시 에러 메시지 접두어
         """
 
+        thread_holder = {"thread": None}
+
         def background_save():
             try:
                 save_func(path)
@@ -4870,9 +4917,19 @@ class MainWindow(QMainWindow):
                         },
                     )
                 )
+            finally:
+                save_thread = thread_holder.get("thread")
+                if save_thread is not None:
+                    with self._active_save_threads_lock:
+                        self._active_save_threads.discard(save_thread)
 
         # 백그라운드 스레드에서 저장 실행
-        save_thread = threading.Thread(target=background_save, daemon=True)
+        save_thread = threading.Thread(
+            target=background_save, daemon=False, name="FileSaveWorker"
+        )
+        thread_holder["thread"] = save_thread
+        with self._active_save_threads_lock:
+            self._active_save_threads.add(save_thread)
         save_thread.start()
 
         # 저장 시작 알림 (즉시)
@@ -5000,21 +5057,22 @@ class MainWindow(QMainWindow):
 
             # 실제 저장 함수 정의
             def do_save(filepath):
-                with open(filepath, "w", encoding="utf-8-sig") as f:
-                    last_printed_ts = None
-                    for i, (timestamp, text) in enumerate(subtitles_snapshot):
-                        # 메인 윈도우와 동일: 1분 간격으로 타임스탬프 표시
-                        should_print_ts = False
-                        if last_printed_ts is None:
-                            should_print_ts = True
-                        elif (timestamp - last_printed_ts).total_seconds() >= 60:
-                            should_print_ts = True
+                lines = []
+                last_printed_ts = None
+                for i, (timestamp, text) in enumerate(subtitles_snapshot):
+                    # 메인 윈도우와 동일: 1분 간격으로 타임스탬프 표시
+                    should_print_ts = False
+                    if last_printed_ts is None:
+                        should_print_ts = True
+                    elif (timestamp - last_printed_ts).total_seconds() >= 60:
+                        should_print_ts = True
 
-                        if should_print_ts:
-                            f.write(f"[{timestamp.strftime('%H:%M:%S')}] {text}\n")
-                            last_printed_ts = timestamp
-                        else:
-                            f.write(f"{text}\n")
+                    if should_print_ts:
+                        lines.append(f"[{timestamp.strftime('%H:%M:%S')}] {text}\n")
+                        last_printed_ts = timestamp
+                    else:
+                        lines.append(f"{text}\n")
+                utils.atomic_write_text(filepath, "".join(lines), encoding="utf-8-sig")
 
             # 백그라운드에서 저장 실행
             self._save_in_background(do_save, path, "TXT 저장 완료!", "TXT 저장 실패")
@@ -5038,19 +5096,20 @@ class MainWindow(QMainWindow):
                 ]
 
             def do_save(filepath):
-                with open(filepath, "w", encoding="utf-8") as f:
-                    for i, (start_time, end_time, timestamp, text) in enumerate(
-                        subtitles_snapshot, 1
-                    ):
-                        if start_time and end_time:
-                            # [Fix] 밀리초 정밀도 개선
-                            start = f"{start_time.strftime('%H:%M:%S')},{start_time.microsecond // 1000:03d}"
-                            end = f"{end_time.strftime('%H:%M:%S')},{end_time.microsecond // 1000:03d}"
-                        else:
-                            start = f"{timestamp.strftime('%H:%M:%S')},{timestamp.microsecond // 1000:03d}"
-                            fallback_end = timestamp + timedelta(seconds=3)
-                            end = f"{fallback_end.strftime('%H:%M:%S')},{fallback_end.microsecond // 1000:03d}"
-                        f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+                lines = []
+                for i, (start_time, end_time, timestamp, text) in enumerate(
+                    subtitles_snapshot, 1
+                ):
+                    if start_time and end_time:
+                        # [Fix] 밀리초 정밀도 개선
+                        start = f"{start_time.strftime('%H:%M:%S')},{start_time.microsecond // 1000:03d}"
+                        end = f"{end_time.strftime('%H:%M:%S')},{end_time.microsecond // 1000:03d}"
+                    else:
+                        start = f"{timestamp.strftime('%H:%M:%S')},{timestamp.microsecond // 1000:03d}"
+                        fallback_end = timestamp + timedelta(seconds=3)
+                        end = f"{fallback_end.strftime('%H:%M:%S')},{fallback_end.microsecond // 1000:03d}"
+                    lines.append(f"{i}\n{start} --> {end}\n{text}\n\n")
+                utils.atomic_write_text(filepath, "".join(lines), encoding="utf-8")
 
             self._save_in_background(do_save, path, "SRT 저장 완료!", "SRT 저장 실패")
 
@@ -5072,20 +5131,20 @@ class MainWindow(QMainWindow):
                 ]
 
             def do_save(filepath):
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write("WEBVTT\n\n")
-                    for i, (start_time, end_time, timestamp, text) in enumerate(
-                        subtitles_snapshot, 1
-                    ):
-                        if start_time and end_time:
-                            # [Fix] 밀리초 정밀도 개선
-                            start = f"{start_time.strftime('%H:%M:%S')}.{start_time.microsecond // 1000:03d}"
-                            end = f"{end_time.strftime('%H:%M:%S')}.{end_time.microsecond // 1000:03d}"
-                        else:
-                            start = f"{timestamp.strftime('%H:%M:%S')}.{timestamp.microsecond // 1000:03d}"
-                            fallback_end = timestamp + timedelta(seconds=3)
-                            end = f"{fallback_end.strftime('%H:%M:%S')}.{fallback_end.microsecond // 1000:03d}"
-                        f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
+                lines = ["WEBVTT\n\n"]
+                for i, (start_time, end_time, timestamp, text) in enumerate(
+                    subtitles_snapshot, 1
+                ):
+                    if start_time and end_time:
+                        # [Fix] 밀리초 정밀도 개선
+                        start = f"{start_time.strftime('%H:%M:%S')}.{start_time.microsecond // 1000:03d}"
+                        end = f"{end_time.strftime('%H:%M:%S')}.{end_time.microsecond // 1000:03d}"
+                    else:
+                        start = f"{timestamp.strftime('%H:%M:%S')}.{timestamp.microsecond // 1000:03d}"
+                        fallback_end = timestamp + timedelta(seconds=3)
+                        end = f"{fallback_end.strftime('%H:%M:%S')}.{fallback_end.microsecond // 1000:03d}"
+                    lines.append(f"{i}\n{start} --> {end}\n{text}\n\n")
+                utils.atomic_write_text(filepath, "".join(lines), encoding="utf-8")
 
             self._save_in_background(do_save, path, "VTT 저장 완료!", "VTT 저장 실패")
 
@@ -5372,50 +5431,51 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
                 return
 
-            generated_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
-
             def do_save(filepath):
-                with open(filepath, "wb") as f:  # 바이너리 모드
-                    # RTF 헤더 (유니코드 지원)
-                    f.write(b"{\\rtf1\\ansi\\ansicpg949\\deff0")
-                    f.write(
-                        b"{\\fonttbl{\\f0\\fnil\\fcharset129 \\'b8\\'c0\\'c0\\'ba \\'b0\\'ed\\'b5\\'f1;}}"
-                    )
-                    f.write(
-                        b"{\\colortbl;\\red0\\green0\\blue0;\\red128\\green128\\blue128;}"
-                    )
-                    f.write(b"\n")
+                # RTF 내용을 메모리에서 구성한 뒤 원자적으로 저장한다.
+                chunks = []
+                # RTF 헤더 (유니코드 지원)
+                chunks.append(b"{\\rtf1\\ansi\\ansicpg949\\deff0")
+                chunks.append(
+                    b"{\\fonttbl{\\f0\\fnil\\fcharset129 \\'b8\\'c0\\'c0\\'ba \\'b0\\'ed\\'b5\\'f1;}}"
+                )
+                chunks.append(
+                    b"{\\colortbl;\\red0\\green0\\blue0;\\red128\\green128\\blue128;}"
+                )
+                chunks.append(b"\n")
 
-                    # 제목
-                    title = self._rtf_encode("국회 의사중계 자막")
-                    f.write(b"\\pard\\qc\\b\\fs28 ")
-                    f.write(title.encode("cp949", errors="replace"))
-                    f.write(b"\\b0\\par\n")
+                # 제목
+                title = self._rtf_encode("국회 의사중계 자막")
+                chunks.append(b"\\pard\\qc\\b\\fs28 ")
+                chunks.append(title.encode("cp949", errors="replace"))
+                chunks.append(b"\\b0\\par\n")
 
-                    # 생성 일시
-                    date_str = self._rtf_encode(f"생성 일시: {generated_at}")
-                    f.write(b"\\pard\\ql\\fs20 ")
-                    f.write(date_str.encode("cp949", errors="replace"))
-                    f.write(b"\\par\\par\n")
+                # 생성 일시
+                date_str = self._rtf_encode(
+                    f"생성 일시: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M:%S')}"
+                )
+                chunks.append(b"\\pard\\ql\\fs20 ")
+                chunks.append(date_str.encode("cp949", errors="replace"))
+                chunks.append(b"\\par\\par\n")
 
-                    # 자막 내용
-                    for entry in subtitles_snapshot:
-                        timestamp = entry.timestamp.strftime("%H:%M:%S")
-                        text = self._rtf_encode(entry.text)
-                        f.write(b"\\cf2[")
-                        f.write(timestamp.encode("cp949", errors="replace"))
-                        f.write(b"]\\cf1 ")
-                        f.write(text.encode("cp949", errors="replace"))
-                        f.write(b"\\par\n")
+                # 자막 내용
+                for entry in subtitles_snapshot:
+                    timestamp = entry.timestamp.strftime("%H:%M:%S")
+                    text = self._rtf_encode(entry.text)
+                    chunks.append(b"\\cf2[")
+                    chunks.append(timestamp.encode("cp949", errors="replace"))
+                    chunks.append(b"]\\cf1 ")
+                    chunks.append(text.encode("cp949", errors="replace"))
+                    chunks.append(b"\\par\n")
 
-                    # 통계
-                    total_chars = sum(len(s.text) for s in subtitles_snapshot)
-                    stats = self._rtf_encode(
-                        f"총 {len(subtitles_snapshot)}문장, {total_chars:,}자"
-                    )
-                    f.write(b"\\par\\fs18 ")
-                    f.write(stats.encode("cp949", errors="replace"))
-                    f.write(b"\\par}")
+                # 통계
+                total_chars = sum(len(s.text) for s in subtitles_snapshot)
+                stats = self._rtf_encode(f"총 {len(subtitles_snapshot)}문장, {total_chars:,}자")
+                chunks.append(b"\\par\\fs18 ")
+                chunks.append(stats.encode("cp949", errors="replace"))
+                chunks.append(b"\\par}")
+
+                utils.atomic_write_bytes(filepath, b"".join(chunks))
 
             self._save_in_background(
                 do_save,
@@ -6576,15 +6636,18 @@ class MainWindow(QMainWindow):
                 try:
                     with self.subtitle_lock:
                         subtitles_snapshot = list(self.subtitles)
-                    with open(path, "w", encoding="utf-8") as f:
-                        for entry in subtitles_snapshot:
-                            f.write(
-                                f"[{entry.timestamp.strftime('%H:%M:%S')}] {entry.text}\n"
-                            )
+                    lines = [
+                        f"[{entry.timestamp.strftime('%H:%M:%S')}] {entry.text}\n"
+                        for entry in subtitles_snapshot
+                    ]
+                    utils.atomic_write_text(path, "".join(lines), encoding="utf-8")
                 except Exception as e:
                     QMessageBox.critical(self, "오류", f"저장 실패: {e}")
                     event.ignore()
                     return
+
+        # 백그라운드 저장이 진행 중이면 제한 시간 동안 종료 대기
+        self._wait_active_save_threads(timeout=Config.SAVE_THREAD_SHUTDOWN_TIMEOUT)
 
         # 창 위치/크기 저장
         self.settings.setValue("geometry", self.saveGeometry())
@@ -6593,7 +6656,6 @@ class MainWindow(QMainWindow):
         # 타이머 정리
         self.queue_timer.stop()
         self.stats_timer.stop()
-        self.finalize_timer.stop()
         self.backup_timer.stop()
 
         if self.realtime_file:

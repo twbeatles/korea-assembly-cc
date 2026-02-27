@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.12
+- **버전**: v16.13
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -47,7 +47,7 @@
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │              Worker Thread (Background)               │   │
 │  │  - Selenium WebDriver 구동                            │   │
-│  │  - MutationObserver 우선 + 폴링 fallback (v16.12)    │   │
+│  │  - MutationObserver 우선 + 폴링 fallback + keepalive │   │
 │  │  - 자동 재연결 (지수 백오프, #31)                     │   │
 │  │  - stop_event 기반 안전 종료                          │   │
 │  └──────────────────────────────────────────────────────┘   │
@@ -156,21 +156,29 @@ assemblyccv3/
 | `_finalize_subtitle()` | 중지 시 마지막 버퍼 확정 |
 | `_drain_pending_previews()` | 종료 직전 preview 큐 소진 |
 | `_render_subtitles()` | 자막 화면 렌더링 + 키워드 하이라이트 |
-| `_save_in_background()` | 파일 저장 백그라운드 처리 (TXT/SRT/VTT/DOCX/HWP/RTF/통계 내보내기) |
+| `_save_in_background()` | 파일 저장 백그라운드 처리 (TXT/SRT/VTT/DOCX/HWP/RTF/통계 내보내기, 스레드 추적/종료 대기 연동) |
+| `_wait_active_save_threads()` | 종료 시 저장 스레드 제한시간 대기 |
 | `_update_connection_status()` | **연결 상태 UI 업데이트 (#30)** |
 | `_generate_smart_filename()` | **자동 파일명 생성 (#28)** |
 | `_show_merge_dialog()` | **자막 병합 다이얼로그 (#20)** |
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. v16.10 신규 기능 (최신)
+## 6. v16.13 신규 기능 (최신)
 
-### 6.1 안정화 및 최적화
-- **자동 재연결 메커니즘 개선**: WebDriver 연결 끊김 시 지수 백오프 및 UI 피드백 (#4, #5)
-- **실시간 저장 오류 감지**: 3회 연속 실패 시 토스트 경고, 데이터 손실 방지 (#3)
-- **종료 처리 완벽화**: `closeEvent` 시 자원(DB, WebDriver) 완전 정리 (#2)
-- **성능 최적화**: 렌더링 500개 제한 및 텍스트 비교 알고리즘 개선으로 CPU/메모리 효율화
-- **인코딩 호환성**: UTF-8 BOM 저장 지원 (#12)
+### 6.1 기능 경로 연결 및 안정성 보강
+- **`xcgcd` 자동 보완 실연결**: `_detect_live_broadcast`를 워커 시작/재연결 경로 모두에 실제 연결
+- **keepalive 경로 활성화**: 동일 raw 유지 구간에서 `("keepalive", raw)` 메시지를 발행해 end_time 주기 갱신
+- **finalize dead path 최소 정리**: 미사용 finalize 타이머 경로 정리, 즉시 확정 + keepalive 보정으로 단일화
+
+### 6.2 저장/종료 안정성 강화
+- **원자적 텍스트 저장**: `atomic_write_text` 도입으로 TXT/SRT/VTT/RTF 임시파일 교체 저장
+- **저장 스레드 종료 대기**: non-daemon 저장 스레드 추적 및 `closeEvent`에서 제한시간 대기
+- **로그 경로 정책 통일**: `core/logging_utils.py`가 `Config.LOG_DIR`를 사용하도록 고정
+
+### 6.3 UI/노이즈 품질 보강
+- **LiveBroadcastDialog 종료 경로 단일화**: `done`/`closeEvent`가 `_shutdown_fetch_thread()` 공통 호출
+- **짧은 발화 허용 + 노이즈 필터**: 한글/영문 1~2자 허용, 숫자/기호-only 문자열 차단
 
 ## 6-1. v16.6에서 추가된 기능 (이전)
 
@@ -304,6 +312,11 @@ def _process_raw_text(self, raw):
 - **`rfind()` 전환**: suffix가 raw에 여러 번 나타날 때 마지막 위치 기준 추출 (과잉 추출 방지)
 - **소프트 리셋 `_soft_resync()`**: desync 시 전체 리셋 대신 최근 5개 자막에서 히스토리 재구성 (대량 중복 방지)
 - **MutationObserver 하이브리드**: `_inject_mutation_observer`로 이벤트 기반 캡처 우선, 타겟 미탐색 시 폴링 브리지 fallback 유지
+
+### v16.13 운영 안정화
+- **keepalive 메시지 실발행**: 동일 자막 구간의 end_time 갱신 누락 방지
+- **짧은 발화 정책 개선**: `is_meaningful_subtitle_text` 기반 의미 텍스트 허용
+- **저장 안전성 강화**: `atomic_write_text` + 저장 스레드 종료 대기
 
 ### 운영 고정 규칙
 - `_process_raw_text`, `_extract_new_part`의 핵심 의미론(글로벌 히스토리 + suffix)은 유지한다.
