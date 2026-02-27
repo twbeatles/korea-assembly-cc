@@ -95,6 +95,20 @@ class _FakeWebDriverWait:
         return True
 
 
+class _SwitchToStub:
+    def default_content(self):
+        return None
+
+
+class _SmiWordCollectDriver:
+    def __init__(self, rows):
+        self.rows = rows
+        self.switch_to = _SwitchToStub()
+
+    def execute_script(self, _script, _selector):
+        return self.rows
+
+
 def _build_window(auto_reconnect_enabled: bool, stop_event=None):
     win = MainWindow.__new__(MainWindow)
     win.message_queue = queue.Queue()
@@ -240,3 +254,25 @@ def test_extraction_worker_reconnect_reuses_detected_url(monkeypatch):
     assert drivers[1].get_calls[0] == detected_url
     assert detect_calls[0] == original_url
     assert detect_calls[1] == detected_url
+
+
+def test_read_subtitle_text_collects_smi_word_window():
+    rows = [
+        {"id": "s1", "text": "첫 문장"},
+        {"id": "s2", "text": "둘째 문장"},
+        {"id": "s2_dup", "text": "둘째 문장"},
+        {"id": "s3", "text": "셋째 문장"},
+    ]
+    driver = _SmiWordCollectDriver(rows)
+    win = MainWindow.__new__(MainWindow)
+    win._last_subtitle_frame_path = ()
+
+    text, matched_selector, found = MainWindow._read_subtitle_text_by_selectors(
+        win,
+        driver,
+        ["#viewSubtit .smi_word:last-child"],
+    )
+
+    assert found is True
+    assert matched_selector == "#viewSubtit .smi_word:last-child"
+    assert text == "첫 문장 둘째 문장 셋째 문장"

@@ -2997,7 +2997,80 @@ class MainWindow(QMainWindow):
             (text, matched_selector, found_element)
         """
         def _read_in_current_context() -> tuple[str, str, bool]:
+            def _read_smi_word_window(sel: str) -> tuple[str, bool]:
+                """`.smi_word` 전체를 수집해 최근 창(window) 텍스트를 반환한다.
+
+                확장프로그램(Assembly Webcast Subtitle Saver)처럼 단일 노드가 아닌
+                `.smi_word` 목록을 기준으로 최신 변화를 추적해 첫 문장 이후 정체를 줄인다.
+                """
+                try:
+                    rows = driver.execute_script(
+                        """
+                        return (function(selectorArg) {
+                            function normalizeText(v) {
+                                return String(v || '').replace(/\\s+/g, ' ').trim();
+                            }
+                            var q = String(selectorArg || '').trim();
+                            if (!q) q = '#viewSubtit .smi_word';
+                            q = q.replace(/:last-child/g, '').replace(/:last-of-type/g, '');
+                            var nodes = [];
+                            try { nodes = Array.from(document.querySelectorAll(q)); } catch (e) {}
+                            if ((!nodes || !nodes.length) && q !== '#viewSubtit .smi_word') {
+                                try { nodes = Array.from(document.querySelectorAll('#viewSubtit .smi_word')); } catch (e) {}
+                            }
+                            return nodes.map(function(el, idx) {
+                                var cls = String(el.className || '');
+                                var idPart = cls.replace(/\\bsmi_word\\b/g, '').trim();
+                                var text = normalizeText(el.innerText || el.textContent || '');
+                                return { id: idPart || String(idx), text: text };
+                            });
+                        })(arguments[0]);
+                        """,
+                        sel,
+                    )
+                except Exception as e:
+                    logger.debug("smi_word 수집 오류 (%s): %s", sel, e)
+                    return "", False
+
+                if not isinstance(rows, list) or not rows:
+                    return "", False
+
+                normalized_rows: list[tuple[str, str, str]] = []
+                for row in rows:
+                    if isinstance(row, dict):
+                        row_text = utils.clean_text_display(str(row.get("text", ""))).strip()
+                        row_id = str(row.get("id", "")).strip()
+                    else:
+                        row_text = utils.clean_text_display(str(row)).strip()
+                        row_id = ""
+                    if not row_text:
+                        continue
+
+                    row_compact = utils.compact_subtitle_text(row_text)
+                    if not row_compact:
+                        continue
+
+                    # 인접 중복(동일 compact)은 하나로 압축해 불필요한 정체를 줄인다.
+                    if normalized_rows and normalized_rows[-1][2] == row_compact:
+                        normalized_rows[-1] = (row_id, row_text, row_compact)
+                    else:
+                        normalized_rows.append((row_id, row_text, row_compact))
+
+                if not normalized_rows:
+                    return "", False
+
+                tail_texts = [t for _, t, _ in normalized_rows[-3:]]
+                window_text = " ".join(tail_texts).strip()
+                if not window_text:
+                    return "", False
+                return window_text, True
+
             for sel in selectors:
+                if ".smi_word" in sel:
+                    smi_text, smi_found = _read_smi_word_window(sel)
+                    if smi_found:
+                        return smi_text, sel, True
+
                 try:
                     element = driver.find_element(By.CSS_SELECTOR, sel)
                 except (NoSuchElementException, StaleElementReferenceException):
@@ -3145,10 +3218,32 @@ class MainWindow(QMainWindow):
                     ];
                 }
 
+                var targetSelectors = [];
+                function pushUnique(arr, value) {
+                    if (!value) return;
+                    for (var i = 0; i < arr.length; i++) {
+                        if (arr[i] === value) return;
+                    }
+                    arr.push(value);
+                }
+                var containerFirst = [
+                    '#viewSubtit .incont',
+                    '#viewSubtit',
+                    '.subtitle_area',
+                    '.ai_subtitle',
+                    "[class*='subtitle']"
+                ];
+                for (var c = 0; c < containerFirst.length; c++) {
+                    pushUnique(targetSelectors, containerFirst[c]);
+                }
+                for (var s = 0; s < selectors.length; s++) {
+                    pushUnique(targetSelectors, selectors[s]);
+                }
+
                 var target = null;
-                for (var i = 0; i < selectors.length; i++) {
+                for (var i = 0; i < targetSelectors.length; i++) {
                     try {
-                        target = document.querySelector(selectors[i]);
+                        target = document.querySelector(targetSelectors[i]);
                     } catch (e) {
                         target = null;
                     }
@@ -3220,6 +3315,14 @@ class MainWindow(QMainWindow):
                         try {
                             var text = target.innerText || target.textContent || '';
                             text = normalizeText(text);
+                            if (text && text.length > 400) {
+                                var lines = String(target.innerText || '').split('\\n')
+                                    .map(function(v) { return normalizeText(v); })
+                                    .filter(function(v) { return !!v; });
+                                if (lines.length) {
+                                    text = lines.slice(-3).join(' ');
+                                }
+                            }
                             if (!text && window.__subtitleLastText) {
                                 window.__subtitleBuffer.push('__SUBTITLE_CLEARED__');
                                 window.__subtitleLastText = '';

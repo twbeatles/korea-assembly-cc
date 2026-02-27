@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.13
+- **버전**: v16.13.1
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ## 2. 기술 스택
@@ -55,12 +55,13 @@
 1. Worker: MutationObserver 우선, 폴링 fallback → compact 기준 중복 전송 억제 후 `preview` 전송
 2. Worker: 시작/재연결 시 URL에 `xcgcd`가 없으면 `xcode` 기준 자동 감지를 1회 수행해 보완 URL로 재접속
 3. Worker: 선택자 우선순위(`.smi_word:last-child` 우선) + 기본 문서/iframe 순회로 자막 요소 탐색
-4. Worker: 타겟 미탐색 시 `allow_poll_fallback` 기반 JS 폴링 브리지 활성화
-5. UI: `_prepare_preview_raw`에서 정규화/게이팅/재동기화 처리 (desync 시 `_soft_resync`)
-6. Core: `_process_raw_text`(GlobalHistory + Suffix, `rfind` 기반)로 새 부분 추출
-7. 후단 정제: `get_word_diff` + recent compact tail 체크 + 유의미 텍스트 게이트(짧은 발화 허용/노이즈 차단)
-8. 중지 시: `_drain_pending_previews`로 큐를 소진하고 강제 플러시로 누락 방지
-9. 동일 자막 유지 시: 마지막 엔트리 `end_time` 주기 갱신
+4. Worker: `.smi_word`는 단일 노드 대신 목록 전체를 수집해 최근 창(window) 텍스트로 조합
+5. Worker: 타겟 미탐색 시 `allow_poll_fallback` 기반 JS 폴링 브리지 활성화
+6. UI: `_prepare_preview_raw`에서 정규화/게이팅/재동기화 처리 (desync 시 `_soft_resync`)
+7. Core: `_process_raw_text`(GlobalHistory + Suffix, `rfind` 기반)로 새 부분 추출
+8. 후단 정제: `get_word_diff` + recent compact tail 체크 + 유의미 텍스트 게이트(짧은 발화 허용/노이즈 차단)
+9. 중지 시: `_drain_pending_previews`로 큐를 소진하고 강제 플러시로 누락 방지
+10. 동일 자막 유지 시: 마지막 엔트리 `end_time` 주기 갱신
 
 ### 4.3 예외 처리
 - 파일 I/O: `try-except` 필수
@@ -87,7 +88,7 @@
 | `_inject_mutation_observer_here()` | 현재 문맥(frame) Observer/폴링 브리지 주입 |
 | `_collect_observer_changes()` | Observer 버퍼에서 변경 텍스트 수집 |
 | `_build_subtitle_selector_candidates()` | 선택자 후보 생성 및 우선순위 정렬 |
-| `_read_subtitle_text_by_selectors()` | 선택자 + 프레임 경로 순회 기반 자막 읽기 |
+| `_read_subtitle_text_by_selectors()` | 선택자 + 프레임 경로 순회 기반 자막 읽기 (`.smi_word` 창 수집 포함) |
 | `_activate_subtitle()` | AI 자막 레이어 활성화 |
 | `_process_message_queue()` | Queue 폴링 (100ms) |
 | `_prepare_preview_raw()` | preview 입력 정규화/게이트/재동기화 |
@@ -279,6 +280,13 @@ pip install pywin32  # HWP 저장
 ### 🧩 UI 안정성/노이즈 필터
 - **LiveBroadcastDialog 종료 단일화**: `done`/`closeEvent` 모두 `_shutdown_fetch_thread()` 사용
 - **짧은 발화 허용 + 노이즈 차단**: `is_meaningful_subtitle_text`로 1~2자 한글/영문 허용, 숫자/기호-only 차단
+
+## 9.8 v16.13.1 수집 안정화
+
+### 🧩 첫 문장 이후 정체 완화
+- **`.smi_word` 창 수집**: 단일 `:last-child` 대신 `.smi_word` 목록 전체를 수집해 최근 창 텍스트를 조합
+- **Observer 타겟 보강**: `.incont`/`#viewSubtit` 컨테이너 우선 탐색으로 DOM 구조 변화 대응 강화
+- **긴 텍스트 축약 보강**: Observer 버퍼에 과도한 컨테이너 텍스트가 들어올 때 최근 라인 중심으로 축약
 
 
 ## 10. 자막 수집 알고리즘

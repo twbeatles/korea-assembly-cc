@@ -17,7 +17,7 @@
 - `ui/main_window.py`의 `_process_raw_text`
 - `ui/main_window.py`의 `_extract_new_part` — `rfind()` 사용 (v16.12)
 - `ui/main_window.py`의 `_build_subtitle_selector_candidates` — `.smi_word` 우선순위 유지
-- `ui/main_window.py`의 `_read_subtitle_text_by_selectors` — default + iframe/frame 순회 유지
+- `ui/main_window.py`의 `_read_subtitle_text_by_selectors` — default + iframe/frame 순회 + `.smi_word` 창 수집 유지
 - `ui/main_window.py`의 `_inject_mutation_observer` — 타겟 기반 주입 후 폴링 브리지 fallback 유지
 - `ui/main_window.py`의 `_collect_observer_changes` — Observer 버퍼 우선 수집 유지
 - `ui/main_window.py`의 `_join_stream_text` — 공백/문장부호 보존 결합 유지
@@ -27,7 +27,7 @@
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.13)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.13.1)
 - `_extract_new_part`: `find()` → `rfind()` 전환 — suffix 충돌 시 과잉 추출 방지
 - `_prepare_preview_raw`: 전체 리셋 → `_soft_resync()` 소프트 리셋 — 대량 중복 유입 방지
 - `_extraction_worker`: MutationObserver 하이브리드 아키텍처 도입
@@ -35,6 +35,8 @@
 - `_extraction_worker`: 시작/재연결 시 `_detect_live_broadcast` 실연결 (`xcode` → `xcgcd` 보완 URL 반영)
 - `_extraction_worker`/`_handle_keepalive`: 동일 raw 유지 시 keepalive 큐 발행 및 end_time 주기 갱신 활성화
 - `is_meaningful_subtitle_text`: 의미 있는 1~2자 발화 허용, 숫자/기호-only 문자열 차단
+- `_read_subtitle_text_by_selectors`: `.smi_word` 목록 전체를 수집해 최근 창 텍스트로 조합 (첫 문장 이후 정체 완화)
+- `_inject_mutation_observer_here`: Observer 타겟 탐색 시 컨테이너 우선 + 긴 텍스트 축약 보강
 
 ### 2.2 안정화 이력 (v16.12.1, 2026-02-25)
 - `_extraction_worker`: URL에 `xcgcd`가 없을 때만 `xcode` 기반 자동 감지를 연결
@@ -49,6 +51,7 @@
 Worker(raw) [MutationObserver 우선 + 폴링 fallback]
   -> 시작/재연결 시 _detect_live_broadcast로 xcgcd 보완 URL 확정
   -> selector 후보 우선순위 정렬 (.smi_word:last-child 우선)
+  -> .smi_word 목록 기반 창(window) 텍스트 조합
   -> 기본 문서 + 중첩 iframe/frame 순회
   -> clean/compact 기준 중복 전송 억제
   -> 동일 raw 유지 구간 keepalive 메시지 발행

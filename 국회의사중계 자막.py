@@ -39,6 +39,8 @@ def main():
         app = QApplication.instance()
         if app is None:
             app = QApplication(sys.argv)
+        if not isinstance(app, QApplication):
+            raise RuntimeError("QApplication 인스턴스를 초기화할 수 없습니다.")
 
         app.setStyle("Fusion")
         app.setFont(QFont("맑은 고딕", 10))
