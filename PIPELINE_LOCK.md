@@ -233,8 +233,8 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - 문법 검사
   - `python -c "import ast, pathlib; ast.parse(pathlib.Path('ui/main_window.py').read_text(encoding='utf-8'))"`
 - 스모크 테스트
-  - `python test_reflow.py`
-  - `python test_core_algorithm.py`
+  - `python tests/test_reflow.py`
+  - `python tests/test_core_algorithm.py`
 - 실운영 확인
   - 반복 누적 감소 여부
   - 연속 발화 누락 여부

@@ -739,7 +739,7 @@ def _find_best_suffix_position(self, raw_compact: str, suffix: str) -> int:
 ### 11.2 자동화 가능한 단위 테스트
 
 ```python
-# test_core_algorithm.py (예시)
+# tests/test_core_algorithm.py (예시)
 def test_rfind_prevents_over_extraction():
     """rfind 전환 후 suffix 중복 시 과잉 추출 방지"""
     mw = MockMainWindow()

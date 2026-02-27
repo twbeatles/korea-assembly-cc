@@ -123,8 +123,8 @@ assemblyccv3/
     main_window.py
   database.py               # SQLite DB 관리 (v16.6)
   subtitle_extractor.spec   # PyInstaller 빌드 설정
-  test_core_algorithm.py    # 코어 알고리즘 단위 테스트
-  test_reflow.py            # Reflow 테스트
+  tests/test_core_algorithm.py    # 코어 알고리즘 단위 테스트
+  tests/test_reflow.py            # Reflow 테스트
   README.md                 # 문서
   CLAUDE.md                 # AI 컨텍스트
   GEMINI.md                 # AI 컨텍스트
