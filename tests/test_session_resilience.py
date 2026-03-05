@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import pytest
 
@@ -62,3 +63,44 @@ def test_merge_sessions_skips_corrupted_items(tmp_path):
 
     assert len(merged) == 1
     assert merged[0].text == "정상 항목"
+
+
+def test_merge_sessions_dedup_uses_time_bucket(tmp_path):
+    win = MainWindow.__new__(MainWindow)
+
+    path = tmp_path / "bucket.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subtitles": [
+                    {
+                        "text": "반복 발화",
+                        "timestamp": "2026-02-12T11:00:05",
+                    },
+                    {
+                        "text": "반복 발화",
+                        "timestamp": "2026-02-12T11:00:20",
+                    },
+                    {
+                        "text": "반복 발화",
+                        "timestamp": "2026-02-12T11:00:40",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    merged = MainWindow._merge_sessions(
+        win,
+        [str(path)],
+        remove_duplicates=True,
+        sort_by_time=True,
+    )
+
+    assert len(merged) == 2
+    assert [e.timestamp for e in merged] == [
+        datetime.fromisoformat("2026-02-12T11:00:05"),
+        datetime.fromisoformat("2026-02-12T11:00:40"),
+    ]

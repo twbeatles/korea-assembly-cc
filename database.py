@@ -10,6 +10,8 @@ from typing import List, Dict, Optional, Any, Union
 import threading
 import logging
 
+from core.config import Config
+
 logger = logging.getLogger("SubtitleExtractor")
 
 
@@ -25,12 +27,7 @@ class DatabaseManager:
         Args:
             db_path: 데이터베이스 파일 경로 (기본: subtitle_history.db)
         """
-        if db_path is None:
-            # 실행 파일 위치 기준 경로 설정
-            base_dir = Path.cwd()
-            self.db_path = str(base_dir / self.DEFAULT_DB_PATH)
-        else:
-            self.db_path = db_path
+        self.db_path = db_path or Config.DATABASE_PATH
 
         # 상위 폴더가 없으면 생성
         db_parent = Path(self.db_path).resolve().parent

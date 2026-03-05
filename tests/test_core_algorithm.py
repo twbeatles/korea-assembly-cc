@@ -111,3 +111,27 @@ def test_soft_resync_prevents_duplicate():
     result = MainWindow._extract_new_part(win, recent_text, raw_compact)
 
     assert result == "" or compact_subtitle_text(result) == ""
+
+
+def test_trim_confirmed_compact_history_keeps_tail():
+    win = _build_minimal_window()
+    limit = mw_mod.Config.CONFIRMED_COMPACT_MAX_LEN
+    win._confirmed_compact = "HEAD" + ("가" * limit)
+
+    MainWindow._trim_confirmed_compact_history(win)
+
+    assert len(win._confirmed_compact) == limit
+    assert not win._confirmed_compact.startswith("HEAD")
+    assert win._confirmed_compact.endswith("가" * 10)
+
+
+def test_soft_resync_applies_confirmed_compact_limit():
+    win = _build_minimal_window()
+    limit = mw_mod.Config.CONFIRMED_COMPACT_MAX_LEN
+    long_text = "나" * (limit + 321)
+    win.subtitles = [SubtitleEntry(long_text)]
+
+    MainWindow._soft_resync(win)
+
+    assert len(win._confirmed_compact) == limit
+    assert win._trailing_suffix == win._confirmed_compact[-win._suffix_length :]

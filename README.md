@@ -33,6 +33,25 @@
 
 ---
 
+## ✨ v16.13.2 운영 정합성 업데이트 (2026-03-05)
+
+### 🔒 종료 lifecycle 통합
+- 파일 저장/세션 저장·불러오기/DB 비동기 작업을 공통 백그라운드 레지스트리로 추적합니다.
+- `closeEvent`에서 `신규 작업 차단 → inflight 대기 → 자원 정리` 순서로 종료하여 종료 시점 데이터 유실 위험을 줄였습니다.
+
+### 🧠 스트리밍 히스토리 메모리 상한
+- `_confirmed_compact` 누적 버퍼에 상한(`Config.CONFIRMED_COMPACT_MAX_LEN=50000`)을 적용했습니다.
+- suffix 기반 코어 의미론은 유지하면서 tail만 보존해 장시간 세션 메모리 증가를 억제합니다.
+
+### 📎 병합 정책 정합성
+- 실시간 병합 기준을 Config 상수로 일원화했습니다 (`ENTRY_MERGE_MAX_GAP=5`, `ENTRY_MERGE_MAX_CHARS=300`).
+- 세션 병합 중복 제거를 텍스트-only에서 `정규화 텍스트 + 시간 버킷(30초)` 기준으로 개선했습니다.
+
+### 🗄️ DB 경로 정책 통일
+- `DatabaseManager()` 기본 경로를 앱 기준 `Config.DATABASE_PATH`로 통일해 실행 위치(CWD) 의존성을 제거했습니다.
+
+---
+
 ## ✨ v16.13 운영 안정화
 
 ### 🧭 생중계 URL 자동 보완 경로 실연결
@@ -291,7 +310,7 @@ python "국회의사중계 자막.py"
 5. **종료 처리**:
    - `_drain_pending_previews`에서 남은 큐 소진
    - 마지막 항목 보정 및 저장
-   - 저장 스레드 종료 대기 후 종료(`SAVE_THREAD_SHUTDOWN_TIMEOUT`)
+   - 백그라운드 작업(파일/세션/DB) 종료 대기 후 종료(`SAVE_THREAD_SHUTDOWN_TIMEOUT`)
 
 운영 원칙:
 - 코어 알고리즘(`_process_raw_text`, `_extract_new_part`)은 직접 수정하지 않음
@@ -347,6 +366,13 @@ dist/국회의사중계자막추출기 v16.13.1.exe
 ---
 
 ## 📝 변경 이력
+
+### v16.13.2 (2026-03-05)
+- 🔒 **종료 lifecycle 통합**: 파일 저장/세션 저장·불러오기/DB task를 공통 레지스트리로 추적하고 종료 시 drain 대기 적용
+- 🧠 **메모리 상한 적용**: `_confirmed_compact` 상한(`50000`) 도입으로 장시간 세션 메모리 증가 억제
+- 📎 **병합 정책 일원화**: 실시간 병합 기준을 Config로 통합(`5초/300자`), 세션 dedupe를 시간창(30초) 기반으로 개선
+- 🗄️ **DB 경로 정합성**: `DatabaseManager()` 기본 경로를 `Config.DATABASE_PATH`로 통일
+- ✅ **회귀 테스트 확장**: background lifecycle, 병합 정책, compact 상한, DB 기본 경로 검증 추가
 
 ### v16.13.1 (2026-02-27)
 - 🧩 **수집 정체 완화**: `.smi_word` 전체 목록 기반 창(window) 수집으로 첫 문장 이후 멈춤 현상 완화

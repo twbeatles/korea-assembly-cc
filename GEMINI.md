@@ -102,6 +102,8 @@
 | `_drain_pending_previews()` | 종료 직전 preview 큐 소진 |
 | `_render_subtitles()` | 자막 렌더링 + 하이라이트 |
 | `_save_in_background()` | 비동기 파일 저장 헬퍼 (스레드 추적/종료 대기 연동) |
+| `_start_background_thread()` | 공통 백그라운드 스레드 등록/시작 (종료 단계 차단 포함) |
+| `_wait_active_background_threads()` | 종료 시 백그라운드 작업(파일/세션/DB) 제한시간 대기 |
 | `_wait_active_save_threads()` | 종료 시 저장 스레드 제한시간 대기 |
 | `_update_connection_status()` | 연결 상태 UI 업데이트 (#30) |
 | `_generate_smart_filename()` | 자동 파일명 생성 (#28) |
@@ -288,6 +290,23 @@ pip install pywin32  # HWP 저장
 - **Observer 타겟 보강**: `.incont`/`#viewSubtit` 컨테이너 우선 탐색으로 DOM 구조 변화 대응 강화
 - **긴 텍스트 축약 보강**: Observer 버퍼에 과도한 컨테이너 텍스트가 들어올 때 최근 라인 중심으로 축약
 
+## 9.9 v16.13.2 운영 정합성 업데이트 (2026-03-05)
+
+### 🔒 종료 lifecycle 통합
+- 파일 저장/세션 저장·불러오기/DB task를 공통 백그라운드 레지스트리로 추적
+- 종료 시 `신규 작업 차단 -> inflight drain -> 자원 정리` 순서로 단일화
+
+### 🧠 스트리밍 메모리 상한
+- `_confirmed_compact`에 상한(`Config.CONFIRMED_COMPACT_MAX_LEN=50000`) 적용
+- suffix 의미론은 유지하고 tail만 보존
+
+### 📎 병합 정책 정합성
+- 실시간 병합 기준을 Config 상수(`ENTRY_MERGE_MAX_GAP=5`, `ENTRY_MERGE_MAX_CHARS=300`)로 일원화
+- 세션 병합 dedupe를 `정규화 텍스트 + 시간 버킷(30초)`(`MERGE_DEDUP_TIME_BUCKET_SECONDS`)으로 전환
+
+### 🗄️ DB 경로 정책 통일
+- `DatabaseManager()` 기본 경로를 `Config.DATABASE_PATH`로 통일 (CWD 의존 제거)
+
 
 ## 10. 자막 수집 알고리즘
 
@@ -313,6 +332,7 @@ def _process_raw_text(self, raw):
     
     # 새 내용을 히스토리에 추가
     self._confirmed_compact += new_part
+    self._confirmed_compact = self._confirmed_compact[-Config.CONFIRMED_COMPACT_MAX_LEN:]
     self._trailing_suffix = self._confirmed_compact[-50:]
     
     # 자막에 추가
@@ -321,6 +341,7 @@ def _process_raw_text(self, raw):
 
 ### 운영 고정 규칙
 - `_process_raw_text`, `_extract_new_part`의 핵심 의미론(글로벌 히스토리 + suffix)은 유지한다.
+- `_confirmed_compact`는 상한(`Config.CONFIRMED_COMPACT_MAX_LEN`) 내에서 tail 유지 정책을 따른다.
 - 코어 수정 시 `PIPELINE_LOCK.md` §2를 함께 갱신한다.
 - 반복/누락 이슈 대응은 아래 레이어에서 우선 수행한다.
   1. Worker 전처리(정규화, compact 중복 전송 억제)

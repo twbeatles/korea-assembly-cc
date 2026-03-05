@@ -27,7 +27,7 @@
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.13.1)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.13.2)
 - `_extract_new_part`: `find()` → `rfind()` 전환 — suffix 충돌 시 과잉 추출 방지
 - `_prepare_preview_raw`: 전체 리셋 → `_soft_resync()` 소프트 리셋 — 대량 중복 유입 방지
 - `_extraction_worker`: MutationObserver 하이브리드 아키텍처 도입
@@ -37,6 +37,10 @@
 - `is_meaningful_subtitle_text`: 의미 있는 1~2자 발화 허용, 숫자/기호-only 문자열 차단
 - `_read_subtitle_text_by_selectors`: `.smi_word` 목록 전체를 수집해 최근 창 텍스트로 조합 (첫 문장 이후 정체 완화)
 - `_inject_mutation_observer_here`: Observer 타겟 탐색 시 컨테이너 우선 + 긴 텍스트 축약 보강
+- `_process_raw_text`/`_soft_resync`: `_confirmed_compact` 상한(`Config.CONFIRMED_COMPACT_MAX_LEN=50000`) 도입
+- `_add_text_to_subtitles`: 병합 기준 하드코딩 제거, Config 상수(`ENTRY_MERGE_MAX_GAP=5`, `ENTRY_MERGE_MAX_CHARS=300`)로 일원화
+- `_merge_sessions`: 중복 제거 정책을 텍스트-only에서 `정규화 텍스트 + 시간 버킷(30초)` 기준으로 개선
+- `closeEvent`/백그라운드 실행 경로: 공통 레지스트리 기반 종료 drain (`신규 작업 차단 -> inflight 대기 -> 자원 정리`)
 
 ### 2.2 안정화 이력 (v16.12.1, 2026-02-25)
 - `_extraction_worker`: URL에 `xcgcd`가 없을 때만 `xcode` 기반 자동 감지를 연결
@@ -184,9 +188,11 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - `_preview_ambiguous_resync_threshold = 6`
 - ambiguous large append 기준: `max(200, len(raw_compact) // 3)`
 - 누락 완화를 위해 fallback delta는 1자 이상 허용
-- `_add_text_to_subtitles` 병합 조건: `elapsed < 5.0 and len < 300`
+- `_add_text_to_subtitles` 병합 조건: `ENTRY_MERGE_MAX_GAP=5`, `ENTRY_MERGE_MAX_CHARS=300`
 - 짧은 발화 정책: 한글/영문 포함 텍스트는 길이와 무관하게 허용
 - keepalive 간격: `Config.SUBTITLE_KEEPALIVE_INTERVAL = 1.0초`
+- `_confirmed_compact` 최대 길이: `Config.CONFIRMED_COMPACT_MAX_LEN = 50000`
+- 세션 병합 dedupe 버킷: `Config.MERGE_DEDUP_TIME_BUCKET_SECONDS = 30`
 - Observer 재시도 간격: `3.0초`
 - 폴링 브리지 간격: `180ms`
 

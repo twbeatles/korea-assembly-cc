@@ -1,5 +1,7 @@
 import threading
+from pathlib import Path
 
+from core.config import Config
 from database import DatabaseManager
 
 
@@ -74,5 +76,16 @@ def test_database_cleans_stale_thread_connections(tmp_path):
         worker_id = worker_id_holder.get("id")
         if worker_id and worker_id != threading.get_ident():
             assert worker_id not in db._thread_connections
+    finally:
+        db.close_all()
+
+
+def test_database_default_path_uses_config(monkeypatch, tmp_path):
+    expected = tmp_path / "default_history.db"
+    monkeypatch.setattr(Config, "DATABASE_PATH", str(expected), raising=False)
+
+    db = DatabaseManager()
+    try:
+        assert Path(db.db_path).resolve() == expected.resolve()
     finally:
         db.close_all()

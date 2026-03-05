@@ -192,12 +192,18 @@ class Config:
     # 중지 시 브라우저 창 유지
     KEEP_BROWSER_ON_STOP = True
 
-    # 자막 병합 기준 (너무 길거나 간격이 크면 분리)
-    ENTRY_MERGE_MAX_CHARS = 400
-    ENTRY_MERGE_MAX_GAP = 90  # 초
+    # 자막 병합 기준 (현재 운영 동작 유지: 5초/300자)
+    ENTRY_MERGE_MAX_CHARS = 300
+    ENTRY_MERGE_MAX_GAP = 5  # 초
 
     # 스트리밍 자막 최대 길이 (초과 시 강제 분할하여 새 타임스탬프 생성)
     STREAM_SUBTITLE_MAX_LENGTH = 300
+
+    # 글로벌 compact 히스토리 메모리 상한 (공백 제거 기준 글자 수)
+    CONFIRMED_COMPACT_MAX_LEN = 50000
+
+    # 세션 병합 중복 제거 시간 버킷(초)
+    MERGE_DEDUP_TIME_BUCKET_SECONDS = 30
 
     
     # 자동 파일명 생성 (#28)

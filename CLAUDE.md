@@ -158,6 +158,8 @@ assemblyccv3/
 | `_drain_pending_previews()` | 종료 직전 preview 큐 소진 |
 | `_render_subtitles()` | 자막 화면 렌더링 + 키워드 하이라이트 |
 | `_save_in_background()` | 파일 저장 백그라운드 처리 (TXT/SRT/VTT/DOCX/HWP/RTF/통계 내보내기, 스레드 추적/종료 대기 연동) |
+| `_start_background_thread()` | 공통 백그라운드 스레드 등록/시작 (종료 단계 차단 포함) |
+| `_wait_active_background_threads()` | 종료 시 백그라운드 작업(파일/세션/DB) 제한시간 대기 |
 | `_wait_active_save_threads()` | 종료 시 저장 스레드 제한시간 대기 |
 | `_update_connection_status()` | **연결 상태 UI 업데이트 (#30)** |
 | `_generate_smart_filename()` | **자동 파일명 생성 (#28)** |
@@ -184,6 +186,13 @@ assemblyccv3/
 ### 6.4 UI/노이즈 품질 보강
 - **LiveBroadcastDialog 종료 경로 단일화**: `done`/`closeEvent`가 `_shutdown_fetch_thread()` 공통 호출
 - **짧은 발화 허용 + 노이즈 필터**: 한글/영문 1~2자 허용, 숫자/기호-only 문자열 차단
+
+### 6.5 v16.13.2 운영 정합성 업데이트 (2026-03-05)
+- **종료 lifecycle 통합**: 파일 저장/세션 저장·불러오기/DB task를 공통 백그라운드 레지스트리로 추적하고 종료 시 drain 대기를 단일화
+- **compact 히스토리 상한**: `_confirmed_compact`를 `Config.CONFIRMED_COMPACT_MAX_LEN(50000)`으로 제한해 장시간 세션 메모리 증가를 억제
+- **병합 정책 일원화**: 실시간 병합 기준을 Config 상수(`ENTRY_MERGE_MAX_GAP=5`, `ENTRY_MERGE_MAX_CHARS=300`)로 통합
+- **세션 병합 dedupe 고도화**: 텍스트-only 제거에서 `정규화 텍스트 + 30초 시간 버킷`(`MERGE_DEDUP_TIME_BUCKET_SECONDS`) 기준으로 전환
+- **DB 기본 경로 통일**: `DatabaseManager()` 기본 경로를 `Config.DATABASE_PATH`로 고정
 
 ## 6-1. v16.6에서 추가된 기능 (이전)
 
@@ -307,6 +316,7 @@ def _process_raw_text(self, raw):
     
     # 새 내용을 히스토리에 추가
     self._confirmed_compact += new_part
+    self._confirmed_compact = self._confirmed_compact[-Config.CONFIRMED_COMPACT_MAX_LEN:]
     self._trailing_suffix = self._confirmed_compact[-50:]
     
     # 자막에 추가
@@ -325,6 +335,7 @@ def _process_raw_text(self, raw):
 
 ### 운영 고정 규칙
 - `_process_raw_text`, `_extract_new_part`의 핵심 의미론(글로벌 히스토리 + suffix)은 유지한다.
+- `_confirmed_compact`는 상한(`Config.CONFIRMED_COMPACT_MAX_LEN`) 내에서 tail 유지 정책을 따른다.
 - 코어 수정 시 `PIPELINE_LOCK.md` §2를 함께 갱신한다.
 - 반복/누락 이슈 대응은 아래 레이어에서 우선 수행한다.
   1. Worker 입력 정규화 및 compact 기준 전송 억제

@@ -92,28 +92,6 @@ def atomic_write_bytes(path: Union[str, Path], content: bytes) -> None:
         raise
 
 
-def is_meaningful_subtitle_text(text: str) -> bool:
-    """자막으로 저장할 의미 있는 텍스트인지 판단한다.
-
-    - 한글/영문 문자가 하나라도 있으면 1~2글자라도 허용
-    - 숫자/기호-only 문자열은 차단
-    """
-    if text is None:
-        return False
-    cleaned = clean_text_display(str(text)).strip()
-    if not cleaned:
-        return False
-
-    compact = compact_subtitle_text(cleaned)
-    if not compact:
-        return False
-
-    has_letter = bool(re.search(r"[가-힣A-Za-z]", compact))
-    if not has_letter:
-        return False
-
-    return True
-
 def clean_text(text: str) -> str:
     """자막 텍스트 정리 (성능 최적화: 사전 컴파일된 정규식 사용)"""
     if not text:

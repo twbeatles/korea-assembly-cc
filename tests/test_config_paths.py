@@ -36,3 +36,10 @@ def test_config_paths_resolve_under_app_base_dir():
         assert value == base or base in value.parents, (
             f"{field} must be within app base dir: {value}"
         )
+
+
+def test_merge_and_streaming_config_defaults():
+    assert Config.ENTRY_MERGE_MAX_GAP == 5
+    assert Config.ENTRY_MERGE_MAX_CHARS == 300
+    assert Config.CONFIRMED_COMPACT_MAX_LEN == 50000
+    assert Config.MERGE_DEDUP_TIME_BUCKET_SECONDS == 30

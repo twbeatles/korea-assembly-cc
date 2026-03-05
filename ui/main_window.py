@@ -220,8 +220,9 @@ class MainWindow(QMainWindow):
         self._session_save_in_progress = False
         self._session_load_in_progress = False
         self._db_history_dialog_state = None
-        self._active_save_threads = set()
-        self._active_save_threads_lock = threading.Lock()
+        self._active_background_threads = set()
+        self._active_background_threads_lock = threading.Lock()
+        self._background_shutdown_initiated = False
 
         # URL 히스토리
         self.url_history = self._load_url_history()
@@ -1919,31 +1920,88 @@ class MainWindow(QMainWindow):
                 source=f"detached_{idx}",
             )
 
-    def _wait_active_save_threads(self, timeout: float) -> None:
-        """실행 중인 저장 스레드 종료를 제한 시간 동안 대기한다."""
+    def _ensure_background_registry(self) -> None:
+        """백그라운드 스레드 레지스트리를 지연 초기화한다."""
+        if not hasattr(self, "_active_background_threads") or self._active_background_threads is None:
+            self._active_background_threads = set()
+        if (
+            not hasattr(self, "_active_background_threads_lock")
+            or self._active_background_threads_lock is None
+        ):
+            self._active_background_threads_lock = threading.Lock()
+        if not hasattr(self, "_background_shutdown_initiated"):
+            self._background_shutdown_initiated = False
+
+    def _begin_background_shutdown(self) -> None:
+        """종료 단계 진입: 신규 백그라운드 작업 시작을 차단한다."""
+        self._ensure_background_registry()
+        with self._active_background_threads_lock:
+            self._background_shutdown_initiated = True
+
+    def _is_background_shutdown_active(self) -> bool:
+        self._ensure_background_registry()
+        with self._active_background_threads_lock:
+            return bool(self._background_shutdown_initiated)
+
+    def _unregister_background_thread(self, thread: threading.Thread | None) -> None:
+        self._ensure_background_registry()
+        if thread is None:
+            return
+        with self._active_background_threads_lock:
+            self._active_background_threads.discard(thread)
+
+    def _start_background_thread(self, target, name: str) -> bool:
+        """공통 레지스트리에 등록되는 non-daemon 백그라운드 스레드를 시작한다."""
+        self._ensure_background_registry()
+        with self._active_background_threads_lock:
+            if self._background_shutdown_initiated:
+                logger.info("종료 단계에서 백그라운드 작업 시작 거부: %s", name)
+                return False
+
+            def runner():
+                try:
+                    target()
+                finally:
+                    self._unregister_background_thread(threading.current_thread())
+
+            worker_thread = threading.Thread(target=runner, daemon=False, name=name)
+            self._active_background_threads.add(worker_thread)
+
+        worker_thread.start()
+        return True
+
+    def _wait_active_background_threads(self, timeout: float) -> None:
+        """실행 중인 백그라운드 스레드 종료를 제한 시간 동안 대기한다."""
+        self._ensure_background_registry()
         deadline = time.time() + max(0.0, float(timeout))
         current_thread = threading.current_thread()
 
         while True:
-            with self._active_save_threads_lock:
+            with self._active_background_threads_lock:
                 live_threads = [
                     t
-                    for t in self._active_save_threads
+                    for t in self._active_background_threads
                     if t is not None and t is not current_thread and t.is_alive()
                 ]
                 if not live_threads:
-                    self._active_save_threads = {
-                        t for t in self._active_save_threads if t.is_alive()
+                    self._active_background_threads = {
+                        t for t in self._active_background_threads if t.is_alive()
                     }
                     return
 
             remaining = deadline - time.time()
             if remaining <= 0:
-                logger.warning("저장 스레드 종료 대기 타임아웃: %s개", len(live_threads))
+                logger.warning(
+                    "백그라운드 작업 종료 대기 타임아웃: %s개", len(live_threads)
+                )
                 return
 
             for thread in live_threads:
                 thread.join(timeout=min(0.2, remaining))
+
+    def _wait_active_save_threads(self, timeout: float) -> None:
+        """하위 호환: 저장 스레드 대기 호출은 공통 백그라운드 대기로 위임한다."""
+        self._wait_active_background_threads(timeout=timeout)
 
     def _reset_ui(self):
         self.is_running = False
@@ -4047,11 +4105,12 @@ class MainWindow(QMainWindow):
         if not last_entry or not new_text:
             return False
 
+        # [호환 유지] end_time이 없으면 이어붙이지 않음 (reflow 이후 등)
+        if last_entry.end_time is None:
+            return False
+
         # 마지막 자막과 시간 차이가 너무 크면 분리
-        if (
-            last_entry.end_time
-            and (now - last_entry.end_time).total_seconds() > Config.ENTRY_MERGE_MAX_GAP
-        ):
+        if (now - last_entry.end_time).total_seconds() > Config.ENTRY_MERGE_MAX_GAP:
             return False
 
         # 너무 길어지면 분리
@@ -4201,6 +4260,7 @@ class MainWindow(QMainWindow):
 
         # 히스토리에 추가
         self._confirmed_compact += new_compact
+        self._trim_confirmed_compact_history()
 
         # suffix 갱신
         if len(self._confirmed_compact) >= self._suffix_length:
@@ -4211,6 +4271,15 @@ class MainWindow(QMainWindow):
         # 자막에 추가
         self._add_text_to_subtitles(new_part)
         self._last_processed_raw = raw
+
+    def _trim_confirmed_compact_history(self) -> None:
+        """_confirmed_compact를 설정 상한 내로 유지한다."""
+        try:
+            max_len = int(Config.CONFIRMED_COMPACT_MAX_LEN)
+        except Exception:
+            max_len = 0
+        if max_len > 0 and len(self._confirmed_compact) > max_len:
+            self._confirmed_compact = self._confirmed_compact[-max_len:]
 
     def _extract_new_part(self, raw: str, raw_compact: str) -> str:
         """히스토리의 suffix 이후의 새 부분만 추출
@@ -4253,6 +4322,7 @@ class MainWindow(QMainWindow):
                     e.text for e in self.subtitles[-5:] if e and e.text
                 )
                 self._confirmed_compact = utils.compact_subtitle_text(recent)
+                self._trim_confirmed_compact_history()
                 if len(self._confirmed_compact) >= self._suffix_length:
                     self._trailing_suffix = self._confirmed_compact[
                         -self._suffix_length :
@@ -4287,12 +4357,8 @@ class MainWindow(QMainWindow):
             # 마지막 엔트리에 이어붙일지, 새 엔트리 만들지 결정
             if self.subtitles:
                 last_entry = self.subtitles[-1]
-                # [FIX] end_time이 None인 경우 방어 처리 (reflow 후 발생 가능)
-                can_append = False
-                if last_entry.end_time is not None:
-                    elapsed = (datetime.now() - last_entry.end_time).total_seconds()
-                    if elapsed < 5.0 and len(last_entry.text) + len(text) < 300:
-                        can_append = True
+                now = datetime.now()
+                can_append = self._should_merge_entry(last_entry, text, now)
 
                 if can_append:
                     old_chars = last_entry.char_count
@@ -4300,22 +4366,23 @@ class MainWindow(QMainWindow):
                     last_entry.update_text(
                         self._join_stream_text(last_entry.text, text)
                     )
-                    last_entry.end_time = datetime.now()
+                    last_entry.end_time = now
                     self._cached_total_chars += last_entry.char_count - old_chars
                     self._cached_total_words += last_entry.word_count - old_words
                 else:
                     # 새 엔트리
                     entry = SubtitleEntry(text)
-                    entry.start_time = datetime.now()
-                    entry.end_time = datetime.now()
+                    entry.start_time = now
+                    entry.end_time = now
                     self.subtitles.append(entry)
                     self._cached_total_chars += entry.char_count
                     self._cached_total_words += entry.word_count
             else:
                 # 첫 엔트리
                 entry = SubtitleEntry(text)
-                entry.start_time = datetime.now()
-                entry.end_time = datetime.now()
+                now = datetime.now()
+                entry.start_time = now
+                entry.end_time = now
                 self.subtitles.append(entry)
                 self._cached_total_chars += entry.char_count
                 self._cached_total_words += entry.word_count
@@ -4970,7 +5037,13 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
-        threading.Thread(target=write_backup, daemon=True).start()
+        started = self._start_background_thread(write_backup, "AutoBackupWorker")
+        if not started:
+            try:
+                self._auto_backup_lock.release()
+            except Exception:
+                pass
+            logger.info("종료 단계로 자동 백업 시작 생략")
 
     def _cleanup_old_backups(self):
         """오래된 백업 파일 정리"""
@@ -4999,8 +5072,6 @@ class MainWindow(QMainWindow):
             error_prefix: 실패 시 에러 메시지 접두어
         """
 
-        thread_holder = {"thread": None}
-
         def background_save():
             try:
                 save_func(path)
@@ -5020,20 +5091,10 @@ class MainWindow(QMainWindow):
                         },
                     )
                 )
-            finally:
-                save_thread = thread_holder.get("thread")
-                if save_thread is not None:
-                    with self._active_save_threads_lock:
-                        self._active_save_threads.discard(save_thread)
-
-        # 백그라운드 스레드에서 저장 실행
-        save_thread = threading.Thread(
-            target=background_save, daemon=False, name="FileSaveWorker"
-        )
-        thread_holder["thread"] = save_thread
-        with self._active_save_threads_lock:
-            self._active_save_threads.add(save_thread)
-        save_thread.start()
+        started = self._start_background_thread(background_save, "FileSaveWorker")
+        if not started:
+            self._show_toast("종료 중이라 새 저장 작업을 시작할 수 없습니다.", "warning")
+            return
 
         # 저장 시작 알림 (즉시)
         self._show_toast(f"💾 저장 중... ({Path(path).name})", "info", 1500)
@@ -5590,6 +5651,10 @@ class MainWindow(QMainWindow):
     # ========== 세션 ==========
 
     def _save_session(self):
+        if self._is_background_shutdown_active():
+            self._show_toast("종료 중이라 세션 저장을 시작할 수 없습니다.", "warning")
+            return
+
         with self.subtitle_lock:
             has_subtitles = bool(self.subtitles)
         if not has_subtitles:
@@ -5689,12 +5754,19 @@ class MainWindow(QMainWindow):
                     ("session_save_failed", {"path": path, "error": str(e)})
                 )
 
-        threading.Thread(
-            target=background_save, daemon=True, name="SessionSaveWorker"
-        ).start()
+        started = self._start_background_thread(background_save, "SessionSaveWorker")
+        if not started:
+            self._session_save_in_progress = False
+            self._set_status("세션 저장 시작 거부 (종료 중)", "warning")
+            self._show_toast("종료 중이라 세션 저장을 시작할 수 없습니다.", "warning")
+            return
         self._show_toast(f"💾 세션 저장 시작: {Path(path).name}", "info", 1500)
 
     def _load_session(self):
+        if self._is_background_shutdown_active():
+            self._show_toast("종료 중이라 세션 불러오기를 시작할 수 없습니다.", "warning")
+            return
+
         if self._session_load_in_progress:
             self._show_toast("이미 세션 불러오기가 진행 중입니다.", "info")
             return
@@ -5747,9 +5819,12 @@ class MainWindow(QMainWindow):
                     ("session_load_failed", {"path": path, "error": str(e)})
                 )
 
-        threading.Thread(
-            target=background_load, daemon=True, name="SessionLoadWorker"
-        ).start()
+        started = self._start_background_thread(background_load, "SessionLoadWorker")
+        if not started:
+            self._session_load_in_progress = False
+            self._set_status("세션 불러오기 시작 거부 (종료 중)", "warning")
+            self._show_toast("종료 중이라 세션 불러오기를 시작할 수 없습니다.", "warning")
+            return
         self._show_toast(f"📂 세션 불러오기 시작: {Path(path).name}", "info", 1500)
 
     # ========== 유틸리티 ==========
@@ -6140,6 +6215,10 @@ class MainWindow(QMainWindow):
         loading_text: str = "",
     ) -> bool:
         """DB 작업을 백그라운드 스레드에서 실행하고 결과를 큐로 전달한다."""
+        if self._is_background_shutdown_active():
+            self._show_toast("종료 중이라 DB 작업을 시작할 수 없습니다.", "warning")
+            return False
+
         if not self.db:
             QMessageBox.warning(self, "알림", "데이터베이스가 초기화되지 않았습니다.")
             return False
@@ -6176,7 +6255,12 @@ class MainWindow(QMainWindow):
                     )
                 )
 
-        threading.Thread(target=_work, daemon=True, name=f"DBTask-{task_name}").start()
+        started = self._start_background_thread(_work, f"DBTask-{task_name}")
+        if not started:
+            self._db_tasks_inflight.discard(task_name)
+            if loading_text:
+                self._set_status("DB 작업 시작 거부 (종료 중)", "warning")
+            return False
         return True
 
     def _handle_db_task_result(
@@ -6673,10 +6757,17 @@ class MainWindow(QMainWindow):
         if remove_duplicates:
             seen = set()
             unique_entries = []
+            bucket_seconds = max(1, int(Config.MERGE_DEDUP_TIME_BUCKET_SECONDS))
             for entry in all_entries:
-                text_normalized = entry.text.strip().lower()
-                if text_normalized not in seen:
-                    seen.add(text_normalized)
+                text_normalized = utils.normalize_subtitle_text(entry.text).lower()
+                timestamp = entry.timestamp if entry and entry.timestamp else datetime.min
+                if timestamp == datetime.min:
+                    time_bucket = 0
+                else:
+                    time_bucket = int(timestamp.timestamp() // bucket_seconds)
+                dedupe_key = (text_normalized, time_bucket)
+                if dedupe_key not in seen:
+                    seen.add(dedupe_key)
                     unique_entries.append(entry)
             all_entries = unique_entries
 
@@ -6749,8 +6840,9 @@ class MainWindow(QMainWindow):
                     event.ignore()
                     return
 
-        # 백그라운드 저장이 진행 중이면 제한 시간 동안 종료 대기
-        self._wait_active_save_threads(timeout=Config.SAVE_THREAD_SHUTDOWN_TIMEOUT)
+        # 종료 단계 진입: 신규 백그라운드 작업 차단 -> inflight 작업 대기
+        self._begin_background_shutdown()
+        self._wait_active_background_threads(timeout=Config.SAVE_THREAD_SHUTDOWN_TIMEOUT)
 
         # 창 위치/크기 저장
         self.settings.setValue("geometry", self.saveGeometry())
