@@ -1,11 +1,11 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import json
 import time
 from urllib.request import Request, urlopen
 
 from PyQt6.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QCloseEvent
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -191,15 +191,17 @@ class LiveBroadcastDialog(QDialog):
             self.selected_broadcast = data
             self.accept()
 
-    def done(self, r):
+    def done(self, a0: int) -> None:
         """다이얼로그 종료 시 호출 (accept, reject 모두 포함)"""
         self._shutdown_fetch_thread()
-        super().done(r)
+        super().done(a0)
 
-    def closeEvent(self, event):
+    def closeEvent(self, a0: QCloseEvent | None) -> None:
         """창 닫기 이벤트"""
         self._shutdown_fetch_thread()
-        super().closeEvent(event)
+        if a0 is None:
+            return
+        super().closeEvent(a0)
 
     def _shutdown_fetch_thread(self):
         """live list 워커 스레드를 안전하게 종료한다."""

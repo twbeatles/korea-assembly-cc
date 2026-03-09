@@ -44,29 +44,30 @@ realtime_output/
 backups/
 tmp_extension_unpacked/
 tmp_extension.crx
+*.tmp
 
 # -----------------------------------------------------------------------------
 # Local database/state files
 # -----------------------------------------------------------------------------
 *.db
-*.json
 subtitle_history.db
 subtitle_history.db-*
 *.db-shm
 *.db-wal
 url_history.json
 committee_presets.json
+presets_*.json
 
 # -----------------------------------------------------------------------------
-# User-exported result files (not source)
+# User-exported result files (root-level exports only)
 # -----------------------------------------------------------------------------
-*.txt
-*.log
-*.srt
-*.vtt
-*.rtf
-*.hwp
-*.docx
+/*.txt
+/*.log
+/*.srt
+/*.vtt
+/*.rtf
+/*.hwp
+/*.docx
 국회자막_*.hwp
 자막통계_*.txt
 backup_*.json

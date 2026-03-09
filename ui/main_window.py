@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 
+import json
 import os
-import time
-import threading
 import queue
 import re
-import json
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Protocol, cast
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, QSettings
 from PyQt6.QtGui import (
+    QCloseEvent,
     QFont,
     QColor,
     QTextCursor,
@@ -76,11 +77,25 @@ from ui.widgets import CollapsibleGroupBox, ToastWidget
 from core import utils
 from core.subtitle_processor import SubtitleProcessor
 
+class DatabaseProtocol(Protocol):
+    def save_session(self, session_data: object) -> int: ...
+    def load_session(self, session_id: int) -> dict[str, Any] | None: ...
+    def delete_session(self, session_id: int) -> bool: ...
+    def search_subtitles(self, query: str, limit: Any = ...) -> list[dict[str, Any]]: ...
+    def get_statistics(self) -> dict[str, Any]: ...
+    def list_sessions(
+        self, limit: Any = ..., offset: Any = ...
+    ) -> list[dict[str, Any]]: ...
+    def close_all(self) -> None: ...
+
+
+DatabaseManagerClass: type[DatabaseProtocol] | None
 try:
-    from database import DatabaseManager
+    from database import DatabaseManager as DatabaseManagerClass
 
     DB_AVAILABLE = True
 except ImportError:
+    DatabaseManagerClass = None
     DB_AVAILABLE = False
     logger.warning(
         "database.py 모듈을 찾을 수 없습니다. 데이터베이스 기능은 비활성화됩니다."
@@ -109,7 +124,7 @@ class MainWindow(QMainWindow):
         )
 
         # 메시지 큐
-        self.message_queue = queue.Queue()
+        self.message_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
 
         # 상태
         self.worker = None
@@ -135,7 +150,7 @@ class MainWindow(QMainWindow):
         self._preview_ambiguous_resync_threshold = 6
 
         # 자막 데이터 (타임스탬프 포함)
-        self.subtitles = []  # List[SubtitleEntry]
+        self.subtitles: list[SubtitleEntry] = []
 
         # [Fix] 자막 중복 방지 프로세서 (#SubtitleRepetitionFix)
         self.subtitle_processor = SubtitleProcessor()
@@ -190,14 +205,14 @@ class MainWindow(QMainWindow):
         self._last_render_show_ts = None
 
         # 토스트 스택 관리
-        self.active_toasts = []  # 현재 표시 중인 토스트 목록
+        self.active_toasts: list[ToastWidget] = []
 
         # 실시간 저장
         self.realtime_file = None
         self._realtime_error_count = 0  # 실시간 저장 연속 오류 카운트 (#3)
 
         # 중지 시 브라우저 유지용 (종료 시 정리)
-        self._detached_drivers = []
+        self._detached_drivers: list[Any] = []
         self._detached_drivers_lock = threading.Lock()
         self._last_subtitle_frame_path = ()
 
@@ -219,8 +234,8 @@ class MainWindow(QMainWindow):
         self._last_status_message = ""
         self._session_save_in_progress = False
         self._session_load_in_progress = False
-        self._db_history_dialog_state = None
-        self._active_background_threads = set()
+        self._db_history_dialog_state: dict[str, Any] | None = None
+        self._active_background_threads: set[threading.Thread] = set()
         self._active_background_threads_lock = threading.Lock()
         self._background_shutdown_initiated = False
 
@@ -251,11 +266,12 @@ class MainWindow(QMainWindow):
         Path(Config.BACKUP_DIR).mkdir(exist_ok=True)
 
         # 데이터베이스 매니저 초기화 (#26)
-        self.db = None
-        self._db_tasks_inflight = set()
-        if DB_AVAILABLE:
+        self.db: DatabaseProtocol | None = None
+        self._db_tasks_inflight: set[str] = set()
+        if DB_AVAILABLE and DatabaseManagerClass is not None:
             try:
-                self.db = DatabaseManager(Config.DATABASE_PATH)
+                db_factory = cast(Callable[[str], DatabaseProtocol], DatabaseManagerClass)
+                self.db = db_factory(Config.DATABASE_PATH)
             except Exception as e:
                 logger.error(f"데이터베이스 초기화 실패: {e}")
 
@@ -291,8 +307,10 @@ class MainWindow(QMainWindow):
             self.tray_icon.setIcon(app_icon)
         else:
             # 기본 아이콘 사용
+            style = self.style()
+            assert style is not None
             self.tray_icon.setIcon(
-                self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon)
+                style.standardIcon(style.StandardPixmap.SP_ComputerIcon)
             )
 
         # 트레이 메뉴
@@ -352,9 +370,11 @@ class MainWindow(QMainWindow):
 
     def _create_menu(self):
         menubar = self.menuBar()
+        assert menubar is not None
 
         # 파일 메뉴
         file_menu = menubar.addMenu("파일")
+        assert file_menu is not None
 
         save_txt = QAction("TXT 저장", self)
         save_txt.setShortcut("Ctrl+S")
@@ -408,6 +428,7 @@ class MainWindow(QMainWindow):
 
         # 편집 메뉴
         edit_menu = menubar.addMenu("편집")
+        assert edit_menu is not None
 
         search_action = QAction("검색", self)
         search_action.setShortcut("Ctrl+F")
@@ -452,6 +473,7 @@ class MainWindow(QMainWindow):
 
         # 보기 메뉴
         view_menu = menubar.addMenu("보기")
+        assert view_menu is not None
 
         self.theme_action = QAction(
             "라이트 테마" if self.is_dark_theme else "다크 테마", self
@@ -477,6 +499,7 @@ class MainWindow(QMainWindow):
 
         # 글자 크기 서브메뉴
         font_menu = view_menu.addMenu("📝 글자 크기")
+        assert font_menu is not None
         for size in [12, 14, 16, 18, 20, 22, 24]:
             font_action = QAction(f"{size}pt", self)
             font_action.triggered.connect(
@@ -498,6 +521,7 @@ class MainWindow(QMainWindow):
 
         # 도구 메뉴 (#20)
         tools_menu = menubar.addMenu("도구")
+        assert tools_menu is not None
 
         merge_action = QAction("📎 자막 병합...", self)
         merge_action.setShortcut("Ctrl+Shift+M")
@@ -516,6 +540,7 @@ class MainWindow(QMainWindow):
 
         # 데이터베이스 메뉴 (#26)
         db_menu = menubar.addMenu("데이터베이스")
+        assert db_menu is not None
 
         db_history_action = QAction("📋 세션 히스토리", self)
         db_history_action.setToolTip("저장된 모든 세션 목록을 확인합니다")
@@ -536,6 +561,7 @@ class MainWindow(QMainWindow):
 
         # 도움말 메뉴
         help_menu = menubar.addMenu("도움말")
+        assert help_menu is not None
 
         guide_action = QAction("사용법 가이드", self)
         guide_action.setShortcut("F1")
@@ -851,9 +877,9 @@ class MainWindow(QMainWindow):
         self.subtitle_text.setUndoRedoEnabled(False)
 
         # 스마트 스크롤: 스크롤바 값 변경 시 사용자 스크롤 감지
-        self.subtitle_text.verticalScrollBar().valueChanged.connect(
-            self._on_scroll_changed
-        )
+        subtitle_scrollbar = self.subtitle_text.verticalScrollBar()
+        assert subtitle_scrollbar is not None
+        subtitle_scrollbar.valueChanged.connect(self._on_scroll_changed)
 
         subtitle_layout.addWidget(self.subtitle_text)
 
@@ -1258,7 +1284,7 @@ class MainWindow(QMainWindow):
         chars = self._cached_total_chars
         self.count_label.setText(f"📝 {count}문장 | {chars:,}자")
 
-    def _update_connection_status(self, status: str, latency: int = None):
+    def _update_connection_status(self, status: str, latency: int | None = None):
         """연결 상태 인디케이터 업데이트 (#30)
 
         Args:
@@ -1496,7 +1522,9 @@ class MainWindow(QMainWindow):
         # 사용자 정의 프리셋이 있으면 구분선 추가
         if self.custom_presets:
             self.preset_menu.addSeparator()
-            self.preset_menu.addAction("── 사용자 정의 ──").setEnabled(False)
+            section_action = QAction("── 사용자 정의 ──", self)
+            section_action.setEnabled(False)
+            self.preset_menu.addAction(section_action)
 
             for name, url in self.custom_presets.items():
                 action = QAction(f"⭐ {name}", self)
@@ -1866,7 +1894,7 @@ class MainWindow(QMainWindow):
             return True
 
         done = threading.Event()
-        error_holder = {"error": None}
+        error_holder: dict[str, Exception | None] = {"error": None}
 
         def _quit_driver():
             try:
@@ -2080,7 +2108,9 @@ class MainWindow(QMainWindow):
                         f"방송이 선택되었습니다:\n{name}", toast_type="success"
                     )
 
-    def _resolve_live_url_from_list(self, original_url: str, target_xcode: str) -> str:
+    def _resolve_live_url_from_list(
+        self, original_url: str, target_xcode: str | None
+    ) -> str:
         """live_list API로 xcgcd/xcode를 보완하여 URL 생성"""
         broadcasts = self._fetch_live_list()
         if not broadcasts:
@@ -2310,8 +2340,8 @@ class MainWindow(QMainWindow):
 
             # 방법 4: 메인 페이지에서 오늘의 생중계 정보 가져오기 (개선됨)
             # (target_xcode는 이미 위에서 추출됨)
+            navigated_to_main = False
             if not xcgcd:
-                navigated_to_main = False
                 try:
                     # 메인 페이지로 이동
                     main_url = "https://assembly.webcast.go.kr/main/"
@@ -4021,10 +4051,12 @@ class MainWindow(QMainWindow):
                 msg_box.setStandardButtons(
                     QMessageBox.StandardButton.Open | QMessageBox.StandardButton.Ok
                 )
-                msg_box.button(QMessageBox.StandardButton.Open).setText(
-                    "🌐 사이트 열기"
-                )
-                msg_box.button(QMessageBox.StandardButton.Ok).setText("확인")
+                open_button = msg_box.button(QMessageBox.StandardButton.Open)
+                if open_button is not None:
+                    open_button.setText("🌐 사이트 열기")
+                ok_button = msg_box.button(QMessageBox.StandardButton.Ok)
+                if ok_button is not None:
+                    ok_button.setText("확인")
 
                 result = msg_box.exec()
 
@@ -4069,8 +4101,16 @@ class MainWindow(QMainWindow):
                     self._handle_db_task_result(task_name, result, context or {})
 
             elif msg_type == "db_task_error":
-                task_name = data.get("task") if isinstance(data, dict) else "db_unknown"
-                error = data.get("error") if isinstance(data, dict) else str(data)
+                task_name = (
+                    str(data.get("task") or "db_unknown")
+                    if isinstance(data, dict)
+                    else "db_unknown"
+                )
+                error = (
+                    str(data.get("error") or "")
+                    if isinstance(data, dict)
+                    else str(data)
+                )
                 context = data.get("context") if isinstance(data, dict) else {}
                 self._db_tasks_inflight.discard(task_name)
                 self._handle_db_task_error(task_name, error, context or {})
@@ -4433,8 +4473,9 @@ class MainWindow(QMainWindow):
     def _render_subtitles(self, force_full: bool = False) -> None:
         """Render subtitles with incremental updates when possible."""
         scrollbar = self.subtitle_text.verticalScrollBar()
-        preserve_scroll = self._user_scrolled_up and scrollbar is not None
-        saved_scroll = None
+        assert scrollbar is not None
+        preserve_scroll = self._user_scrolled_up
+        saved_scroll = 0
         if preserve_scroll:
             saved_scroll = scrollbar.value()
             scrollbar.blockSignals(True)
@@ -4565,6 +4606,7 @@ class MainWindow(QMainWindow):
     def _on_scroll_changed(self) -> None:
         """스크롤바 위치 변경 감지 - 스마트 스크롤용"""
         scrollbar = self.subtitle_text.verticalScrollBar()
+        assert scrollbar is not None
         # 스크롤이 맨 아래에서 일정 거리 이내면 자동 스크롤 활성화
         at_bottom = (
             scrollbar.value() >= scrollbar.maximum() - Config.SCROLL_BOTTOM_THRESHOLD
@@ -4803,6 +4845,9 @@ class MainWindow(QMainWindow):
             text = "\n".join(s.text for s in self.subtitles)
 
         clipboard = QApplication.clipboard()
+        if clipboard is None:
+            self._show_toast("클립보드를 사용할 수 없습니다", "error")
+            return
         clipboard.setText(text)
         self._show_toast(f"📋 {len(self.subtitles)}개 자막 복사됨", "success")
 
@@ -5061,8 +5106,12 @@ class MainWindow(QMainWindow):
     # ========== 파일 저장 ==========
 
     def _save_in_background(
-        self, save_func, path: str, success_msg: str, error_prefix: str
-    ):
+        self,
+        save_func: Callable[[str], None],
+        path: str,
+        success_msg: str,
+        error_prefix: str,
+    ) -> None:
         """백그라운드에서 파일 저장 (자막 수집 중단 없이)
 
         Args:
@@ -5433,8 +5482,12 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pythoncom = None
 
-                # win32com.client.dynamic.Dispatch 사용으로 캐시 문제 회피
-                hwp = win32com.client.dynamic.Dispatch("HWPFrame.HwpObject")
+                # 동적 COM API는 스텁이 약하므로 getattr/cast로 접근한다.
+                dynamic_dispatch = getattr(win32com.client, "dynamic", None)
+                if dynamic_dispatch is not None:
+                    hwp = cast(Any, dynamic_dispatch).Dispatch("HWPFrame.HwpObject")
+                else:
+                    hwp = cast(Any, win32com.client).Dispatch("HWPFrame.HwpObject")
                 hwp.XHwpWindows.Item(0).Visible = True
                 hwp.RegisterModule(
                     "FilePathCheckDLL", "SecurityModule"
@@ -5506,7 +5559,7 @@ class MainWindow(QMainWindow):
                         pass
 
         def do_save_with_error(filepath):
-            last_error = None
+            last_error: Exception | None = None
             for attempt in range(2):
                 try:
                     do_save(filepath)
@@ -5518,6 +5571,8 @@ class MainWindow(QMainWindow):
                     last_error = e
                     logger.warning(f"HWP 저장 재시도 실패 ({attempt + 1}/2): {e}")
                     time.sleep(1)
+            if last_error is None:
+                last_error = RuntimeError("HWP 저장이 완료되지 않았습니다.")
             self.message_queue.put(("hwp_save_failed", {"error": str(last_error)}))
             raise last_error
 
@@ -5723,7 +5778,8 @@ class MainWindow(QMainWindow):
 
                 db_saved = False
                 db_error = ""
-                if self.db:
+                db = self.db
+                if db is not None:
                     try:
                         db_data = {
                             "url": current_url,
@@ -5732,7 +5788,7 @@ class MainWindow(QMainWindow):
                             "version": Config.VERSION,
                             "duration_seconds": duration,
                         }
-                        self.db.save_session(db_data)
+                        db.save_session(db_data)
                         db_saved = True
                     except Exception as db_exc:
                         db_error = str(db_exc)
@@ -5991,7 +6047,9 @@ class MainWindow(QMainWindow):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("삭제")
+        ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        if ok_button is not None:
+            ok_button.setText("삭제")
 
         def delete_selected():
             selected_rows = sorted(
@@ -6368,9 +6426,13 @@ class MainWindow(QMainWindow):
 
     def _show_db_history(self):
         """세션 히스토리 다이얼로그 표시"""
+        db = self.db
+        if db is None:
+            QMessageBox.warning(self, "알림", "데이터베이스가 초기화되지 않았습니다.")
+            return
         self._run_db_task(
             "db_history_list",
-            worker=lambda: self.db.list_sessions(limit=50),
+            worker=lambda: db.list_sessions(limit=50),
             loading_text="DB 세션 히스토리 조회 중...",
         )
 
@@ -6412,9 +6474,13 @@ class MainWindow(QMainWindow):
             if not session_id:
                 self._show_toast("유효한 세션 ID가 없습니다.", "warning")
                 return
+            db = self.db
+            if db is None:
+                self._show_toast("데이터베이스가 초기화되지 않았습니다.", "error")
+                return
 
             def worker(sid=session_id):
-                session_data = self.db.load_session(sid)
+                session_data = db.load_session(sid)
                 if not session_data:
                     return {"ok": False, "subtitles": [], "skipped": 0}
                 new_subtitles, skipped = self._deserialize_subtitles(
@@ -6448,6 +6514,10 @@ class MainWindow(QMainWindow):
             if not session_id:
                 self._show_toast("유효한 세션 ID가 없습니다.", "warning")
                 return
+            db = self.db
+            if db is None:
+                self._show_toast("데이터베이스가 초기화되지 않았습니다.", "error")
+                return
 
             reply = QMessageBox.question(
                 dialog,
@@ -6460,7 +6530,7 @@ class MainWindow(QMainWindow):
 
             started = self._run_db_task(
                 "db_history_delete_selected",
-                worker=lambda sid=session_id: self.db.delete_session(sid),
+                worker=lambda sid=session_id: db.delete_session(sid),
                 context={"session_id": session_id, "row": idx},
                 loading_text="DB 세션 삭제 중...",
             )
@@ -6490,7 +6560,8 @@ class MainWindow(QMainWindow):
 
     def _show_db_search(self):
         """자막 통합 검색 다이얼로그"""
-        if not self.db:
+        db = self.db
+        if db is None:
             QMessageBox.warning(self, "알림", "데이터베이스가 초기화되지 않았습니다.")
             return
 
@@ -6501,7 +6572,7 @@ class MainWindow(QMainWindow):
 
         self._run_db_task(
             "db_search",
-            worker=lambda q=query: self.db.search_subtitles(q),
+            worker=lambda q=query: db.search_subtitles(q),
             context={"query": query},
             loading_text=f"DB 자막 검색 중... ({query[:15]})",
         )
@@ -6531,9 +6602,13 @@ class MainWindow(QMainWindow):
 
     def _show_db_stats(self):
         """데이터베이스 전체 통계"""
+        db = self.db
+        if db is None:
+            QMessageBox.warning(self, "알림", "데이터베이스가 초기화되지 않았습니다.")
+            return
         self._run_db_task(
             "db_stats",
-            worker=lambda: self.db.get_statistics(),
+            worker=lambda: db.get_statistics(),
             loading_text="DB 통계 조회 중...",
         )
 
@@ -6620,7 +6695,7 @@ class MainWindow(QMainWindow):
                 return
 
             # 기존 자막 처리 옵션 확인
-            existing_subtitles = None
+            existing_subtitles: list[SubtitleEntry] | None = None
             if self.subtitles:
                 reply = QMessageBox.question(
                     dialog,
@@ -6714,8 +6789,8 @@ class MainWindow(QMainWindow):
         file_paths: list,
         remove_duplicates: bool = True,
         sort_by_time: bool = True,
-        existing_subtitles: list = None,
-    ) -> list:
+        existing_subtitles: list[SubtitleEntry] | None = None,
+    ) -> list[SubtitleEntry]:
         """여러 세션 파일을 병합
 
         Args:
@@ -6727,7 +6802,7 @@ class MainWindow(QMainWindow):
         Returns:
             List[SubtitleEntry]: 병합된 자막 목록
         """
-        all_entries = []
+        all_entries: list[SubtitleEntry] = []
 
         # 기존 자막 추가
         if existing_subtitles:
@@ -6774,7 +6849,10 @@ class MainWindow(QMainWindow):
         logger.info(f"병합 완료: {len(all_entries)}개 자막")
         return all_entries
 
-    def closeEvent(self, event):
+    def closeEvent(self, a0: QCloseEvent | None) -> None:
+        if a0 is None:
+            return
+        event = a0
         # 트레이 최소화 모드
         if self.minimize_to_tray and self.tray_icon.isVisible():
             self.hide()
@@ -6870,9 +6948,10 @@ class MainWindow(QMainWindow):
         self._cleanup_detached_drivers_with_timeout(timeout=2.0)
 
         # 데이터베이스 연결 정리
-        if getattr(self, "db", None):
+        db = self.db
+        if db is not None:
             try:
-                self.db.close_all()
+                db.close_all()
             except Exception as e:
                 logger.debug(f"DB 연결 종료 오류: {e}")
 

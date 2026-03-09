@@ -18,6 +18,7 @@
 - [저장 형식](#-저장-형식)
 - [상세 기능 설명](#-상세-기능-설명)
 - [문제 해결](#-문제-해결)
+- [개발 검증](#-개발-검증)
 - [빌드 방법](#️-빌드-방법)
 - [변경 이력](#-변경-이력)
 - [파이프라인 고정 문서](#-파이프라인-고정-문서)
@@ -349,6 +350,23 @@ python "국회의사중계 자막.py"
 
 ---
 
+## ✅ 개발 검증
+
+코드 변경 후 현재 저장소에서 맞춰야 하는 최소 검증 기준은 아래와 같습니다.
+
+```bash
+pyright
+pytest -q
+python -c "import ui.main_window as m; print(m.MainWindow.__name__)"
+```
+
+- 정적 분석 기준은 `pyright 0 errors`입니다.
+- 테스트 기준은 루트 `tests/` 전체 통과입니다.
+- 소스 코드, 문서(`.md`), 빌드 스펙(`subtitle_extractor.spec`)은 **UTF-8 without BOM**을 유지합니다.
+- 사용자 내보내기 텍스트 중 일부 경로(TXT 실시간 저장/일반 TXT 저장)는 Windows 메모장 호환을 위해 `utf-8-sig`를 사용합니다.
+
+---
+
 ## 🛠️ 빌드 방법
 
 ### PyInstaller로 EXE 빌드
@@ -362,6 +380,8 @@ pyinstaller subtitle_extractor.spec
 # 결과물
 dist/국회의사중계자막추출기 v16.13.1.exe
 ```
+
+- `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 
 ---
 

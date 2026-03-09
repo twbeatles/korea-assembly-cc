@@ -4,11 +4,11 @@ SQLite 데이터베이스 관리 모듈 (#26)
 국회 의사중계 자막 추출기의 세션 데이터를 체계적으로 관리합니다.
 """
 
-import sqlite3
-from pathlib import Path
-from typing import List, Dict, Optional, Any, Union
-import threading
 import logging
+import sqlite3
+import threading
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 from core.config import Config
 
@@ -21,7 +21,7 @@ class DatabaseManager:
     DEFAULT_DB_PATH = "subtitle_history.db"
     MAX_QUERY_LIMIT = 500
     
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str | None = None):
         """데이터베이스 매니저 초기화
         
         Args:
@@ -34,10 +34,10 @@ class DatabaseManager:
         db_parent.mkdir(parents=True, exist_ok=True)
             
         self.lock = threading.RLock()
-        self._thread_connections = {}  # 스레드별 연결 캐시 (thread_id -> connection)
+        self._thread_connections: dict[int, sqlite3.Connection] = {}
         self._init_db()
 
-    def close_all(self):
+    def close_all(self) -> None:
         """모든 데이터베이스 연결 종료"""
         with self.lock:
             for thread_id, conn in self._thread_connections.items():
@@ -132,7 +132,7 @@ class DatabaseManager:
                     raise
             return self._thread_connections[thread_id]
     
-    def _init_db(self):
+    def _init_db(self) -> None:
         """데이터베이스 스키마 초기화"""
         with self.lock:
             conn = self._get_connection()
@@ -229,7 +229,7 @@ class DatabaseManager:
                 raise
             # 연결은 캐싱되므로 닫지 않음
     
-    def save_session(self, session_data: dict) -> int:
+    def save_session(self, session_data: object) -> int:
         """세션 저장
         
         Args:
@@ -279,6 +279,8 @@ class DatabaseManager:
                 ))
                 
                 session_id = cursor.lastrowid
+                if session_id is None:
+                    raise RuntimeError("세션 저장 후 session_id를 확인할 수 없습니다.")
                 
                 # 자막 대량 삽입 (executemany 사용)
                 # 딕셔너리 리스트를 튜플 리스트로 변환

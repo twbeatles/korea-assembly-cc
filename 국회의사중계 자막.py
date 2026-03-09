@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 국회 의사중계 자막 추출기
 - 버전 표기는 README.md 기준

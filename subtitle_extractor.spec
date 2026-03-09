@@ -6,9 +6,6 @@ PyInstaller Build Spec - 경량화 최적화 버전
 빌드 명령: pyinstaller subtitle_extractor.spec
 """
 
-import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
-
 block_cipher = None
 
 # 제외할 모듈 (경량화)
@@ -54,6 +51,7 @@ a = Analysis(
     ['국회의사중계 자막.py'],
     pathex=[],
     binaries=[],
+    # Config.VERSION이 README 첫 줄에서 버전을 읽으므로 빌드 산출물에도 함께 포함한다.
     datas=[('README.md', '.')],
     hiddenimports=HIDDEN_IMPORTS + ['sqlite3'],
     hookspath=[],

@@ -1,7 +1,8 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QFrame, QGroupBox, QHBoxLayout, QLabel
+from PyQt6.QtGui import QMouseEvent
+from PyQt6.QtWidgets import QFrame, QGroupBox, QHBoxLayout, QLabel, QLayout
 
 class CollapsibleGroupBox(QGroupBox):
     """접기/펼치기 가능한 그룹박스 - 클릭으로 내용 숨기기/보이기"""
@@ -33,8 +34,10 @@ class CollapsibleGroupBox(QGroupBox):
         icon = "▼" if not self._is_collapsed else "▶"
         self.setTitle(f"{icon} {self._title}")
     
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent | None) -> None:
         """제목 영역 클릭 시 접기/펼치기"""
+        if event is None:
+            return
         # 제목 영역 (상단 30px) 클릭 감지
         if event.pos().y() < 25:
             self.toggle_collapsed()
@@ -51,12 +54,16 @@ class CollapsibleGroupBox(QGroupBox):
         if layout:
             for i in range(layout.count()):
                 item = layout.itemAt(i)
+                if item is None:
+                    continue
                 widget = item.widget()
                 if widget:
                     widget.setVisible(not self._is_collapsed)
                 # 레이아웃 아이템 (중첩 레이아웃)
-                elif item.layout():
-                    self._set_layout_visible(item.layout(), not self._is_collapsed)
+                else:
+                    child_layout = item.layout()
+                    if child_layout is not None:
+                        self._set_layout_visible(child_layout, not self._is_collapsed)
         
         # 크기 조정
         if self._is_collapsed:
@@ -64,15 +71,19 @@ class CollapsibleGroupBox(QGroupBox):
         else:
             self.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
     
-    def _set_layout_visible(self, layout, visible: bool):
+    def _set_layout_visible(self, layout: QLayout, visible: bool) -> None:
         """레이아웃 내 모든 위젯 가시성 설정"""
         for i in range(layout.count()):
             item = layout.itemAt(i)
+            if item is None:
+                continue
             widget = item.widget()
             if widget:
                 widget.setVisible(visible)
-            elif item.layout():
-                self._set_layout_visible(item.layout(), visible)
+            else:
+                child_layout = item.layout()
+                if child_layout is not None:
+                    self._set_layout_visible(child_layout, visible)
     
     def is_collapsed(self) -> bool:
         """현재 접힘 상태 반환"""

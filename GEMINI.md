@@ -113,7 +113,7 @@
 ## 7. 파일 구조
 
 ```
-assemblyccv3/
+korea-assembly-cc/
   국회의사중계 자막.py       # 메인 엔트리포인트
   core/                         # 공통 로직/설정
     config.py
@@ -149,6 +149,13 @@ assemblyccv3/
 pip install PyQt6 selenium python-docx
 pip install pywin32  # HWP 저장
 ```
+
+### 8.1 개발 품질 게이트
+- 정적 분석 기준: 루트에서 `pyright` 실행 시 `0 errors`
+- 테스트 기준: 루트에서 `pytest -q` 전체 통과
+- Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
+- 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
+- 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
 
 ## 9. v16.6 신규 기능
 
@@ -362,8 +369,8 @@ def _process_raw_text(self, raw):
 ## 11. 개선 영역
 
 1. 모듈 분리 (core/, ui/ 완료, utils/ 필요 시)
-2. pytest 테스트 추가
-3. 타입 힌트 강화
+2. pytest 회귀 시나리오와 UI/패키징 smoke test 확장
+3. pyright 0-error 기준 유지 및 신규 코드 타입 보강
 4. PyInstaller 패키징
 
 ---

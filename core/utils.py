@@ -167,8 +167,12 @@ def slice_from_compact_index(text: str, compact_index: int) -> str:
         count += 1
     return ""
 
-def find_compact_suffix_prefix_overlap(last_compact: str, text_compact: str,
-                                       min_overlap: int = 10, max_overlap: int = None) -> int:
+def find_compact_suffix_prefix_overlap(
+    last_compact: str,
+    text_compact: str,
+    min_overlap: int = 10,
+    max_overlap: int | None = None,
+) -> int:
     """last_compact의 suffix와 text_compact의 prefix가 겹치는 최대 길이(공백 무시)를 반환"""
     if max_overlap is None:
         max_overlap = Config.MAX_WORD_DIFF_OVERLAP  # 성능 최적화 (#1)

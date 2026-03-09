@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -52,7 +52,7 @@ class SubtitleEntry:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'SubtitleEntry':
+    def from_dict(cls, data: object) -> 'SubtitleEntry':
         """딕셔너리에서 생성 - 방어 코드 포함"""
         if not isinstance(data, dict):
             raise ValueError("자막 항목은 dict 타입이어야 합니다")
