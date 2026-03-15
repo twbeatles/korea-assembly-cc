@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.13.1
+- **버전**: v16.13.2
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -17,7 +17,7 @@
 
 | 구성요소 | 기술 |
 |---------|------|
-| **언어** | Python 3.9+ |
+| **언어** | Python 3.10+ |
 | **GUI 프레임워크** | PyQt6 (Qt6) |
 | **웹 자동화** | Selenium + Chrome WebDriver |
 | **동시성** | threading, queue.Queue |
@@ -167,7 +167,7 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. v16.13.1 신규 기능 (최신)
+## 6. 최신 변경 요약 (v16.13.2 기준)
 
 ### 6.1 수집 정체 완화
 - **`.smi_word` 창 수집 보강**: `_read_subtitle_text_by_selectors`가 `.smi_word` 목록 전체를 읽어 최근 텍스트 창을 구성
@@ -244,9 +244,10 @@ korea-assembly-cc/
 
 ### 8.1 의존성 설치
 ```bash
-pip install PyQt6 selenium python-docx
-pip install pywin32  # HWP 저장
+pip install -r requirements-dev.txt
 ```
+
+- `requirements-dev.txt`에는 DOCX(`python-docx`)와 HWP(`pywin32`) 저장용 optional 패키지가 함께 정리되어 있음
 
 ### 8.2 Chrome WebDriver
 - Selenium 4.x는 자동으로 WebDriver를 관리합니다
@@ -263,11 +264,20 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - `--remote-debugging-port=0`으로 동적 포트 할당 (다중 인스턴스 충돌 방지)
 
 ### 8.5 개발 품질 게이트
-- 정적 분석 기준: 루트에서 `pyright` 실행 시 `0 errors`
+- 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors`
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
+- VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
+- Windows PowerShell 5.x 콘솔에서는 UTF-8 without BOM이 깨져 보일 수 있으나 파일 자체는 UTF-8 유지
+
+### 8.6 저장소 기준 파일
+- `pyrightconfig.json`: 저장소 공통 타입 체크 기준
+- `.vscode/settings.json`: 워크스페이스 Pylance/UTF-8 설정
+- `.editorconfig`, `.gitattributes`: 텍스트 파일 인코딩/라인엔딩 기준
+- `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
+- `tests/test_encoding_hygiene.py`: UTF-8 without BOM 및 U+FFFD 금지 검증
 
 ## 9. 성능 최적화 (v16.8)
 

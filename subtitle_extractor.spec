@@ -1,12 +1,31 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-국회 의사중계 자막 추출기 v16.13.1
-PyInstaller Build Spec - 경량화 최적화 버전
+국회 의사중계 자막 추출기 PyInstaller Build Spec
+
+버전과 EXE 이름은 README.md 첫 줄과 동기화됩니다.
 
 빌드 명령: pyinstaller subtitle_extractor.spec
 """
 
+import re
+from pathlib import Path
+
 block_cipher = None
+
+
+def _load_version_from_readme(default: str = "16.13.2") -> str:
+    readme_path = Path(__file__).resolve().parent / "README.md"
+    try:
+        first_line = readme_path.read_text(encoding="utf-8").splitlines()[0]
+    except Exception:
+        return default
+    match = re.search(r"\bv(\d+(?:\.\d+)*)", first_line, re.IGNORECASE)
+    return match.group(1) if match else default
+
+
+APP_VERSION = _load_version_from_readme()
+APP_ENTRYPOINT = "국회의사중계 자막.py"
+APP_EXE_NAME = f"국회의사중계자막추출기 v{APP_VERSION}"
 
 # 제외할 모듈 (경량화)
 EXCLUDES = [
@@ -34,6 +53,9 @@ EXCLUDES = [
 
 # 숨겨진 import 명시
 HIDDEN_IMPORTS = [
+    'docx',
+    'docx.shared',
+    'docx.enum.text',
     'selenium.webdriver.chrome.service',
     'selenium.webdriver.common.by',
     'selenium.webdriver.support.ui',
@@ -48,7 +70,7 @@ HIDDEN_IMPORTS = [
 ]
 
 a = Analysis(
-    ['국회의사중계 자막.py'],
+    [APP_ENTRYPOINT],
     pathex=[],
     binaries=[],
     # Config.VERSION이 README 첫 줄에서 버전을 읽으므로 빌드 산출물에도 함께 포함한다.
@@ -82,7 +104,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='국회의사중계자막추출기 v16.13.1',
+    name=APP_EXE_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,  # Windows에서는 strip 비활성화

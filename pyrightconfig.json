@@ -1,0 +1,26 @@
+{
+  "typeCheckingMode": "standard",
+  "pythonVersion": "3.10",
+  "include": [
+    "core",
+    "ui",
+    "database.py",
+    "국회의사중계 자막.py",
+    "tests"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".tox",
+    ".nox",
+    "backups",
+    "build",
+    "dist",
+    "logs",
+    "realtime_output",
+    "sessions",
+    "tmp_extension_unpacked"
+  ]
+}

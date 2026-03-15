@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Callable, Protocol, cast
 from urllib.error import HTTPError, URLError
@@ -104,6 +105,11 @@ except ImportError:
 
 class RecoverableWebDriverError(RuntimeError):
     """웹드라이버 재연결로 복구 가능한 오류"""
+
+
+def _import_optional_module(module_name: str) -> Any:
+    """Keep optional dependency imports dynamic so baseline Pylance checks stay stable."""
+    return cast(Any, import_module(module_name))
 
 
 class MainWindow(QMainWindow):
@@ -5368,9 +5374,9 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            from docx import Document
-            from docx.shared import Pt, Inches
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            docx_module = _import_optional_module("docx")
+            docx_shared = _import_optional_module("docx.shared")
+            docx_enum_text = _import_optional_module("docx.enum.text")
         except ImportError:
             QMessageBox.warning(
                 self,
@@ -5394,13 +5400,16 @@ class MainWindow(QMainWindow):
 
             generated_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
             total_chars = sum(len(text) for _, text in subtitles_snapshot)
+            document_factory = cast(Callable[[], Any], docx_module.Document)
+            point_factory = cast(Callable[[int], Any], docx_shared.Pt)
+            paragraph_alignment = cast(Any, docx_enum_text.WD_ALIGN_PARAGRAPH)
 
             def do_save(filepath):
-                doc = Document()
+                doc = document_factory()
 
                 # 제목
                 title = doc.add_heading("국회 의사중계 자막", 0)
-                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                title.alignment = paragraph_alignment.CENTER
 
                 # 생성 일시
                 doc.add_paragraph(f"생성 일시: {generated_at}")
@@ -5419,7 +5428,7 @@ class MainWindow(QMainWindow):
                     if should_print_ts:
                         ts = timestamp.strftime("%H:%M:%S")
                         run = p.add_run(f"[{ts}] ")
-                        run.font.size = Pt(9)
+                        run.font.size = point_factory(9)
                         run.font.color.rgb = None  # 기본 색상
                         last_printed_ts = timestamp
                     p.add_run(text)
@@ -5441,7 +5450,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            import win32com.client
+            win32_client = _import_optional_module("win32com.client")
         except ImportError:
             QMessageBox.warning(
                 self,
@@ -5473,21 +5482,20 @@ class MainWindow(QMainWindow):
 
         def do_save(filepath):
             hwp = None
-            pythoncom = None
+            pythoncom_module = None
             try:
                 try:
-                    import pythoncom
-
-                    pythoncom.CoInitialize()
+                    pythoncom_module = _import_optional_module("pythoncom")
+                    pythoncom_module.CoInitialize()
                 except Exception:
-                    pythoncom = None
+                    pythoncom_module = None
 
                 # 동적 COM API는 스텁이 약하므로 getattr/cast로 접근한다.
-                dynamic_dispatch = getattr(win32com.client, "dynamic", None)
+                dynamic_dispatch = getattr(win32_client, "dynamic", None)
                 if dynamic_dispatch is not None:
                     hwp = cast(Any, dynamic_dispatch).Dispatch("HWPFrame.HwpObject")
                 else:
-                    hwp = cast(Any, win32com.client).Dispatch("HWPFrame.HwpObject")
+                    hwp = cast(Any, win32_client).Dispatch("HWPFrame.HwpObject")
                 hwp.XHwpWindows.Item(0).Visible = True
                 hwp.RegisterModule(
                     "FilePathCheckDLL", "SecurityModule"
@@ -5552,9 +5560,9 @@ class MainWindow(QMainWindow):
                         hwp.Quit()
                     except Exception:
                         pass
-                if pythoncom:
+                if pythoncom_module:
                     try:
-                        pythoncom.CoUninitialize()
+                        pythoncom_module.CoUninitialize()
                     except Exception:
                         pass
 

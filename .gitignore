@@ -22,7 +22,8 @@ venv/
 env/
 ENV/
 .python-version
-.vscode/
+.vscode/*
+!.vscode/settings.json
 .idea/
 *.code-workspace
 
@@ -62,6 +63,7 @@ presets_*.json
 # User-exported result files (root-level exports only)
 # -----------------------------------------------------------------------------
 /*.txt
+!requirements-dev.txt
 /*.log
 /*.srt
 /*.vtt

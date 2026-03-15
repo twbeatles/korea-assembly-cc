@@ -1,8 +1,8 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.13.1
+# 🏛️ 국회 의사중계 자막 추출기 v16.13.2
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 데스크톱 프로그램입니다.
 
-![Python](https://img.shields.io/badge/Python-3.9+-blue)
+![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green)
 ![Selenium](https://img.shields.io/badge/Automation-Selenium-orange)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
@@ -10,6 +10,7 @@
 ---
 
 ## 📋 목차
+- [운영 정합성 업데이트 (v16.13.2)](#-v16132-운영-정합성-업데이트-2026-03-05)
 - [새 기능 (v16.13.1)](#-v16131-새-기능)
 - [주요 기능](#-주요-기능)
 - [설치 방법](#-설치-방법)
@@ -157,19 +158,18 @@ TXT, SRT, VTT, DOCX, HWP, RTF, JSON 세션 저장
 ## 📦 설치 방법
 
 ### 1. Python 설치
-Python 3.9 이상이 필요합니다.
+Python 3.10 이상이 필요합니다.
 - [Python 공식 사이트](https://www.python.org/downloads/)에서 다운로드
 
-### 2. 필수 라이브러리 설치
+### 2. 개발/검증 의존성 설치
 ```bash
-pip install PyQt6 selenium
+pip install -r requirements-dev.txt
 ```
 
-### 3. 선택 라이브러리 (추가 기능)
-```bash
-pip install python-docx  # DOCX (Word) 저장용
-pip install pywin32      # HWP (한글) 저장용
-```
+### 3. 선택 기능 참고
+- `requirements-dev.txt`에는 DOCX(`python-docx`)와 HWP(`pywin32`) 저장 기능용 패키지가 함께 정리되어 있습니다.
+- 최소 실행만 필요하면 `pip install PyQt6 selenium`만 설치해도 됩니다.
+- HWP 저장은 Windows 환경과 한컴오피스가 추가로 필요합니다.
 
 ### 4. Chrome 브라우저
 - Chrome 브라우저가 설치되어 있어야 합니다
@@ -355,15 +355,25 @@ python "국회의사중계 자막.py"
 코드 변경 후 현재 저장소에서 맞춰야 하는 최소 검증 기준은 아래와 같습니다.
 
 ```bash
+pip install -r requirements-dev.txt
 pyright
 pytest -q
 python -c "import ui.main_window as m; print(m.MainWindow.__name__)"
 ```
 
-- 정적 분석 기준은 `pyright 0 errors`입니다.
+- 정적 분석 기준은 루트 `pyrightconfig.json` 기반 `pyright 0 errors`입니다.
 - 테스트 기준은 루트 `tests/` 전체 통과입니다.
 - 소스 코드, 문서(`.md`), 빌드 스펙(`subtitle_extractor.spec`)은 **UTF-8 without BOM**을 유지합니다.
 - 사용자 내보내기 텍스트 중 일부 경로(TXT 실시간 저장/일반 TXT 저장)는 Windows 메모장 호환을 위해 `utf-8-sig`를 사용합니다.
+- VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 같은 진단 기준을 사용합니다.
+- Windows PowerShell 5.x 기본 출력 인코딩에서는 UTF-8 without BOM 파일이 콘솔에 깨져 보일 수 있습니다. 저장소 기준 파일 자체는 UTF-8입니다.
+
+### 저장소 기준 파일
+- `pyrightconfig.json`: Pylance/Pyright의 저장소 공통 타입 체크 기준(`standard`, Python 3.10)
+- `.vscode/settings.json`: 워크스페이스 단위 Pylance/UTF-8 설정
+- `.editorconfig`, `.gitattributes`: UTF-8 without BOM + CRLF 기준 유지
+- `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
+- `tests/test_encoding_hygiene.py`: repo tracked 텍스트 파일의 UTF-8/BOM/U+FFFD 위생 검증
 
 ---
 
@@ -378,10 +388,12 @@ pip install pyinstaller
 pyinstaller subtitle_extractor.spec
 
 # 결과물
-dist/국회의사중계자막추출기 v16.13.1.exe
+dist/국회의사중계자막추출기 v16.13.2.exe
 ```
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
+- EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
+- `python-docx`는 런타임에서 동적 import를 사용하므로 `.spec`의 hidden import 목록에도 함께 반영합니다.
 
 ---
 

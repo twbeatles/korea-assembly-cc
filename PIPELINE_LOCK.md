@@ -241,6 +241,9 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 
 - 문법 검사
   - `python -c "import ast, pathlib; ast.parse(pathlib.Path('ui/main_window.py').read_text(encoding='utf-8'))"`
+- 정적 분석/회귀 테스트
+  - `pyright`
+  - `pytest -q`
 - 스모크 테스트
   - `python tests/test_reflow.py`
   - `python tests/test_core_algorithm.py`
@@ -268,6 +271,16 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - 공백 보존 결합: `_join_stream_text`
 - 자막 확정: `_finalize_subtitle`
 - 종료 소진: `_drain_pending_previews`
+
+---
+
+## 13. 저장소 기준 파일
+
+- `pyrightconfig.json`: 저장소 공통 타입 체크 기준(`standard`, Python 3.10)
+- `.vscode/settings.json`: Pylance 워크스페이스 설정
+- `.editorconfig`, `.gitattributes`: UTF-8 without BOM + CRLF 기준 유지
+- `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
+- `tests/test_encoding_hygiene.py`: repo tracked 텍스트 파일의 UTF-8/BOM/U+FFFD 위생 검증
 
 ---
 
