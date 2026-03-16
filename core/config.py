@@ -188,6 +188,7 @@ class Config:
     MAX_RECONNECT_ATTEMPTS = 5
     RECONNECT_BASE_DELAY = 2           # 초기 대기 시간 (초)
     RECONNECT_MAX_DELAY = 60           # 최대 대기 시간 (초)
+    SUBTITLE_RESET_GRACE_MS = 1000
 
     # 중지 시 브라우저 창 유지
     KEEP_BROWSER_ON_STOP = True
