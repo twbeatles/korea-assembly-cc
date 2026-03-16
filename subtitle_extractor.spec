@@ -13,8 +13,9 @@ from pathlib import Path
 block_cipher = None
 
 
-def _load_version_from_readme(default: str = "16.13.2") -> str:
-    readme_path = Path(__file__).resolve().parent / "README.md"
+def _load_version_from_readme(default: str = "16.14.0") -> str:
+    spec_path = Path(globals().get("__file__", "subtitle_extractor.spec")).resolve()
+    readme_path = spec_path.parent / "README.md"
     try:
         first_line = readme_path.read_text(encoding="utf-8").splitlines()[0]
     except Exception:
@@ -56,10 +57,23 @@ HIDDEN_IMPORTS = [
     'docx',
     'docx.shared',
     'docx.enum.text',
+    'core.database_manager',
+    'core.file_io',
+    'core.live_capture',
+    'core.reflow',
+    'core.subtitle_pipeline',
+    'core.text_utils',
     'selenium.webdriver.chrome.service',
     'selenium.webdriver.common.by',
     'selenium.webdriver.support.ui',
     'selenium.webdriver.support.expected_conditions',
+    'ui.main_window_capture',
+    'ui.main_window_common',
+    'ui.main_window_database',
+    'ui.main_window_persistence',
+    'ui.main_window_pipeline',
+    'ui.main_window_ui',
+    'ui.main_window_view',
     'win32com',
     'win32com.client',
     'pythoncom',

@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.13.2
+- **버전**: v16.14.0
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ## 2. 기술 스택
@@ -117,14 +117,28 @@ korea-assembly-cc/
   국회의사중계 자막.py       # 메인 엔트리포인트
   core/                         # 공통 로직/설정
     config.py
+    database_manager.py
+    file_io.py
+    live_capture.py
     logging_utils.py
     models.py
+    reflow.py
+    subtitle_pipeline.py
+    text_utils.py
+    utils.py                    # 호환용 re-export shim
   ui/                           # UI 구성요소
     dialogs.py
+    main_window_capture.py
+    main_window_common.py
+    main_window_database.py
+    main_window_persistence.py
+    main_window_pipeline.py
+    main_window_ui.py
+    main_window_view.py
     themes.py
     widgets.py
-    main_window.py
-  database.py               # SQLite DB 관리 (v16.6)
+    main_window.py              # MainWindow 파사드
+  database.py                   # SQLite DB 호환 shim
   subtitle_extractor.spec   # PyInstaller 빌드 설정
   tests/test_core_algorithm.py    # 코어 알고리즘 단위 테스트
   tests/test_reflow.py            # Reflow 테스트
@@ -307,7 +321,15 @@ pip install -r requirements-dev.txt
 - **Observer 타겟 보강**: `.incont`/`#viewSubtit` 컨테이너 우선 탐색으로 DOM 구조 변화 대응 강화
 - **긴 텍스트 축약 보강**: Observer 버퍼에 과도한 컨테이너 텍스트가 들어올 때 최근 라인 중심으로 축약
 
-## 9.9 v16.13.2 운영 정합성 업데이트 (2026-03-05)
+## 9.9 v16.14.0 크롬 파이프라인 정리 + SOLID 분할 리팩토링 (2026-03-16)
+### 🧩 코어 구조 고정
+- `core/live_capture.py`와 `core/subtitle_pipeline.py`를 기준 구조로 유지하고, row reconciliation / grace reset / prepared snapshot 동작을 운영 기본 경로로 고정
+### 🏗️ MainWindow 책임 분리
+- `ui/main_window.py`는 파사드만 담당하고, 실제 구현을 capture / pipeline / view / persistence / database / ui mixin 모듈로 분리
+### 🔁 호환 계층 유지
+- `core/utils.py`, `database.py`, `ui.main_window.MainWindow` import 경로는 유지하고 실제 구현만 새 모듈로 이동
+
+## 9.10 v16.13.2 운영 정합성 업데이트 (2026-03-05)
 
 ### 🔒 종료 lifecycle 통합
 - 파일 저장/세션 저장·불러오기/DB task를 공통 백그라운드 레지스트리로 추적

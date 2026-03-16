@@ -27,7 +27,7 @@
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.13.2)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.14.0)
 - `_extract_new_part`: `find()` → `rfind()` 전환 — suffix 충돌 시 과잉 추출 방지
 - `_prepare_preview_raw`: 전체 리셋 → `_soft_resync()` 소프트 리셋 — 대량 중복 유입 방지
 - `_extraction_worker`: MutationObserver 하이브리드 아키텍처 도입
@@ -41,6 +41,11 @@
 - `_add_text_to_subtitles`: 병합 기준 하드코딩 제거, Config 상수(`ENTRY_MERGE_MAX_GAP=5`, `ENTRY_MERGE_MAX_CHARS=300`)로 일원화
 - `_merge_sessions`: 중복 제거 정책을 텍스트-only에서 `정규화 텍스트 + 시간 버킷(30초)` 기준으로 개선
 - `closeEvent`/백그라운드 실행 경로: 공통 레지스트리 기반 종료 drain (`신규 작업 차단 -> inflight 대기 -> 자원 정리`)
+
+### 2.3 구조 분리 이력 (v16.14.0, 2026-03-16)
+- `ui/main_window.py`는 파사드로 축소되고, 실제 책임은 `ui/main_window_capture.py`, `ui/main_window_pipeline.py`, `ui/main_window_view.py`, `ui/main_window_persistence.py`, `ui/main_window_database.py`, `ui/main_window_ui.py`로 분리되었다.
+- `core/live_capture.py`와 `core/subtitle_pipeline.py`는 더 이상 `MainWindow` 내부 임시 로직이 아니라 운영 기준 코어 모듈이다.
+- `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py`를 추가하고, `core/utils.py`와 `database.py`는 호환 shim으로 유지한다.
 
 ### 2.2 안정화 이력 (v16.12.1, 2026-02-25)
 - `_extraction_worker`: URL에 `xcgcd`가 없을 때만 `xcode` 기반 자동 감지를 연결

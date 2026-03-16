@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.13.2
+# 🏛️ 국회 의사중계 자막 추출기 v16.14.0
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 데스크톱 프로그램입니다.
 
@@ -10,6 +10,7 @@
 ---
 
 ## 📋 목차
+- [크롬 파이프라인 정리 + SOLID 분할 리팩토링 (v16.14.0)](#-v16140-크롬-파이프라인-정리--solid-분할-리팩토링-2026-03-16)
 - [운영 정합성 업데이트 (v16.13.2)](#-v16132-운영-정합성-업데이트-2026-03-05)
 - [새 기능 (v16.13.1)](#-v16131-새-기능)
 - [주요 기능](#-주요-기능)
@@ -25,6 +26,20 @@
 - [파이프라인 고정 문서](#-파이프라인-고정-문서)
 
 ---
+
+## ✨ v16.14.0 크롬 파이프라인 정리 + SOLID 분할 리팩토링 (2026-03-16)
+
+### 🧩 크롬 확장 자막 알고리즘 구조 고정
+- `core/live_capture.py`와 `core/subtitle_pipeline.py`를 기준 코어로 유지하고, `framePath::nodeKey` 기반 row reconciliation, grace reset, prepared snapshot 저장 경로를 운영 기본값으로 고정했습니다.
+- 같은 화면 row 수정은 기존 엔트리를 제자리 업데이트하고, preview-only 자막도 TXT/SRT/VTT/세션 저장 직전에 공통 snapshot 경로로 materialize합니다.
+
+### 🏗️ MainWindow 책임 분할
+- `ui/main_window.py`는 파사드 역할만 담당하고, 실제 구현은 `ui/main_window_ui.py`, `ui/main_window_capture.py`, `ui/main_window_pipeline.py`, `ui/main_window_view.py`, `ui/main_window_persistence.py`, `ui/main_window_database.py`로 분리했습니다.
+- 직접 호출되던 `MainWindow` 메서드 표면은 유지해 기존 테스트와 엔트리포인트 import 경로를 깨지 않도록 정리했습니다.
+
+### 🧰 코어/호환 계층 정리
+- `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py`를 추가하고, `core/utils.py`, `database.py`는 호환용 shim으로 유지했습니다.
+- `subtitle_extractor.spec`는 새 모듈 구조를 hidden import에 반영하고, 빌드 버전 기본값을 `v16.14.0`으로 동기화했습니다.
 
 ## ✨ v16.13.1 새 기능 (Hot!)
 
@@ -388,7 +403,7 @@ pip install pyinstaller
 pyinstaller subtitle_extractor.spec
 
 # 결과물
-dist/국회의사중계자막추출기 v16.13.2.exe
+dist/국회의사중계자막추출기 v16.14.0.exe
 ```
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
@@ -398,6 +413,13 @@ dist/국회의사중계자막추출기 v16.13.2.exe
 ---
 
 ## 📝 변경 이력
+
+### v16.14.0 (2026-03-16)
+- 크롬 확장 자막 파이프라인을 기준 구조로 고정하고 `core/live_capture.py` + `core/subtitle_pipeline.py` 중심으로 운영 경로를 정리
+- `ui/main_window.py`를 capture / pipeline / view / persistence / database / ui mixin 모듈로 분할
+- `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py` 추가 및 `core/utils.py`, `database.py` 호환 shim 전환
+- `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`를 새 구조와 `v16.14.0` 기준으로 동기화
+- 버전 동기화/호환 import 검증 테스트(`tests/test_version_sync.py`, `tests/test_compat_imports.py`) 추가
 
 ### v16.13.2 (2026-03-05)
 - 🔒 **종료 lifecycle 통합**: 파일 저장/세션 저장·불러오기/DB task를 공통 레지스트리로 추적하고 종료 시 drain 대기 적용

@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.13.2
+- **버전**: v16.14.0
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -108,14 +108,28 @@ korea-assembly-cc/
   국회의사중계 자막.py       # 메인 엔트리포인트
   core/                         # 공통 로직/설정
     config.py
+    database_manager.py
+    file_io.py
+    live_capture.py
     logging_utils.py
     models.py
+    reflow.py
+    subtitle_pipeline.py
+    text_utils.py
+    utils.py                    # 호환용 re-export shim
   ui/                           # UI 구성요소
     dialogs.py
+    main_window_capture.py
+    main_window_common.py
+    main_window_database.py
+    main_window_persistence.py
+    main_window_pipeline.py
+    main_window_ui.py
+    main_window_view.py
     themes.py
     widgets.py
-    main_window.py
-  database.py               # SQLite DB 관리 (v16.6)
+    main_window.py              # MainWindow 파사드
+  database.py                   # SQLite DB 호환 shim
   subtitle_extractor.spec   # PyInstaller 빌드 설정
   README.md                 # 문서
   CLAUDE.md                 # AI 컨텍스트
@@ -136,8 +150,11 @@ korea-assembly-cc/
 | `Config` | core/config.py | 상수 및 기본 설정 값 |
 | `ToastWidget` | ui/widgets.py | 비차단 토스트 알림 UI |
 | `SubtitleEntry` | core/models.py | 자막 데이터 모델 (타임스탬프 포함) |
-| `MainWindow` | ui/main_window.py | 메인 윈도우 및 모든 로직 통합 |
-| `DatabaseManager` | database.py | SQLite CRUD 작업 (#26) |
+| `MainWindow` | ui/main_window.py | 메인 윈도우 파사드 및 lifecycle 조립 |
+| `MainWindowCaptureMixin` | ui/main_window_capture.py | Selenium 수집/재연결/observer 처리 |
+| `MainWindowPipelineMixin` | ui/main_window_pipeline.py | live row ledger + subtitle pipeline 연동 |
+| `MainWindowPersistenceMixin` | ui/main_window_persistence.py | 저장/세션/자동백업/export 처리 |
+| `DatabaseManager` | core/database_manager.py | SQLite CRUD 작업 (#26) |
 
 ### 5.3 핵심 메서드
 | 메서드 | 설명 |
@@ -167,7 +184,13 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.13.2 기준)
+## 6. 최신 변경 요약 (v16.14.0 기준)
+
+### 6.0 v16.14.0 크롬 파이프라인 정리 + SOLID 분할 리팩토링 (2026-03-16)
+- `ui/main_window.py`를 파사드로 축소하고 capture / pipeline / view / persistence / database / ui mixin으로 분리
+- `core/live_capture.py`와 `core/subtitle_pipeline.py`를 운영 기준 코어로 고정하고 row reconciliation + grace reset + prepared snapshot 경로를 유지
+- `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py`를 추가하고 기존 `core/utils.py`, `database.py`는 호환 shim으로 유지
+- 테스트 호환을 위해 `MainWindow` 직접 호출 메서드 표면과 import 경로를 유지
 
 ### 6.1 수집 정체 완화
 - **`.smi_word` 창 수집 보강**: `_read_subtitle_text_by_selectors`가 `.smi_word` 목록 전체를 읽어 최근 텍스트 창을 구성
