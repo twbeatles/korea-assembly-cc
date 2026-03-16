@@ -70,13 +70,61 @@ from selenium.common.exceptions import (
 from selenium.webdriver.chrome.options import Options
 
 from core.config import Config
+from core.live_capture import (
+    clear_live_capture_ledger,
+    create_empty_live_capture_ledger,
+    get_live_row,
+    mark_live_row_committed,
+    normalize_capture_event,
+    reconcile_live_capture,
+    set_live_row_baseline,
+)
 from core.logging_utils import logger
-from core.models import SubtitleEntry
+from core.models import CaptureSessionState, ObservedSubtitleRow, SubtitleEntry
+from core.subtitle_pipeline import (
+    LiveRowCommitMeta,
+    PipelineSourceMeta,
+    apply_keepalive,
+    apply_preview,
+    apply_reset,
+    commit_live_row,
+    create_empty_capture_state,
+    finalize_session,
+    flush_pending_previews,
+    rebuild_confirmed_history,
+)
 from ui.dialogs import LiveBroadcastDialog
 from ui.themes import DARK_THEME, LIGHT_THEME
 from ui.widgets import CollapsibleGroupBox, ToastWidget
 from core import utils
 from core.subtitle_processor import SubtitleProcessor
+
+
+class _TimerSignalShim:
+    def __init__(self) -> None:
+        self._callback = None
+
+    def connect(self, callback) -> None:
+        self._callback = callback
+
+
+class _ResetTimerShim:
+    def __init__(self) -> None:
+        self.timeout = _TimerSignalShim()
+        self._active = False
+
+    def setSingleShot(self, _single_shot: bool) -> None:
+        return None
+
+    def start(self, _msec: int) -> None:
+        self._active = True
+
+    def stop(self) -> None:
+        self._active = False
+
+    def isActive(self) -> bool:
+        return self._active
+
 
 class DatabaseProtocol(Protocol):
     def save_session(self, session_data: object) -> int: ...
@@ -218,6 +266,14 @@ class MainWindow(QMainWindow):
         self._realtime_error_count = 0  # 실시간 저장 연속 오류 카운트 (#3)
 
         # 중지 시 브라우저 유지용 (종료 시 정리)
+        self.capture_state: CaptureSessionState = create_empty_capture_state()
+        self.live_capture_ledger = create_empty_live_capture_ledger()
+        self._pending_subtitle_reset_source = ""
+        self._pending_subtitle_reset_timer = QTimer(self)
+        self._pending_subtitle_reset_timer.setSingleShot(True)
+        self._pending_subtitle_reset_timer.timeout.connect(
+            self._commit_scheduled_subtitle_reset
+        )
         self._detached_drivers: list[Any] = []
         self._detached_drivers_lock = threading.Lock()
         self._last_subtitle_frame_path = ()
@@ -301,6 +357,311 @@ class MainWindow(QMainWindow):
         with self.subtitle_lock:
             self._cached_total_chars = sum(s.char_count for s in self.subtitles)
             self._cached_total_words = sum(s.word_count for s in self.subtitles)
+
+    def _ensure_capture_runtime_state(self) -> None:
+        if not hasattr(self, "capture_state") or not isinstance(
+            self.capture_state, CaptureSessionState
+        ):
+            state = create_empty_capture_state()
+            state.entries = list(getattr(self, "subtitles", []))
+            if state.entries:
+                rebuild_confirmed_history(state)
+            self.capture_state = state
+        if not hasattr(self, "live_capture_ledger"):
+            self.live_capture_ledger = create_empty_live_capture_ledger()
+        if not hasattr(self, "_pending_subtitle_reset_source"):
+            self._pending_subtitle_reset_source = ""
+        if not hasattr(self, "_pending_subtitle_reset_timer"):
+            try:
+                timer = QTimer(self)
+                timer.setSingleShot(True)
+                timer.timeout.connect(self._commit_scheduled_subtitle_reset)
+            except Exception:
+                timer = _ResetTimerShim()
+            self._pending_subtitle_reset_timer = timer
+
+    def _current_capture_settings(self) -> dict[str, int]:
+        return {
+            "merge_gap_seconds": int(Config.ENTRY_MERGE_MAX_GAP),
+            "merge_max_chars": int(Config.ENTRY_MERGE_MAX_CHARS),
+            "confirmed_compact_max_len": int(Config.CONFIRMED_COMPACT_MAX_LEN),
+        }
+
+    def _sync_capture_state_entries(self, force_refresh: bool = False) -> None:
+        self._ensure_capture_runtime_state()
+        with self.subtitle_lock:
+            self.subtitles = list(self.capture_state.entries)
+        self._rebuild_stats_cache()
+        self._update_count_label()
+        self._refresh_text(force_full=force_refresh)
+        preview_text = (
+            getattr(self.live_capture_ledger, "preview_text", "")
+            or self.capture_state.preview_text
+        )
+        self._set_preview_text(preview_text)
+
+    def _cancel_scheduled_subtitle_reset(self) -> None:
+        self._ensure_capture_runtime_state()
+        if self._pending_subtitle_reset_timer.isActive():
+            self._pending_subtitle_reset_timer.stop()
+        self._pending_subtitle_reset_source = ""
+
+    def _schedule_deferred_subtitle_reset(self, source: str) -> None:
+        self._ensure_capture_runtime_state()
+        if self._pending_subtitle_reset_timer.isActive():
+            return
+        self._pending_subtitle_reset_source = str(source or "")
+        self._pending_subtitle_reset_timer.start(int(Config.SUBTITLE_RESET_GRACE_MS))
+
+    def _commit_scheduled_subtitle_reset(self) -> None:
+        self._ensure_capture_runtime_state()
+        source = self._pending_subtitle_reset_source
+        self._pending_subtitle_reset_source = ""
+        if not self.is_running:
+            return
+        apply_reset(
+            self.capture_state,
+            datetime.now(),
+            self._current_capture_settings(),
+        )
+        self.live_capture_ledger = clear_live_capture_ledger()
+        self._sync_capture_state_entries(force_refresh=False)
+        if source:
+            logger.info("subtitle_reset 적용: %s", source)
+
+    def _build_prepared_capture_state(self) -> CaptureSessionState:
+        self._ensure_capture_runtime_state()
+        return flush_pending_previews(
+            self.capture_state,
+            datetime.now(),
+            self._current_capture_settings(),
+        )
+
+    def _materialize_pending_preview(self) -> None:
+        self._ensure_capture_runtime_state()
+        self.capture_state = self._build_prepared_capture_state()
+        self._sync_capture_state_entries(force_refresh=False)
+
+    def _build_prepared_entries_snapshot(self) -> list[SubtitleEntry]:
+        return list(self._build_prepared_capture_state().entries)
+
+    def _coerce_frame_path(self, value: object) -> tuple[int, ...]:
+        if isinstance(value, tuple):
+            raw_items = value
+        elif isinstance(value, list):
+            raw_items = tuple(value)
+        else:
+            return ()
+
+        frame_path: list[int] = []
+        for item in raw_items:
+            try:
+                frame_path.append(int(item))
+            except Exception:
+                continue
+        return tuple(frame_path)
+
+    def _coerce_observed_rows(self, rows: object) -> list[ObservedSubtitleRow]:
+        observed: list[ObservedSubtitleRow] = []
+        if not isinstance(rows, list):
+            return observed
+
+        for row in rows:
+            if isinstance(row, ObservedSubtitleRow):
+                text = utils.clean_text_display(row.text).strip()
+                if not utils.compact_subtitle_text(text):
+                    continue
+                observed.append(
+                    ObservedSubtitleRow(
+                        node_key=str(row.node_key or "").strip(),
+                        text=text,
+                        speaker_color=str(row.speaker_color or ""),
+                        speaker_channel=row.speaker_channel,
+                        unstable_key=bool(row.unstable_key),
+                    )
+                )
+                continue
+
+            if not isinstance(row, dict):
+                continue
+
+            node_key = str(row.get("node_key") or row.get("nodeKey") or "").strip()
+            text = utils.clean_text_display(
+                str(row.get("text", "") or "")
+            ).strip()
+            if not node_key or not utils.compact_subtitle_text(text):
+                continue
+
+            speaker_channel = str(
+                row.get("speaker_channel") or row.get("speakerChannel") or "unknown"
+            )
+            if speaker_channel not in ("primary", "secondary", "unknown"):
+                speaker_channel = "unknown"
+
+            observed.append(
+                ObservedSubtitleRow(
+                    node_key=node_key,
+                    text=text,
+                    speaker_color=str(
+                        row.get("speaker_color") or row.get("speakerColor") or ""
+                    ),
+                    speaker_channel=speaker_channel,
+                    unstable_key=bool(
+                        row.get("unstable_key") or row.get("unstableKey") or False
+                    ),
+                )
+            )
+
+        return observed
+
+    def _build_preview_payload_from_probe(
+        self,
+        probe_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        rows = [
+            {
+                "nodeKey": row.node_key,
+                "text": row.text,
+                "speakerColor": row.speaker_color,
+                "speakerChannel": row.speaker_channel,
+                "unstableKey": row.unstable_key,
+            }
+            for row in self._coerce_observed_rows(probe_result.get("rows", []))
+        ]
+        return {
+            "raw": utils.clean_text_display(str(probe_result.get("text", "") or "")).strip(),
+            "rows": rows,
+            "selector": str(
+                probe_result.get("matched_selector")
+                or probe_result.get("selector")
+                or ""
+            ),
+            "frame_path": self._coerce_frame_path(
+                probe_result.get("frame_path") or probe_result.get("framePath")
+            ),
+        }
+
+    def _apply_structured_preview_payload(
+        self,
+        payload: object,
+        now: datetime | None = None,
+    ) -> bool:
+        if not isinstance(payload, dict):
+            return False
+
+        self._ensure_capture_runtime_state()
+        now = now or datetime.now()
+        selector = str(
+            payload.get("selector") or payload.get("matched_selector") or ""
+        ).strip()
+        frame_path = self._coerce_frame_path(
+            payload.get("frame_path") or payload.get("framePath")
+        )
+        observed_rows = self._coerce_observed_rows(payload.get("rows", []))
+        raw = utils.clean_text_display(
+            str(payload.get("raw") or payload.get("text") or "")
+        ).strip()
+
+        self._cancel_scheduled_subtitle_reset()
+
+        event = normalize_capture_event(
+            raw=raw,
+            rows=observed_rows,
+            selector=selector,
+            frame_path=frame_path,
+            timestamp=now.timestamp(),
+        )
+        reconciliation = reconcile_live_capture(self.live_capture_ledger, event)
+        self.live_capture_ledger = reconciliation.ledger
+        settings = self._current_capture_settings()
+        changed = reconciliation.changed
+        force_refresh = False
+
+        if event.rows:
+            for row_change in reconciliation.row_changes:
+                live_row = get_live_row(self.live_capture_ledger, row_change.key)
+                if not live_row:
+                    continue
+
+                baseline_compact = live_row.baseline_compact
+                if baseline_compact is None:
+                    baseline_compact = self.capture_state.confirmed_compact
+
+                meta = LiveRowCommitMeta(
+                    selector=live_row.selector or selector,
+                    frame_path=live_row.frame_path or frame_path,
+                    source_node_key=live_row.key,
+                    source_entry_id=live_row.committed_entry_id or "",
+                    speaker_color=live_row.speaker_color,
+                    speaker_channel=live_row.speaker_channel,
+                    baseline_compact=baseline_compact,
+                )
+                result = commit_live_row(
+                    self.capture_state,
+                    live_row.text,
+                    event.preview_text,
+                    now,
+                    settings,
+                    meta=meta,
+                )
+                if result.reason == "row_entry_missing" and meta.source_entry_id:
+                    result = commit_live_row(
+                        self.capture_state,
+                        live_row.text,
+                        event.preview_text,
+                        now,
+                        settings,
+                        meta=LiveRowCommitMeta(
+                            selector=meta.selector,
+                            frame_path=meta.frame_path,
+                            source_node_key=meta.source_node_key,
+                            speaker_color=meta.speaker_color,
+                            speaker_channel=meta.speaker_channel,
+                            baseline_compact=meta.baseline_compact,
+                        ),
+                    )
+
+                changed = changed or result.changed
+                committed_entry = result.updated_entry or result.appended_entry
+                if committed_entry and committed_entry.entry_id:
+                    self.live_capture_ledger = set_live_row_baseline(
+                        self.live_capture_ledger,
+                        row_change.key,
+                        baseline_compact,
+                    )
+                    self.live_capture_ledger = mark_live_row_committed(
+                        self.live_capture_ledger,
+                        row_change.key,
+                        committed_entry.entry_id,
+                    )
+                    force_refresh = True
+
+            self.capture_state.preview_text = event.preview_text
+            self.capture_state.last_observed_raw = event.preview_text
+            self.capture_state.last_processed_raw = event.preview_text
+            self.capture_state.last_observer_event_at = now.timestamp()
+            self.capture_state.last_committed_reset_at = None
+            if selector:
+                self.capture_state.current_selector = selector
+            self.capture_state.current_frame_path = frame_path
+        else:
+            preview_result = apply_preview(
+                self.capture_state,
+                event.preview_text,
+                now,
+                settings,
+                meta=PipelineSourceMeta(
+                    selector=selector,
+                    frame_path=frame_path,
+                ),
+            )
+            changed = changed or preview_result.changed
+            force_refresh = force_refresh or bool(
+                preview_result.appended_entry or preview_result.updated_entry
+            )
+
+        self._sync_capture_state_entries(force_refresh=force_refresh)
+        return changed
 
     def _setup_tray(self):
         """시스템 트레이 아이콘 설정"""
@@ -1743,6 +2104,9 @@ class MainWindow(QMainWindow):
             self.subtitle_text.clear()
             with self.subtitle_lock:
                 self.subtitles = []
+            self.capture_state = create_empty_capture_state()
+            self.live_capture_ledger = create_empty_live_capture_ledger()
+            self._cancel_scheduled_subtitle_reset()
             self._cached_total_chars = 0
             self._cached_total_words = 0
             self._last_rendered_count = 0
@@ -1834,9 +2198,17 @@ class MainWindow(QMainWindow):
             self.stop_event.set()  # 워커 스레드에 종료 신호
             self._set_status("중지 중...", "warning")
             self._is_stopping = True
+            self._cancel_scheduled_subtitle_reset()
 
             # 종료 직전 큐 preview 소진 + 마지막 자막 확정
             self._drain_pending_previews(requeue_others=True)
+            self._materialize_pending_preview()
+            finalize_session(
+                self.capture_state,
+                datetime.now(),
+                self._current_capture_settings(),
+            )
+            self._sync_capture_state_entries(force_refresh=False)
             self._finalize_pending_subtitle()
 
             force_driver_quit = for_app_exit or (not Config.KEEP_BROWSER_ON_STOP)
@@ -1868,6 +2240,13 @@ class MainWindow(QMainWindow):
 
             # 종료 후에도 남아있던 preview 처리
             self._drain_pending_previews(requeue_others=True)
+            self._materialize_pending_preview()
+            finalize_session(
+                self.capture_state,
+                datetime.now(),
+                self._current_capture_settings(),
+            )
+            self._sync_capture_state_entries(force_refresh=False)
             self._finalize_pending_subtitle()
             self._clear_preview()
 
@@ -2743,6 +3122,131 @@ class MainWindow(QMainWindow):
 
                     if now - last_check >= 0.2:
                         changes_processed = False
+                        used_structured_probe = False
+                        if observer_active:
+                            observer_changes = self._collect_observer_changes(
+                                driver, observer_frame_path
+                            )
+                            if observer_changes is None:
+                                observer_active = False
+                                logger.warning(
+                                    "MutationObserver 비활성화, polling fallback"
+                                )
+                            elif observer_changes:
+                                used_structured_probe = False
+                                should_reset = any(
+                                    change == "__SUBTITLE_CLEARED__"
+                                    or (
+                                        isinstance(change, dict)
+                                        and str(change.get("kind") or "").strip()
+                                        == "reset"
+                                    )
+                                    for change in observer_changes
+                                )
+                                if should_reset:
+                                    used_structured_probe = True
+                                    self.message_queue.put(
+                                        ("subtitle_reset", "observer_cleared")
+                                    )
+                                    worker_last_raw_text = ""
+                                    worker_last_raw_compact = ""
+                                    last_keepalive_emit = 0.0
+                                    changes_processed = True
+
+                        if not used_structured_probe:
+                            preferred_frame_path = (
+                                observer_frame_path if observer_active else ()
+                            ) or getattr(self, "_last_subtitle_frame_path", ())
+                            probe = self._read_subtitle_probe_by_selectors(
+                                driver,
+                                selector_candidates,
+                                preferred_frame_path=preferred_frame_path,
+                            )
+                            text = utils.clean_text_display(
+                                str(probe.get("text", "") or "")
+                            ).strip()
+                            matched_selector = str(
+                                probe.get("matched_selector", "") or ""
+                            )
+                            selector_found = bool(probe.get("found", False))
+                            text_compact = utils.compact_subtitle_text(text)
+
+                            if selector_found:
+                                reconnect_attempt = 0
+                                if matched_selector and matched_selector != active_selector:
+                                    active_selector = matched_selector
+                                    selector_candidates = (
+                                        self._build_subtitle_selector_candidates(
+                                            active_selector, selector_candidates
+                                        )
+                                    )
+                            elif now - last_selector_refresh >= 5.0:
+                                detected_selector = self._find_subtitle_selector(driver)
+                                if detected_selector:
+                                    selector_candidates = (
+                                        self._build_subtitle_selector_candidates(
+                                            detected_selector, selector_candidates
+                                        )
+                                    )
+                                    active_selector = selector_candidates[0]
+                                    logger.info(
+                                        "자막 선택자 자동 전환: %s",
+                                        active_selector,
+                                    )
+                                last_selector_refresh = now
+
+                            if (
+                                not observer_active
+                                and now - last_observer_retry >= observer_retry_interval
+                            ):
+                                observer_active, observer_frame_path = self._inject_mutation_observer(
+                                    driver, ",".join(selector_candidates)
+                                )
+                                last_observer_retry = now
+
+                            if (
+                                text
+                                and text_compact
+                                and text_compact != worker_last_raw_compact
+                            ):
+                                worker_last_raw_text = text
+                                worker_last_raw_compact = text_compact
+                                last_keepalive_emit = now
+                                self.message_queue.put(
+                                    (
+                                        "preview",
+                                        self._build_preview_payload_from_probe(probe),
+                                    )
+                                )
+                                changes_processed = True
+                            elif (
+                                text
+                                and text_compact
+                                and text_compact == worker_last_raw_compact
+                                and (
+                                    now - last_keepalive_emit
+                                    >= Config.SUBTITLE_KEEPALIVE_INTERVAL
+                                )
+                            ):
+                                self.message_queue.put(("keepalive", text))
+                                last_keepalive_emit = now
+                                changes_processed = True
+                            elif (
+                                not text
+                                and selector_found
+                                and worker_last_raw_compact
+                            ):
+                                self.message_queue.put(
+                                    ("subtitle_reset", "polling_cleared")
+                                )
+                                worker_last_raw_text = ""
+                                worker_last_raw_compact = ""
+                                last_keepalive_emit = 0.0
+                                changes_processed = True
+
+                        last_check = now
+                        self.stop_event.wait(timeout=0.05)
+                        continue
 
                         # 1단계: MutationObserver 버퍼에서 수집 (이벤트 기반)
                         if observer_active:
@@ -3078,6 +3582,281 @@ class MainWindow(QMainWindow):
         if right[0] in no_space_before or left[-1] in no_space_after:
             return left + right
         return left + " " + right
+
+    def _read_subtitle_probe_by_selectors(
+        self,
+        driver,
+        selectors: list[str],
+        preferred_frame_path: tuple[int, ...] = (),
+        filter_unconfirmed_enabled: bool = True,
+    ) -> dict[str, Any]:
+        """Return structured subtitle probe data aligned with the Chrome extension."""
+
+        def _normalize_rows(rows: object) -> list[ObservedSubtitleRow]:
+            observed: list[ObservedSubtitleRow] = []
+            if not isinstance(rows, list):
+                return observed
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                text = utils.clean_text_display(str(row.get("text", ""))).strip()
+                if not utils.compact_subtitle_text(text):
+                    continue
+                node_key = str(row.get("nodeKey", "") or "").strip()
+                if not node_key:
+                    continue
+                speaker_channel = str(row.get("speakerChannel") or "unknown")
+                if speaker_channel not in ("primary", "secondary", "unknown"):
+                    speaker_channel = "unknown"
+                observed.append(
+                    ObservedSubtitleRow(
+                        node_key=node_key,
+                        text=text,
+                        speaker_color=str(row.get("speakerColor", "") or ""),
+                        speaker_channel=speaker_channel,
+                        unstable_key=bool(row.get("unstableKey", False)),
+                    )
+                )
+            return observed
+
+        def _probe_in_current_context() -> dict[str, Any]:
+            try:
+                result = driver.execute_script(
+                    """
+                    return (function(selectorsArg, filterUnconfirmedArg) {
+                        function normalizeText(value) {
+                            return String(value || '').replace(/\\s+/g, ' ').trim();
+                        }
+                        function compactText(value) {
+                            return normalizeText(value).replace(/\\s+/g, '');
+                        }
+                        function queryAllSafe(selector) {
+                            try { return Array.from(document.querySelectorAll(selector)); }
+                            catch (e) { return []; }
+                        }
+                        function queryOneSafe(selector) {
+                            try { return document.querySelector(selector); }
+                            catch (e) { return null; }
+                        }
+                        function normalizeSpeakerColor(color) {
+                            var probe = document.createElement('span');
+                            probe.style.color = String(color || '').trim();
+                            (document.body || document.documentElement).appendChild(probe);
+                            var normalized = window.getComputedStyle(probe).color;
+                            probe.remove();
+                            return normalized;
+                        }
+                        function classifySpeakerChannel(color) {
+                            var normalized = normalizeSpeakerColor(color);
+                            if (normalized === 'rgb(35, 124, 147)') return 'primary';
+                            if (normalized === 'rgb(30, 30, 30)') return 'secondary';
+                            return 'unknown';
+                        }
+                        function hasOpaqueBackground(backgroundColor) {
+                            var normalized = String(backgroundColor || '').replace(/\\s+/g, '').toLowerCase();
+                            return Boolean(normalized) && normalized !== 'transparent' && normalized !== 'rgba(0,0,0,0)';
+                        }
+                        function isConfirmedSubtitleNode(node) {
+                            var bg = window.getComputedStyle(node).backgroundColor;
+                            if (hasOpaqueBackground(bg)) return false;
+                            var descendants = Array.from(node.querySelectorAll('*'));
+                            var limit = Math.min(descendants.length, 48);
+                            for (var i = 0; i < limit; i++) {
+                                var childBg = window.getComputedStyle(descendants[i]).backgroundColor;
+                                if (hasOpaqueBackground(childBg)) return false;
+                            }
+                            return true;
+                        }
+                        function normalizeRowQuery(selector) {
+                            return String(selector || '')
+                                .replace(/:last-child/g, '')
+                                .replace(/:last-of-type/g, '')
+                                .trim();
+                        }
+                        function getSmiWordNodes(selector) {
+                            var query = normalizeRowQuery(selector) || '#viewSubtit .smi_word';
+                            var nodes = queryAllSafe(query);
+                            return nodes.length ? nodes : queryAllSafe('#viewSubtit .smi_word');
+                        }
+                        function extractClassNodeKey(node) {
+                            var classes = String(node.className || '')
+                                .split(/\\s+/)
+                                .map(function(token) { return token.trim(); })
+                                .filter(function(token) { return token && token !== 'smi_word'; });
+                            return classes[0] || '';
+                        }
+                        function extractAttributeNodeKey(node) {
+                            var candidates = [node.getAttribute('data-id'), node.getAttribute('data-key'), node.id];
+                            for (var i = 0; i < candidates.length; i++) {
+                                var candidate = String(candidates[i] || '').trim();
+                                if (candidate) return candidate;
+                            }
+                            return '';
+                        }
+                        function ensureGeneratedNodeKey(node) {
+                            if (!node.dataset.assemblyRowKey) {
+                                node.dataset.assemblyRowKey = 'row_' + Math.random().toString(36).slice(2, 9) + '_' + Date.now();
+                            }
+                            return node.dataset.assemblyRowKey;
+                        }
+                        function readObservedRows(selector) {
+                            var rows = [];
+                            var nodes = getSmiWordNodes(selector);
+                            var classKeyCounts = new Map();
+                            nodes.forEach(function(node) {
+                                var classKey = extractClassNodeKey(node);
+                                if (!classKey) return;
+                                classKeyCounts.set(classKey, (classKeyCounts.get(classKey) || 0) + 1);
+                            });
+                            nodes.forEach(function(node) {
+                                if (filterUnconfirmedArg && !isConfirmedSubtitleNode(node)) {
+                                    return;
+                                }
+                                var text = normalizeText(node.innerText || node.textContent || '');
+                                if (!compactText(text)) return;
+                                var classNodeKey = extractClassNodeKey(node);
+                                var attrNodeKey = extractAttributeNodeKey(node);
+                                var uniqueClassKey = Boolean(classNodeKey) && classKeyCounts.get(classNodeKey) === 1;
+                                var nodeKey = uniqueClassKey
+                                    ? 'class:' + classNodeKey
+                                    : (attrNodeKey ? 'attr:' + attrNodeKey : ensureGeneratedNodeKey(node));
+                                var speakerNode = node.querySelector('span') || node.querySelector('[style*="color"]') || node;
+                                var speakerColor = normalizeSpeakerColor(window.getComputedStyle(speakerNode).color);
+                                var row = {
+                                    nodeKey: nodeKey,
+                                    text: text,
+                                    speakerColor: speakerColor,
+                                    speakerChannel: classifySpeakerChannel(speakerColor),
+                                    unstableKey: !uniqueClassKey && !attrNodeKey
+                                };
+                                var previous = rows.length ? rows[rows.length - 1] : null;
+                                if (
+                                    previous &&
+                                    compactText(previous.text) === compactText(row.text) &&
+                                    (previous.nodeKey === row.nodeKey || (previous.unstableKey && row.unstableKey))
+                                ) {
+                                    rows[rows.length - 1] = row;
+                                    return;
+                                }
+                                rows.push(row);
+                            });
+                            return rows;
+                        }
+                        function buildPreview(rows) {
+                            return rows.slice(-3).map(function(row) { return row.text; }).filter(Boolean).join(' ').trim();
+                        }
+                        function normalizeContainerText(node) {
+                            var raw = node ? (node.innerText || node.textContent || '') : '';
+                            var text = normalizeText(raw);
+                            if (!text) return '';
+                            if (text.length <= 400) return text;
+                            var lines = String(raw || '').split('\\n').map(normalizeText).filter(Boolean);
+                            return lines.slice(-3).join(' ');
+                        }
+                        function shouldBlockContainerFallback() {
+                            if (!filterUnconfirmedArg) return false;
+                            var smiNodes = queryAllSafe('#viewSubtit .smi_word');
+                            if (!smiNodes.length) return false;
+                            return readObservedRows('#viewSubtit .smi_word').length === 0;
+                        }
+                        var selectors = Array.isArray(selectorsArg) ? selectorsArg : [];
+                        var blockContainerFallback = shouldBlockContainerFallback();
+                        var fallbackSelectors = [
+                            '#viewSubtit .incont',
+                            '#viewSubtit',
+                            '.subtitle_area',
+                            '.ai_subtitle',
+                            "[class*='subtitle']"
+                        ];
+                        for (var i = 0; i < selectors.length; i++) {
+                            var selector = String(selectors[i] || '').trim();
+                            if (!selector) continue;
+                            if (selector.indexOf('.smi_word') >= 0) {
+                                var rows = readObservedRows(selector);
+                                var preview = buildPreview(rows);
+                                if (preview) {
+                                    return { text: preview, matchedSelector: selector, found: true, rows: rows, sourceMode: 'smi-window' };
+                                }
+                                continue;
+                            }
+                            if (blockContainerFallback) continue;
+                            var node = queryOneSafe(selector);
+                            if (!node) continue;
+                            var text = normalizeContainerText(node);
+                            if (!text) continue;
+                            return { text: text, matchedSelector: selector, found: true, rows: [], sourceMode: 'container' };
+                        }
+                        if (!blockContainerFallback) {
+                            for (var j = 0; j < fallbackSelectors.length; j++) {
+                                var fallbackSelector = fallbackSelectors[j];
+                                var fallbackNode = queryOneSafe(fallbackSelector);
+                                if (!fallbackNode) continue;
+                                var fallbackText = normalizeContainerText(fallbackNode);
+                                if (!fallbackText) continue;
+                                return { text: fallbackText, matchedSelector: fallbackSelector, found: true, rows: [], sourceMode: 'container' };
+                            }
+                        }
+                        return { text: '', matchedSelector: '', found: false, rows: [], sourceMode: '' };
+                    })(arguments[0], arguments[1]);
+                    """,
+                    selectors,
+                    bool(filter_unconfirmed_enabled),
+                )
+            except Exception as e:
+                logger.debug("subtitle probe error: %s", e)
+                return {
+                    "text": "",
+                    "matched_selector": "",
+                    "found": False,
+                    "rows": [],
+                    "source_mode": "",
+                }
+            result = result or {}
+            return {
+                "text": utils.clean_text_display(str(result.get("text", ""))).strip(),
+                "matched_selector": str(result.get("matchedSelector", "") or ""),
+                "found": bool(result.get("found", False)),
+                "rows": _normalize_rows(result.get("rows", [])),
+                "source_mode": str(result.get("sourceMode", "") or ""),
+            }
+
+        frame_paths: list[tuple[int, ...]] = []
+        if preferred_frame_path:
+            frame_paths.append(preferred_frame_path)
+        frame_paths.append(())
+        for frame_path in self._iter_frame_paths(driver, max_depth=3, max_frames=60):
+            if frame_path not in frame_paths:
+                frame_paths.append(frame_path)
+
+        for frame_path in frame_paths:
+            try:
+                if frame_path:
+                    if not self._switch_to_frame_path(driver, frame_path):
+                        continue
+                else:
+                    try:
+                        driver.switch_to.default_content()
+                    except Exception:
+                        pass
+                result = _probe_in_current_context()
+                if result.get("found"):
+                    self._last_subtitle_frame_path = frame_path
+                    result["frame_path"] = frame_path
+                    return result
+            finally:
+                try:
+                    driver.switch_to.default_content()
+                except Exception:
+                    pass
+
+        return {
+            "text": "",
+            "matched_selector": "",
+            "found": False,
+            "rows": [],
+            "source_mode": "",
+            "frame_path": (),
+        }
 
     def _read_subtitle_text_by_selectors(
         self,
@@ -3777,13 +4556,20 @@ class MainWindow(QMainWindow):
             while drained < max_items:
                 msg_type, data = self.message_queue.get_nowait()
                 if msg_type == "preview":
-                    prepared = self._prepare_preview_raw(data)
-                    if prepared:
-                        self._process_raw_text(prepared)
-                    elif data:
-                        forced = utils.clean_text_display(str(data)).strip()
-                        if forced:
-                            self._process_raw_text(forced)
+                    if isinstance(data, dict):
+                        self._apply_structured_preview_payload(data)
+                    else:
+                        prepared = self._prepare_preview_raw(data)
+                        if prepared:
+                            self._process_raw_text(prepared)
+                        elif data:
+                            forced = utils.clean_text_display(str(data)).strip()
+                            if forced:
+                                self._process_raw_text(forced)
+                elif msg_type == "subtitle_reset":
+                    self._schedule_deferred_subtitle_reset(str(data or "drain"))
+                elif msg_type == "keepalive":
+                    self._handle_keepalive(str(data or ""))
                 elif msg_type == "subtitle_segments":
                     self._process_subtitle_segments(data)
                 else:
@@ -3811,6 +4597,7 @@ class MainWindow(QMainWindow):
         self, keep_history_from_subtitles: bool
     ) -> None:
         """외부 편집/로드 후 스트리밍 파이프라인 상태를 재동기화한다."""
+        self._ensure_capture_runtime_state()
         self.last_subtitle = ""
         self._stream_start_time = None
         self._last_raw_text = ""
@@ -3818,6 +4605,14 @@ class MainWindow(QMainWindow):
         self._preview_desync_count = 0
         self._preview_ambiguous_skip_count = 0
         self._last_good_raw_compact = ""
+        self.capture_state.preview_text = ""
+        self.capture_state.last_observed_raw = ""
+        self.capture_state.last_processed_raw = ""
+        self.capture_state.preview_desync_count = 0
+        self.capture_state.preview_ambiguous_skip_count = 0
+        self.capture_state.last_committed_reset_at = None
+        self.live_capture_ledger = clear_live_capture_ledger()
+        self._cancel_scheduled_subtitle_reset()
         self._clear_preview()
 
         if keep_history_from_subtitles:
@@ -3835,6 +4630,13 @@ class MainWindow(QMainWindow):
 
         with self.subtitle_lock:
             self.subtitles = list(new_subtitles)
+        self.capture_state = create_empty_capture_state()
+        self.capture_state.entries = list(new_subtitles)
+        if keep_history_from_subtitles and self.capture_state.entries:
+            rebuild_confirmed_history(
+                self.capture_state,
+                self._current_capture_settings(),
+            )
 
         self._reset_stream_state_after_subtitle_change(
             keep_history_from_subtitles=keep_history_from_subtitles
@@ -3871,6 +4673,16 @@ class MainWindow(QMainWindow):
                 "session_load_json_error",
             ):
                 return
+            if msg_type == "preview" and isinstance(data, dict):
+                self._apply_structured_preview_payload(data)
+                return
+            if msg_type == "subtitle_reset":
+                logger.info("subtitle_reset 감지: %s", data)
+                self._schedule_deferred_subtitle_reset(str(data or "subtitle_reset"))
+                return
+            if msg_type == "keepalive":
+                self._handle_keepalive(str(data or ""))
+                return
             if msg_type == "status":
                 status_text = str(data)[:200]
                 if status_text != self._last_status_message:
@@ -3905,9 +4717,12 @@ class MainWindow(QMainWindow):
                 self._show_toast(str(message), str(toast_type), duration)
 
             elif msg_type == "preview":
-                prepared = self._prepare_preview_raw(data)
-                if prepared:
-                    self._process_raw_text(prepared)
+                if isinstance(data, dict):
+                    self._apply_structured_preview_payload(data)
+                else:
+                    prepared = self._prepare_preview_raw(data)
+                    if prepared:
+                        self._process_raw_text(prepared)
 
             elif msg_type == "subtitle_reset":
                 # 발언자 전환으로 자막 영역이 클리어됨 → 완전 리셋
@@ -3926,7 +4741,7 @@ class MainWindow(QMainWindow):
                 self._preview_ambiguous_skip_count = 0
 
             elif msg_type == "keepalive":
-                self._handle_keepalive(data)
+                self._handle_keepalive(str(data or ""))
 
             elif msg_type == "error":
                 self.progress.hide()
@@ -3937,6 +4752,14 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "오류", str(data))
 
             elif msg_type == "finished":
+                self._cancel_scheduled_subtitle_reset()
+                self._materialize_pending_preview()
+                finalize_session(
+                    self.capture_state,
+                    datetime.now(),
+                    self._current_capture_settings(),
+                )
+                self._sync_capture_state_entries(force_refresh=False)
                 if self.last_subtitle:
                     self._finalize_subtitle(self.last_subtitle)
                     self.last_subtitle = ""
@@ -4129,6 +4952,32 @@ class MainWindow(QMainWindow):
         if not raw:
             return
         # 현재 진행 중인 버퍼가 있으면 확정 이후에만 갱신
+        if self.last_subtitle:
+            return
+        raw_compact = utils.compact_subtitle_text(raw)
+        if not raw_compact:
+            return
+
+        with self.subtitle_lock:
+            if not self.subtitles:
+                return
+            last_entry = self.subtitles[-1]
+            last_compact = utils.compact_subtitle_text(last_entry.text)
+            if raw_compact != last_compact:
+                return
+            last_entry.end_time = datetime.now()
+
+    def _handle_keepalive(self, raw: str) -> None:
+        """Refresh the active entry end time without re-appending subtitle text."""
+        if not raw:
+            return
+
+        self._ensure_capture_runtime_state()
+        result = apply_keepalive(self.capture_state, raw, datetime.now())
+        if result.changed:
+            self._sync_capture_state_entries(force_refresh=False)
+            return
+
         if self.last_subtitle:
             return
         raw_compact = utils.compact_subtitle_text(raw)
@@ -5034,7 +5883,8 @@ class MainWindow(QMainWindow):
 
     def _auto_backup(self):
         """자동 백업 실행"""
-        if not self.subtitles:
+        prepared_entries = self._build_prepared_entries_snapshot()
+        if not prepared_entries:
             return
 
         # UI 스레드가 멈추지 않도록(긴 세션/대용량) 파일 I/O는 백그라운드에서 처리
@@ -5049,8 +5899,7 @@ class MainWindow(QMainWindow):
             backup_file = backup_dir / f"backup_{timestamp}.json"
 
             # 스레드 안전하게 자막 스냅샷 생성 (UI 스레드)
-            with self.subtitle_lock:
-                subtitles_copy = [s.to_dict() for s in self.subtitles]
+            subtitles_copy = [s.to_dict() for s in prepared_entries]
 
             data = {
                 "version": Config.VERSION,
@@ -5160,13 +6009,16 @@ class MainWindow(QMainWindow):
 
     def _export_stats(self):
         """자막 통계 내보내기"""
-        if not self.subtitles:
+        subtitles_snapshot = self._build_prepared_entries_snapshot()
+        prepared_subtitles_snapshot = list(subtitles_snapshot)
+        if not subtitles_snapshot:
             QMessageBox.warning(self, "알림", "내보낼 내용이 없습니다.")
             return
 
         # 스레드 안전하게 자막 스냅샷 생성
         with self.subtitle_lock:
             subtitles_snapshot = list(self.subtitles)
+        subtitles_snapshot = prepared_subtitles_snapshot
         if not subtitles_snapshot:
             QMessageBox.warning(self, "알림", "내보낼 내용이 없습니다.")
             return
@@ -5258,7 +6110,8 @@ class MainWindow(QMainWindow):
         return utils.generate_filename(committee_name, extension)
 
     def _save_txt(self):
-        if not self.subtitles:
+        prepared_entries = self._build_prepared_entries_snapshot()
+        if not prepared_entries:
             QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
             return
 
@@ -5269,10 +6122,9 @@ class MainWindow(QMainWindow):
 
         if path:
             # 스레드 안전하게 자막 스냅샷 생성 (UI 스레드에서)
-            with self.subtitle_lock:
-                subtitles_snapshot = [
-                    (entry.timestamp, entry.text) for entry in self.subtitles
-                ]
+            subtitles_snapshot = [
+                (entry.timestamp, entry.text) for entry in prepared_entries
+            ]
 
             # 실제 저장 함수 정의
             def do_save(filepath):
@@ -5297,7 +6149,8 @@ class MainWindow(QMainWindow):
             self._save_in_background(do_save, path, "TXT 저장 완료!", "TXT 저장 실패")
 
     def _save_srt(self):
-        if not self.subtitles:
+        prepared_entries = self._build_prepared_entries_snapshot()
+        if not prepared_entries:
             QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
             return
 
@@ -5308,11 +6161,10 @@ class MainWindow(QMainWindow):
 
         if path:
             # 스레드 안전하게 자막 스냅샷 생성 (UI 스레드에서)
-            with self.subtitle_lock:
-                subtitles_snapshot = [
-                    (entry.start_time, entry.end_time, entry.timestamp, entry.text)
-                    for entry in self.subtitles
-                ]
+            subtitles_snapshot = [
+                (entry.start_time, entry.end_time, entry.timestamp, entry.text)
+                for entry in prepared_entries
+            ]
 
             def do_save(filepath):
                 lines = []
@@ -5333,7 +6185,8 @@ class MainWindow(QMainWindow):
             self._save_in_background(do_save, path, "SRT 저장 완료!", "SRT 저장 실패")
 
     def _save_vtt(self):
-        if not self.subtitles:
+        prepared_entries = self._build_prepared_entries_snapshot()
+        if not prepared_entries:
             QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
             return
 
@@ -5343,11 +6196,10 @@ class MainWindow(QMainWindow):
         )
 
         if path:
-            with self.subtitle_lock:
-                subtitles_snapshot = [
-                    (entry.start_time, entry.end_time, entry.timestamp, entry.text)
-                    for entry in self.subtitles
-                ]
+            subtitles_snapshot = [
+                (entry.start_time, entry.end_time, entry.timestamp, entry.text)
+                for entry in prepared_entries
+            ]
 
             def do_save(filepath):
                 lines = ["WEBVTT\n\n"]
@@ -5369,7 +6221,8 @@ class MainWindow(QMainWindow):
 
     def _save_docx(self):
         """DOCX (Word) 파일로 저장"""
-        if not self.subtitles:
+        prepared_entries = self._build_prepared_entries_snapshot()
+        if not prepared_entries:
             QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
             return
 
@@ -5393,10 +6246,9 @@ class MainWindow(QMainWindow):
 
         if path:
             # 스레드 안전하게 자막 스냅샷 생성
-            with self.subtitle_lock:
-                subtitles_snapshot = [
-                    (entry.timestamp, entry.text) for entry in self.subtitles
-                ]
+            subtitles_snapshot = [
+                (entry.timestamp, entry.text) for entry in prepared_entries
+            ]
 
             generated_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
             total_chars = sum(len(text) for _, text in subtitles_snapshot)
@@ -5445,7 +6297,8 @@ class MainWindow(QMainWindow):
 
     def _save_hwp(self):
         """HWP 파일로 저장 (Hancom Office 필요)"""
-        if not self.subtitles:
+        prepared_entries = self._build_prepared_entries_snapshot()
+        if not prepared_entries:
             QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
             return
 
@@ -5472,10 +6325,9 @@ class MainWindow(QMainWindow):
             return
 
         # 스레드 안전하게 자막 스냅샷 생성
-        with self.subtitle_lock:
-            subtitles_snapshot = [
-                (entry.timestamp, entry.text) for entry in self.subtitles
-            ]
+        subtitles_snapshot = [
+            (entry.timestamp, entry.text) for entry in prepared_entries
+        ]
 
         generated_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
         total_chars = sum(len(text) for _, text in subtitles_snapshot)
@@ -5641,7 +6493,8 @@ class MainWindow(QMainWindow):
 
     def _save_rtf(self):
         """RTF 파일로 저장 (HWP에서 열기 가능)"""
-        if not self.subtitles:
+        prepared_entries = self._build_prepared_entries_snapshot()
+        if not prepared_entries:
             QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
             return
 
@@ -5652,8 +6505,7 @@ class MainWindow(QMainWindow):
 
         if path:
             # 스레드 안전하게 자막 스냅샷 생성
-            with self.subtitle_lock:
-                subtitles_snapshot = list(self.subtitles)
+            subtitles_snapshot = list(prepared_entries)
             if not subtitles_snapshot:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
                 return
@@ -5718,8 +6570,8 @@ class MainWindow(QMainWindow):
             self._show_toast("종료 중이라 세션 저장을 시작할 수 없습니다.", "warning")
             return
 
-        with self.subtitle_lock:
-            has_subtitles = bool(self.subtitles)
+        prepared_entries = self._build_prepared_entries_snapshot()
+        has_subtitles = bool(prepared_entries)
         if not has_subtitles:
             QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
             return
@@ -5753,21 +6605,7 @@ class MainWindow(QMainWindow):
 
         def background_save():
             try:
-                with self.subtitle_lock:
-                    snapshot = [
-                        (s.text, s.timestamp, s.start_time, s.end_time)
-                        for s in self.subtitles
-                    ]
-
-                subtitles_copy = [
-                    {
-                        "text": text,
-                        "timestamp": timestamp.isoformat() if timestamp else None,
-                        "start_time": start_time.isoformat() if start_time else None,
-                        "end_time": end_time.isoformat() if end_time else None,
-                    }
-                    for text, timestamp, start_time, end_time in snapshot
-                ]
+                subtitles_copy = [entry.to_dict() for entry in prepared_entries]
 
                 data = {
                     "version": Config.VERSION,

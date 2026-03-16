@@ -49,6 +49,22 @@ class _StopAfterFirstWaitEvent:
         return False
 
 
+class _StopAfterSecondWaitEvent:
+    def __init__(self):
+        self._wait_calls = 0
+        self._is_set = False
+
+    def is_set(self):
+        return self._is_set
+
+    def wait(self, timeout=None):
+        self._wait_calls += 1
+        if self._wait_calls >= 2:
+            self._is_set = True
+            return True
+        return False
+
+
 class _ReconnectOnceEvent:
     def __init__(self):
         self._wait_calls = 0
@@ -127,6 +143,15 @@ def _configure_basic_worker_stubs(win):
         lambda selector, extras=None: [selector]
     )
     win._inject_mutation_observer = lambda _driver, _selector: (False, ())
+    win._read_subtitle_probe_by_selectors = (
+        lambda _driver, _selectors, preferred_frame_path=(), **_kwargs: {
+            "text": "",
+            "matched_selector": "",
+            "found": False,
+            "rows": [],
+            "frame_path": preferred_frame_path,
+        }
+    )
     win._read_subtitle_text_by_selectors = (
         lambda _driver, _selectors: ("", "", False)
     )
