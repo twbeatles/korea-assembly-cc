@@ -10,6 +10,7 @@
 > v16.13.1까지의 반영사항은 운영 안정성(keepalive 실활성, xcgcd 경로 연결, 저장 원자성/종료 대기)과 수집 안정화(`.smi_word` 목록 창 수집, Observer 타겟 우선순위 보강)입니다.
 > **v16.13.2(2026-03-05) 정합성 반영**: `_confirmed_compact` 상한(`50000`) 도입, 병합 기준 Config 일원화(`5초/300자`), 세션 병합 dedupe 시간창(30초) 적용, 종료 lifecycle drain 통합이 반영되었습니다.
 > **v16.14.0(2026-03-16) 정합성 반영**: Chrome 확장 기반 `live row ledger + subtitle pipeline`이 `core/live_capture.py`와 `core/subtitle_pipeline.py`로 고정되었고, `framePath::nodeKey` row reconciliation, grace reset, prepared snapshot 저장 경로가 운영 기본값이 되었습니다. `ui/main_window.py`는 파사드로 축소되고 관련 책임은 `ui/main_window_*` 모듈로 분리되었습니다.
+> 후속 Pylance/인코딩 위생 보강(`ui/main_window_types.py`, `tests/test_pyright_regression.py`, 확장된 `tests/test_encoding_hygiene.py`)은 이 문서가 분석하는 자막 추출 알고리즘 자체를 바꾸지 않습니다.
 
 ---
 

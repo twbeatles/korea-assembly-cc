@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 
 from ui.main_window_common import *
+from ui.main_window_types import MainWindowHost
 
 
-class MainWindowUIMixin:
+class MainWindowUIMixin(MainWindowHost):
 
     def _setup_tray(self):
             """시스템 트레이 아이콘 설정"""

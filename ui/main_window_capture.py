@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 
 from ui.main_window_common import *
+from ui.main_window_types import MainWindowHost
 
 
-class MainWindowCaptureMixin:
+class MainWindowCaptureMixin(MainWindowHost):
 
     def _get_query_param(self, url: str, name: str) -> str:
             """URL 쿼리 파라미터 값 추출 (없으면 빈 문자열)"""

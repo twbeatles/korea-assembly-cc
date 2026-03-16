@@ -72,6 +72,7 @@ HIDDEN_IMPORTS = [
     'ui.main_window_database',
     'ui.main_window_persistence',
     'ui.main_window_pipeline',
+    'ui.main_window_types',
     'ui.main_window_ui',
     'ui.main_window_view',
     'win32com',

@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
 from ui.main_window_common import *
+from ui.main_window_common import _import_optional_module
+from ui.main_window_types import MainWindowHost
 
 
-class MainWindowPersistenceMixin:
+class MainWindowPersistenceMixin(MainWindowHost):
 
     def _auto_backup(self):
             """자동 백업 실행"""
@@ -573,7 +575,7 @@ class MainWindowPersistenceMixin:
             )
 
 
-    def _handle_hwp_save_failure(self, error) -> None:
+    def _handle_hwp_save_failure(self, error: object) -> None:
             """HWP 저장 실패 시 대체 저장 안내"""
             error_msg = str(error).lower()
             logger.error(f"HWP 저장 실패: {error}")

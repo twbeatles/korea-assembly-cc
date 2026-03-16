@@ -16,11 +16,11 @@ def test_reconcile_live_capture_preserves_row_metadata_on_correction():
     first = reconcile_live_capture(
         ledger,
         normalize_capture_event(
-            raw="첫 문장",
+            raw="first line",
             rows=[
                 ObservedSubtitleRow(
                     node_key="row_1",
-                    text="첫 문장",
+                    text="first line",
                     speaker_color="rgb(35, 124, 147)",
                     speaker_channel="primary",
                 )
@@ -30,17 +30,17 @@ def test_reconcile_live_capture_preserves_row_metadata_on_correction():
     )
 
     row_key = first.live_rows[0].key
-    ledger = set_live_row_baseline(first.ledger, row_key, "기준이력")
+    ledger = set_live_row_baseline(first.ledger, row_key, "baseline")
     ledger = mark_live_row_committed(ledger, row_key, "entry_1")
 
     second = reconcile_live_capture(
         ledger,
         normalize_capture_event(
-            raw="첫 문장 보정",
+            raw="first line corrected",
             rows=[
                 ObservedSubtitleRow(
                     node_key="row_1",
-                    text="첫 문장 보정",
+                    text="first line corrected",
                     speaker_color="rgb(35, 124, 147)",
                     speaker_channel="primary",
                 )
@@ -49,23 +49,26 @@ def test_reconcile_live_capture_preserves_row_metadata_on_correction():
         ),
     )
 
+    row = get_live_row(second.ledger, row_key)
+
     assert second.changed is True
     assert len(second.row_changes) == 1
     assert second.row_changes[0].is_new is False
     assert second.live_rows[0].key == row_key
-    assert get_live_row(second.ledger, row_key).committed_entry_id == "entry_1"
-    assert get_live_row(second.ledger, row_key).baseline_compact == "기준이력"
+    assert row is not None
+    assert row.committed_entry_id == "entry_1"
+    assert row.baseline_compact == "baseline"
 
 
 def test_reconcile_live_capture_fallback_clears_only_active_rows():
     structured = reconcile_live_capture(
         create_empty_live_capture_ledger(),
         normalize_capture_event(
-            raw="현재 row",
+            raw="current row",
             rows=[
                 ObservedSubtitleRow(
                     node_key="row_1",
-                    text="현재 row",
+                    text="current row",
                     speaker_color="rgb(35, 124, 147)",
                     speaker_channel="primary",
                 )
@@ -84,12 +87,15 @@ def test_reconcile_live_capture_fallback_clears_only_active_rows():
     )
 
     row_key = structured.live_rows[0].key
+    row = get_live_row(fallback.ledger, row_key)
+
     assert fallback.changed is True
     assert fallback.live_rows == []
     assert fallback.ledger.active_row_keys == []
     assert fallback.ledger.preview_text == "fallback preview"
-    assert get_live_row(fallback.ledger, row_key).text == "현재 row"
-    assert list_live_panel_rows(fallback.ledger)[0].text == "현재 row"
+    assert row is not None
+    assert row.text == "current row"
+    assert list_live_panel_rows(fallback.ledger)[0].text == "current row"
 
 
 def test_reconcile_live_capture_bounds_ledger_and_distinguishes_frame_paths():
@@ -99,8 +105,8 @@ def test_reconcile_live_capture_bounds_ledger_and_distinguishes_frame_paths():
         ledger = reconcile_live_capture(
             ledger,
             normalize_capture_event(
-                raw=f"문장-{index}",
-                rows=[ObservedSubtitleRow(node_key=f"row_{index}", text=f"문장-{index}")],
+                raw=f"line-{index}",
+                rows=[ObservedSubtitleRow(node_key=f"row_{index}", text=f"line-{index}")],
                 timestamp=float(index + 1),
             ),
         ).ledger
@@ -112,8 +118,8 @@ def test_reconcile_live_capture_bounds_ledger_and_distinguishes_frame_paths():
     frame_split = reconcile_live_capture(
         create_empty_live_capture_ledger(),
         normalize_capture_event(
-            raw="같은 key",
-            rows=[ObservedSubtitleRow(node_key="row_shared", text="상단 프레임")],
+            raw="shared key",
+            rows=[ObservedSubtitleRow(node_key="row_shared", text="top frame")],
             timestamp=1.0,
             frame_path=(),
         ),
@@ -121,12 +127,17 @@ def test_reconcile_live_capture_bounds_ledger_and_distinguishes_frame_paths():
     frame_split = reconcile_live_capture(
         frame_split,
         normalize_capture_event(
-            raw="같은 key",
-            rows=[ObservedSubtitleRow(node_key="row_shared", text="하위 프레임")],
+            raw="shared key",
+            rows=[ObservedSubtitleRow(node_key="row_shared", text="nested frame")],
             timestamp=2.0,
             frame_path=(0,),
         ),
     ).ledger
 
-    assert get_live_row(frame_split, "top::row_shared").text == "상단 프레임"
-    assert get_live_row(frame_split, "0::row_shared").text == "하위 프레임"
+    top_row = get_live_row(frame_split, "top::row_shared")
+    nested_row = get_live_row(frame_split, "0::row_shared")
+
+    assert top_row is not None
+    assert nested_row is not None
+    assert top_row.text == "top frame"
+    assert nested_row.text == "nested frame"

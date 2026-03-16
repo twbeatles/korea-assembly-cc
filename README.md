@@ -35,11 +35,13 @@
 
 ### 🏗️ MainWindow 책임 분할
 - `ui/main_window.py`는 파사드 역할만 담당하고, 실제 구현은 `ui/main_window_ui.py`, `ui/main_window_capture.py`, `ui/main_window_pipeline.py`, `ui/main_window_view.py`, `ui/main_window_persistence.py`, `ui/main_window_database.py`로 분리했습니다.
+- `ui/main_window_types.py`의 `MainWindowHost` 계약으로 분할된 mixin의 공통 `self` 타입을 고정해 Pylance/Pyright 진단 기준을 안정화했습니다.
 - 직접 호출되던 `MainWindow` 메서드 표면은 유지해 기존 테스트와 엔트리포인트 import 경로를 깨지 않도록 정리했습니다.
 
 ### 🧰 코어/호환 계층 정리
 - `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py`를 추가하고, `core/utils.py`, `database.py`는 호환용 shim으로 유지했습니다.
 - `subtitle_extractor.spec`는 새 모듈 구조를 hidden import에 반영하고, 빌드 버전 기본값을 `v16.14.0`으로 동기화했습니다.
+- `tests/test_pyright_regression.py`와 확장된 `tests/test_encoding_hygiene.py`로 `pyright 0 errors`와 핵심 한글 문자열 UTF-8 round-trip을 회귀 검증합니다.
 
 ## ✨ v16.13.1 새 기능 (Hot!)
 
@@ -378,6 +380,7 @@ python -c "import ui.main_window as m; print(m.MainWindow.__name__)"
 
 - 정적 분석 기준은 루트 `pyrightconfig.json` 기반 `pyright 0 errors`입니다.
 - 테스트 기준은 루트 `tests/` 전체 통과입니다.
+- `tests/test_pyright_regression.py`는 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증합니다.
 - 소스 코드, 문서(`.md`), 빌드 스펙(`subtitle_extractor.spec`)은 **UTF-8 without BOM**을 유지합니다.
 - 사용자 내보내기 텍스트 중 일부 경로(TXT 실시간 저장/일반 TXT 저장)는 Windows 메모장 호환을 위해 `utf-8-sig`를 사용합니다.
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 같은 진단 기준을 사용합니다.
@@ -388,7 +391,9 @@ python -c "import ui.main_window as m; print(m.MainWindow.__name__)"
 - `.vscode/settings.json`: 워크스페이스 단위 Pylance/UTF-8 설정
 - `.editorconfig`, `.gitattributes`: UTF-8 without BOM + CRLF 기준 유지
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
-- `tests/test_encoding_hygiene.py`: repo tracked 텍스트 파일의 UTF-8/BOM/U+FFFD 위생 검증
+- `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
+- `tests/test_encoding_hygiene.py`: repo tracked 텍스트 파일의 UTF-8/BOM/U+FFFD 위생 및 핵심 한글 문자열 round-trip 검증
+- `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
 
 ---
 
@@ -408,7 +413,7 @@ dist/국회의사중계자막추출기 v16.14.0.exe
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
-- `python-docx`는 런타임에서 동적 import를 사용하므로 `.spec`의 hidden import 목록에도 함께 반영합니다.
+- `python-docx`와 분할된 `ui.main_window_*` 모듈(`ui.main_window_types` 포함)은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에도 함께 반영합니다.
 
 ---
 
@@ -420,6 +425,7 @@ dist/국회의사중계자막추출기 v16.14.0.exe
 - `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py` 추가 및 `core/utils.py`, `database.py` 호환 shim 전환
 - `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`를 새 구조와 `v16.14.0` 기준으로 동기화
 - 버전 동기화/호환 import 검증 테스트(`tests/test_version_sync.py`, `tests/test_compat_imports.py`) 추가
+- `ui/main_window_types.py`, `tests/test_pyright_regression.py`, 확장된 `tests/test_encoding_hygiene.py`로 Pylance/UTF-8 회귀 기준을 보강
 
 ### v16.13.2 (2026-03-05)
 - 🔒 **종료 lifecycle 통합**: 파일 저장/세션 저장·불러오기/DB task를 공통 레지스트리로 추적하고 종료 시 drain 대기 적용

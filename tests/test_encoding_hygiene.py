@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import codecs
 from pathlib import Path
+import json
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -33,6 +34,13 @@ EXCLUDED_DIRS = {
     "realtime_output",
     "sessions",
     "tmp_extension_unpacked",
+}
+ROUND_TRIP_EXPECTATIONS = {
+    PROJECT_ROOT / ".editorconfig": "charset = utf-8",
+    PROJECT_ROOT / ".gitattributes": "working-tree-encoding=UTF-8",
+    PROJECT_ROOT / ".vscode" / "settings.json": '"files.encoding": "utf8"',
+    PROJECT_ROOT / "pyrightconfig.json": "국회의사중계 자막.py",
+    PROJECT_ROOT / "ui" / "main_window_ui.py": "국회 의사중계 자막 추출기",
 }
 
 
@@ -69,3 +77,12 @@ def test_repo_text_files_are_utf8_without_bom_or_replacement_chars():
             failures.append(f"{rel_path}: contains replacement character U+FFFD")
 
     assert not failures, "\n".join(failures)
+
+
+def test_critical_utf8_files_round_trip_expected_korean_and_config_text():
+    for path, expected_text in ROUND_TRIP_EXPECTATIONS.items():
+        text = path.read_text(encoding="utf-8")
+        assert expected_text in text, f"{path.relative_to(PROJECT_ROOT)} is missing {expected_text!r}"
+
+    config = json.loads((PROJECT_ROOT / "pyrightconfig.json").read_text(encoding="utf-8"))
+    assert "국회의사중계 자막.py" in config["include"]

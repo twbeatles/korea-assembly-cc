@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 
 from ui.main_window_common import *
+from ui.main_window_types import MainWindowHost
 
 
-class MainWindowDatabaseMixin:
+class MainWindowDatabaseMixin(MainWindowHost):
 
     def _set_db_history_dialog_busy(self, busy: bool, message: str = "") -> None:
             """DB 히스토리 다이얼로그의 버튼/목록 상태를 토글한다."""

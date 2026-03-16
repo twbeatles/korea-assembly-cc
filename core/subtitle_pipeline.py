@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from core import utils
 from core.config import Config
-from core.models import CaptureSessionState, SubtitleEntry
+from core.models import CaptureSessionState, SpeakerChannel, SubtitleEntry
 
 
 MIN_COMPACT_ANCHOR = 10
@@ -30,7 +30,7 @@ class PipelineSourceMeta:
     source_node_key: str = ""
     source_entry_id: str = ""
     speaker_color: str = ""
-    speaker_channel: str = "unknown"
+    speaker_channel: SpeakerChannel = "unknown"
     force_new_entry: bool = False
 
 

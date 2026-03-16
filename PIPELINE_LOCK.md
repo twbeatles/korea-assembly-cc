@@ -46,6 +46,7 @@
 - `ui/main_window.py`는 파사드로 축소되고, 실제 책임은 `ui/main_window_capture.py`, `ui/main_window_pipeline.py`, `ui/main_window_view.py`, `ui/main_window_persistence.py`, `ui/main_window_database.py`, `ui/main_window_ui.py`로 분리되었다.
 - `core/live_capture.py`와 `core/subtitle_pipeline.py`는 더 이상 `MainWindow` 내부 임시 로직이 아니라 운영 기준 코어 모듈이다.
 - `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py`를 추가하고, `core/utils.py`와 `database.py`는 호환 shim으로 유지한다.
+- `ui/main_window_types.py`는 분할된 mixin이 공유하는 `MainWindowHost` 타입 계약을 제공해 Pylance/Pyright 기준의 공통 `self` 표면을 고정한다.
 
 ### 2.2 안정화 이력 (v16.12.1, 2026-02-25)
 - `_extraction_worker`: URL에 `xcgcd`가 없을 때만 `xcode` 기반 자동 감지를 연결
@@ -285,7 +286,9 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - `.vscode/settings.json`: Pylance 워크스페이스 설정
 - `.editorconfig`, `.gitattributes`: UTF-8 without BOM + CRLF 기준 유지
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
-- `tests/test_encoding_hygiene.py`: repo tracked 텍스트 파일의 UTF-8/BOM/U+FFFD 위생 검증
+- `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
+- `tests/test_encoding_hygiene.py`: repo tracked 텍스트 파일의 UTF-8/BOM/U+FFFD 위생 및 핵심 한글 문자열 round-trip 검증
+- `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
 
 ---
 

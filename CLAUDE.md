@@ -124,6 +124,7 @@ korea-assembly-cc/
     main_window_database.py
     main_window_persistence.py
     main_window_pipeline.py
+    main_window_types.py
     main_window_ui.py
     main_window_view.py
     themes.py
@@ -131,6 +132,9 @@ korea-assembly-cc/
     main_window.py              # MainWindow 파사드
   database.py                   # SQLite DB 호환 shim
   subtitle_extractor.spec   # PyInstaller 빌드 설정
+  tests/
+    test_encoding_hygiene.py
+    test_pyright_regression.py
   README.md                 # 문서
   CLAUDE.md                 # AI 컨텍스트
   GEMINI.md                 # AI 컨텍스트
@@ -151,6 +155,7 @@ korea-assembly-cc/
 | `ToastWidget` | ui/widgets.py | 비차단 토스트 알림 UI |
 | `SubtitleEntry` | core/models.py | 자막 데이터 모델 (타임스탬프 포함) |
 | `MainWindow` | ui/main_window.py | 메인 윈도우 파사드 및 lifecycle 조립 |
+| `MainWindowHost` | ui/main_window_types.py | 분할된 MainWindow mixin의 공통 `self` 타입 계약 |
 | `MainWindowCaptureMixin` | ui/main_window_capture.py | Selenium 수집/재연결/observer 처리 |
 | `MainWindowPipelineMixin` | ui/main_window_pipeline.py | live row ledger + subtitle pipeline 연동 |
 | `MainWindowPersistenceMixin` | ui/main_window_persistence.py | 저장/세션/자동백업/export 처리 |
@@ -191,6 +196,7 @@ korea-assembly-cc/
 - `core/live_capture.py`와 `core/subtitle_pipeline.py`를 운영 기준 코어로 고정하고 row reconciliation + grace reset + prepared snapshot 경로를 유지
 - `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py`를 추가하고 기존 `core/utils.py`, `database.py`는 호환 shim으로 유지
 - 테스트 호환을 위해 `MainWindow` 직접 호출 메서드 표면과 import 경로를 유지
+- `ui/main_window_types.py`의 `MainWindowHost` 계약, `tests/test_pyright_regression.py`, 확장된 `tests/test_encoding_hygiene.py`로 Pylance/UTF-8 회귀 기준을 고정
 
 ### 6.1 수집 정체 완화
 - **`.smi_word` 창 수집 보강**: `_read_subtitle_text_by_selectors`가 `.smi_word` 목록 전체를 읽어 최근 텍스트 창을 구성
@@ -289,6 +295,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 ### 8.5 개발 품질 게이트
 - 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors`
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과
+- pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
@@ -300,7 +307,9 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - `.vscode/settings.json`: 워크스페이스 Pylance/UTF-8 설정
 - `.editorconfig`, `.gitattributes`: 텍스트 파일 인코딩/라인엔딩 기준
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
-- `tests/test_encoding_hygiene.py`: UTF-8 without BOM 및 U+FFFD 금지 검증
+- `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
+- `tests/test_encoding_hygiene.py`: UTF-8 without BOM, U+FFFD 금지, 핵심 한글 문자열 round-trip 검증
+- `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
 
 ## 9. 성능 최적화 (v16.8)
 

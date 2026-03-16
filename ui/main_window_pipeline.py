@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
 from ui.main_window_common import *
+from ui.main_window_common import _ResetTimerShim
+from ui.main_window_types import MainWindowHost
 
 
-class MainWindowPipelineMixin:
+class MainWindowPipelineMixin(MainWindowHost):
 
     def _ensure_capture_runtime_state(self) -> None:
             if not hasattr(self, "capture_state") or not isinstance(

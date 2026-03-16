@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 
 from ui.main_window_common import *
+from ui.main_window_types import MainWindowHost
 
 
-class MainWindowViewMixin:
+class MainWindowViewMixin(MainWindowHost):
 
     def _rebuild_stats_cache(self) -> None:
             """현재 자막 리스트 기반으로 통계 캐시를 재계산.
