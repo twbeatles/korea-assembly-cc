@@ -77,6 +77,33 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 self, url, selector, headless
             )
 
+    def _is_auto_clean_newlines_enabled(self) -> bool:
+            checkbox = self.__dict__.get("auto_clean_newlines_check")
+            if checkbox is not None:
+                try:
+                    return bool(checkbox.isChecked())
+                except Exception:
+                    pass
+            return bool(
+                self.__dict__.get(
+                    "auto_clean_newlines_enabled",
+                    Config.AUTO_CLEAN_NEWLINES_DEFAULT,
+                )
+            )
+
+    def _normalize_subtitle_text_for_option(self, text: object) -> str:
+            raw = "" if text is None else str(text)
+            if self._is_auto_clean_newlines_enabled():
+                return utils.flatten_subtitle_text(raw)
+            return utils.clean_text_display(raw)
+
+    def _toggle_auto_clean_newlines_option(self) -> None:
+            enabled = self._is_auto_clean_newlines_enabled()
+            self.auto_clean_newlines_enabled = enabled
+            settings = self.__dict__.get("settings")
+            if settings is not None:
+                settings.setValue("auto_clean_newlines", enabled)
+
     def __init__(self):
             super().__init__()
             self.setWindowTitle(f"{Config.APP_NAME} v{Config.VERSION}")
@@ -91,6 +118,11 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             )
             self.minimize_to_tray = self.settings.value(
                 "minimize_to_tray", False, type=bool
+            )
+            self.auto_clean_newlines_enabled = self.settings.value(
+                "auto_clean_newlines",
+                Config.AUTO_CLEAN_NEWLINES_DEFAULT,
+                type=bool,
             )
 
             # 메시지 큐

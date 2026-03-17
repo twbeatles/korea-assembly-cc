@@ -104,7 +104,7 @@ class MainWindowViewMixin(MainWindowHost):
                         same_second = entry.timestamp.replace(
                             microsecond=0
                         ) == prev_entry.timestamp.replace(microsecond=0)
-                        cursor.insertText(" " if same_second else "\n\n")
+                        cursor.insertText(" " if same_second else "\n")
 
                     if show_ts:
                         # 1분 간격 타임스탬프 로직
@@ -139,7 +139,7 @@ class MainWindowViewMixin(MainWindowHost):
                         same_second = entry.timestamp.replace(
                             microsecond=0
                         ) == prev_entry.timestamp.replace(microsecond=0)
-                        cursor.insertText(" " if same_second else "\n\n")
+                        cursor.insertText(" " if same_second else "\n")
 
                     if show_ts:
                         # 1분 간격 타임스탬프 로직 (증분)
@@ -337,6 +337,9 @@ class MainWindowViewMixin(MainWindowHost):
 
     def _insert_highlighted_text(self, cursor, text):
             """텍스트에서 키워드만 하이라이트 (성능 최적화: 캐시된 패턴/포맷 사용)"""
+            text = self._normalize_subtitle_text_for_option(text)
+            if not text:
+                return
             # 키워드 캐시가 비어있으면 일반 텍스트로 삽입
             if not self._keyword_pattern:
                 cursor.insertText(text, self._normal_fmt)

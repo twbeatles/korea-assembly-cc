@@ -494,6 +494,18 @@ class MainWindowUIMixin(MainWindowHost):
                 "새 자막이 추가될 때 자동으로 맨 아래로 스크롤합니다"
             )
 
+            self.auto_clean_newlines_check = QCheckBox("✨ 자동 줄넘김 정리")
+            self.auto_clean_newlines_check.setChecked(
+                bool(getattr(self, "auto_clean_newlines_enabled", True))
+            )
+            self.auto_clean_newlines_check.setToolTip(
+                "수집 중 줄바꿈과 빈 줄을 자동으로 한 줄로 정리합니다.\n"
+                "자막 내용은 유지하고 개행만 정리합니다."
+            )
+            self.auto_clean_newlines_check.toggled.connect(
+                self._toggle_auto_clean_newlines_option
+            )
+
             self.realtime_save_check = QCheckBox("💾 실시간 저장")
             self.realtime_save_check.setChecked(False)
             self.realtime_save_check.setToolTip(
@@ -506,6 +518,7 @@ class MainWindowUIMixin(MainWindowHost):
                 "Chrome 브라우저 창을 숨기고 백그라운드에서 실행합니다.\n자막 추출 중 다른 작업을 할 수 있습니다."
             )
             options_layout.addWidget(self.auto_scroll_check)
+            options_layout.addWidget(self.auto_clean_newlines_check)
             options_layout.addWidget(self.realtime_save_check)
             options_layout.addWidget(self.headless_check)
             options_layout.addStretch()

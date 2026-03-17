@@ -166,3 +166,18 @@ def test_flush_pending_previews_materializes_preview_only_clone():
     assert flushed.entries[0].text == "preview only line"
     assert flushed.entries[0].source_selector == "#viewSubtit"
     assert flushed.entries[0].source_frame_path == [0]
+
+
+def test_apply_preview_can_preserve_line_breaks_when_auto_cleanup_disabled():
+    state = create_empty_capture_state()
+    now = datetime(2026, 3, 11, 8, 25, 0)
+
+    apply_preview(
+        state,
+        "첫 문장\n\n둘째 문장",
+        now,
+        settings={"auto_clean_newlines": False},
+    )
+
+    assert len(state.entries) == 1
+    assert state.entries[0].text == "첫 문장\n\n둘째 문장"

@@ -132,7 +132,14 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
     def _get_accumulated_text(self):
             with self.subtitle_lock:
-                return "\n".join(s.text for s in self.subtitles)
+                return "\n".join(
+                    text
+                    for text in (
+                        self._normalize_subtitle_text_for_option(s.text)
+                        for s in self.subtitles
+                    )
+                    if text
+                )
 
 
     def _export_stats(self):

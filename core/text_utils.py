@@ -30,6 +30,20 @@ def clean_text_display(text: str) -> str:
     text = Config.RE_ZERO_WIDTH.sub('', text)
     return text.strip()
 
+def flatten_subtitle_text(text: str) -> str:
+    """줄바꿈/빈 줄을 내용 손실 없이 한 줄 텍스트로 평탄화한다."""
+    cleaned = clean_text_display(text)
+    if not cleaned:
+        return ""
+
+    normalized = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    parts = [
+        Config.RE_MULTI_SPACE.sub(" ", line).strip()
+        for line in normalized.split("\n")
+    ]
+    flattened = " ".join(part for part in parts if part)
+    return Config.RE_MULTI_SPACE.sub(" ", flattened).strip()
+
 def normalize_subtitle_text(text: str) -> str:
     """자막 비교용 정규화 (공백 정리)"""
     if not text:

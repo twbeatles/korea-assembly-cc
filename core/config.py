@@ -203,6 +203,9 @@ class Config:
     # 글로벌 compact 히스토리 메모리 상한 (공백 제거 기준 글자 수)
     CONFIRMED_COMPACT_MAX_LEN = 50000
 
+    # 자동 줄넘김 정리 기본값
+    AUTO_CLEAN_NEWLINES_DEFAULT = True
+
     # 세션 병합 중복 제거 시간 버킷(초)
     MERGE_DEDUP_TIME_BUCKET_SECONDS = 30
 

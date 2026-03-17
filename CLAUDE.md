@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.0
+- **버전**: v16.14.1
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -189,34 +189,40 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.0 기준)
+## 6. 최신 변경 요약 (v16.14.1 기준)
 
-### 6.0 v16.14.0 크롬 파이프라인 정리 + SOLID 분할 리팩토링 (2026-03-16)
+### 6.0 v16.14.1 자동 줄넘김 정리 기본 활성화 (2026-03-17)
+- 메인 옵션 영역에 `✨ 자동 줄넘김 정리` 체크박스를 추가하고 기본값을 활성화
+- `QSettings`에 `auto_clean_newlines`를 저장해 재시작 후에도 동일 옵션 유지
+- `core/subtitle_pipeline.py`가 preview/live-row/flush 경로에서 동일 설정을 읽어 정규화 동작을 통일
+- 옵션이 꺼진 경우 개행을 유지하는 회귀 테스트를 추가해 기본 동작과 옵션 해제를 모두 검증
+
+### 6.1 v16.14.0 크롬 파이프라인 정리 + SOLID 분할 리팩토링 (2026-03-16)
 - `ui/main_window.py`를 파사드로 축소하고 capture / pipeline / view / persistence / database / ui mixin으로 분리
 - `core/live_capture.py`와 `core/subtitle_pipeline.py`를 운영 기준 코어로 고정하고 row reconciliation + grace reset + prepared snapshot 경로를 유지
 - `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py`를 추가하고 기존 `core/utils.py`, `database.py`는 호환 shim으로 유지
 - 테스트 호환을 위해 `MainWindow` 직접 호출 메서드 표면과 import 경로를 유지
 - `ui/main_window_types.py`의 `MainWindowHost` 계약, `tests/test_pyright_regression.py`, 확장된 `tests/test_encoding_hygiene.py`로 Pylance/UTF-8 회귀 기준을 고정
 
-### 6.1 수집 정체 완화
+### 6.2 수집 정체 완화
 - **`.smi_word` 창 수집 보강**: `_read_subtitle_text_by_selectors`가 `.smi_word` 목록 전체를 읽어 최근 텍스트 창을 구성
 - **Observer 타겟 우선순위 보강**: `.incont`/`#viewSubtit` 컨테이너를 우선 시도해 DOM 변동에서 수집 연속성 확보
 
-### 6.2 기능 경로 연결 및 안정성 보강
+### 6.3 기능 경로 연결 및 안정성 보강
 - **`xcgcd` 자동 보완 실연결**: `_detect_live_broadcast`를 워커 시작/재연결 경로 모두에 실제 연결
 - **keepalive 경로 활성화**: 동일 raw 유지 구간에서 `("keepalive", raw)` 메시지를 발행해 end_time 주기 갱신
 - **finalize dead path 최소 정리**: 미사용 finalize 타이머 경로 정리, 즉시 확정 + keepalive 보정으로 단일화
 
-### 6.3 저장/종료 안정성 강화
+### 6.4 저장/종료 안정성 강화
 - **원자적 텍스트 저장**: `atomic_write_text` 도입으로 TXT/SRT/VTT/RTF 임시파일 교체 저장
 - **저장 스레드 종료 대기**: non-daemon 저장 스레드 추적 및 `closeEvent`에서 제한시간 대기
 - **로그 경로 정책 통일**: `core/logging_utils.py`가 `Config.LOG_DIR`를 사용하도록 고정
 
-### 6.4 UI/노이즈 품질 보강
+### 6.5 UI/노이즈 품질 보강
 - **LiveBroadcastDialog 종료 경로 단일화**: `done`/`closeEvent`가 `_shutdown_fetch_thread()` 공통 호출
 - **짧은 발화 허용 + 노이즈 필터**: 한글/영문 1~2자 허용, 숫자/기호-only 문자열 차단
 
-### 6.5 v16.13.2 운영 정합성 업데이트 (2026-03-05)
+### 6.6 v16.13.2 운영 정합성 업데이트 (2026-03-05)
 - **종료 lifecycle 통합**: 파일 저장/세션 저장·불러오기/DB task를 공통 백그라운드 레지스트리로 추적하고 종료 시 drain 대기를 단일화
 - **compact 히스토리 상한**: `_confirmed_compact`를 `Config.CONFIRMED_COMPACT_MAX_LEN(50000)`으로 제한해 장시간 세션 메모리 증가를 억제
 - **병합 정책 일원화**: 실시간 병합 기준을 Config 상수(`ENTRY_MERGE_MAX_GAP=5`, `ENTRY_MERGE_MAX_CHARS=300`)로 통합

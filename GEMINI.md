@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.0
+- **버전**: v16.14.1
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ## 2. 기술 스택
@@ -332,7 +332,15 @@ pip install -r requirements-dev.txt
 - **Observer 타겟 보강**: `.incont`/`#viewSubtit` 컨테이너 우선 탐색으로 DOM 구조 변화 대응 강화
 - **긴 텍스트 축약 보강**: Observer 버퍼에 과도한 컨테이너 텍스트가 들어올 때 최근 라인 중심으로 축약
 
-## 9.9 v16.14.0 크롬 파이프라인 정리 + SOLID 분할 리팩토링 (2026-03-16)
+## 9.9 v16.14.1 자동 줄넘김 정리 기본 활성화 (2026-03-17)
+### 🧹 자동 줄넘김 정리 옵션
+- 메인 옵션 영역에 `✨ 자동 줄넘김 정리` 체크박스를 추가하고 기본값을 활성화
+- 설정은 `QSettings`에 저장되며, 수집 중 줄바꿈/빈 줄만 자동 정리하고 자막 내용은 유지
+### 🔁 파이프라인 정규화 옵션화
+- `core/subtitle_pipeline.py`가 `auto_clean_newlines` 설정을 읽어 preview/live-row/flush 경로의 정규화를 통일
+- 옵션이 꺼진 경우 개행을 유지하는 회귀 테스트로 기본 동작과 예외 경로를 함께 검증
+
+## 9.10 v16.14.0 크롬 파이프라인 정리 + SOLID 분할 리팩토링 (2026-03-16)
 ### 🧩 코어 구조 고정
 - `core/live_capture.py`와 `core/subtitle_pipeline.py`를 기준 구조로 유지하고, row reconciliation / grace reset / prepared snapshot 동작을 운영 기본 경로로 고정
 ### 🏗️ MainWindow 책임 분리
@@ -342,7 +350,7 @@ pip install -r requirements-dev.txt
 ### 🛡️ Pylance / UTF-8 회귀 보강
 - `ui/main_window_types.py`의 `MainWindowHost`로 분할 mixin의 공통 `self` 타입을 고정하고, `tests/test_pyright_regression.py`와 확장된 `tests/test_encoding_hygiene.py`로 품질 게이트를 강화
 
-## 9.10 v16.13.2 운영 정합성 업데이트 (2026-03-05)
+## 9.11 v16.13.2 운영 정합성 업데이트 (2026-03-05)
 
 ### 🔒 종료 lifecycle 통합
 - 파일 저장/세션 저장·불러오기/DB task를 공통 백그라운드 레지스트리로 추적

@@ -125,6 +125,20 @@ class _SmiWordCollectDriver:
         return self.rows
 
 
+class _TextElement:
+    def __init__(self, text):
+        self.text = text
+
+
+class _ElementTextDriver:
+    def __init__(self, text):
+        self.text = text
+        self.switch_to = _SwitchToStub()
+
+    def find_element(self, _by, _selector):
+        return _TextElement(self.text)
+
+
 def _build_window(auto_reconnect_enabled: bool, stop_event=None):
     win = MainWindow.__new__(MainWindow)
     win.message_queue = queue.Queue()
@@ -300,4 +314,20 @@ def test_read_subtitle_text_collects_smi_word_window():
 
     assert found is True
     assert matched_selector == "#viewSubtit .smi_word:last-child"
+    assert text == "첫 문장 둘째 문장 셋째 문장"
+
+
+def test_read_subtitle_text_flattens_container_line_breaks():
+    driver = _ElementTextDriver("첫 문장\n\n둘째 문장\n셋째 문장")
+    win = MainWindow.__new__(MainWindow)
+    win._last_subtitle_frame_path = ()
+
+    text, matched_selector, found = MainWindow._read_subtitle_text_by_selectors(
+        win,
+        driver,
+        ["#viewSubtit"],
+    )
+
+    assert found is True
+    assert matched_selector == "#viewSubtit"
     assert text == "첫 문장 둘째 문장 셋째 문장"

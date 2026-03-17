@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from core import utils
@@ -97,9 +97,27 @@ def _resolve_confirmed_compact_max_length(settings: Optional[dict[str, int]] = N
     return int((settings or {}).get("confirmed_compact_max_len", Config.CONFIRMED_COMPACT_MAX_LEN))
 
 
+def _resolve_auto_clean_newlines(settings: Optional[dict[str, Any]] = None) -> bool:
+    return bool(
+        (settings or {}).get(
+            "auto_clean_newlines",
+            Config.AUTO_CLEAN_NEWLINES_DEFAULT,
+        )
+    )
+
+
+def _normalize_runtime_text(
+    text: str,
+    settings: Optional[dict[str, Any]] = None,
+) -> str:
+    if _resolve_auto_clean_newlines(settings):
+        return utils.flatten_subtitle_text(text)
+    return utils.clean_text_display(text)
+
+
 def rebuild_confirmed_history(
     state: CaptureSessionState,
-    settings: Optional[dict[str, int]] = None,
+    settings: Optional[dict[str, Any]] = None,
 ) -> None:
     state.confirmed_compact = build_confirmed_compact_history(
         state.entries,
@@ -110,7 +128,7 @@ def rebuild_confirmed_history(
 
 def soft_resync_history(
     state: CaptureSessionState,
-    settings: Optional[dict[str, int]] = None,
+    settings: Optional[dict[str, Any]] = None,
 ) -> None:
     recent_entries = state.entries[-RECENT_RESYNC_ENTRIES:]
     state.confirmed_compact = build_confirmed_compact_history(
@@ -148,8 +166,9 @@ def find_compact_suffix_prefix_overlap(
 def extract_incremental_text_from_history(
     raw_text: str,
     history_compact: str,
+    settings: Optional[dict[str, Any]] = None,
 ) -> IncrementalExtractResult:
-    normalized_raw = utils.clean_text_display(raw_text)
+    normalized_raw = _normalize_runtime_text(raw_text, settings)
     raw_compact = utils.compact_subtitle_text(normalized_raw)
     compact_history = utils.compact_subtitle_text(history_compact)
 
@@ -218,20 +237,28 @@ def extract_incremental_text_with_recent_history(
     raw_text: str,
     history_compact: str,
     recent_history_compact: str,
+    settings: Optional[dict[str, Any]] = None,
 ) -> IncrementalExtractResult:
     recent_history = utils.compact_subtitle_text(recent_history_compact)
     full_history = utils.compact_subtitle_text(history_compact)
 
     if recent_history and recent_history != full_history:
-        recent_result = extract_incremental_text_from_history(raw_text, recent_history)
+        recent_result = extract_incremental_text_from_history(
+            raw_text,
+            recent_history,
+            settings,
+        )
         if recent_result.matched or recent_result.duplicate:
             return recent_result
 
-    return extract_incremental_text_from_history(raw_text, full_history)
+    return extract_incremental_text_from_history(raw_text, full_history, settings)
 
 
-def _sanitize_committed_text(text: str) -> str:
-    normalized_text = utils.clean_text_display(text)
+def _sanitize_committed_text(
+    text: str,
+    settings: Optional[dict[str, Any]] = None,
+) -> str:
+    normalized_text = _normalize_runtime_text(text, settings)
     if not normalized_text:
         return ""
     if not utils.is_meaningful_subtitle_text(normalized_text):
@@ -293,7 +320,7 @@ def _append_or_merge_entry(
     state: CaptureSessionState,
     text: str,
     now: datetime,
-    settings: Optional[dict[str, int]] = None,
+    settings: Optional[dict[str, Any]] = None,
     meta: Optional[PipelineSourceMeta] = None,
 ) -> SubtitleEntry:
     last_entry = state.entries[-1] if state.entries else None
@@ -340,11 +367,11 @@ def apply_preview(
     state: CaptureSessionState,
     raw: str,
     now: datetime,
-    settings: Optional[dict[str, int]] = None,
+    settings: Optional[dict[str, Any]] = None,
     meta: Optional[PipelineSourceMeta] = None,
 ) -> PipelineResult:
     _update_state_metadata(state, now, meta)
-    normalized_raw = utils.clean_text_display(raw)
+    normalized_raw = _normalize_runtime_text(raw, settings)
     preview_changed = state.preview_text != normalized_raw
     state.preview_text = normalized_raw
     state.last_observed_raw = normalized_raw
@@ -353,6 +380,7 @@ def apply_preview(
         normalized_raw,
         state.confirmed_compact,
         build_recent_compact_history(state.entries),
+        settings,
     )
 
     if not extraction.matched and state.confirmed_compact:
@@ -374,12 +402,13 @@ def apply_preview(
             normalized_raw,
             state.confirmed_compact,
             build_recent_compact_history(state.entries),
+            settings,
         )
 
     if extraction.duplicate or not extraction.text:
         return PipelineResult(state, preview_changed, reason=f"preview_{extraction.reason}")
 
-    candidate_text = _sanitize_committed_text(extraction.text)
+    candidate_text = _sanitize_committed_text(extraction.text, settings)
     if not candidate_text:
         return PipelineResult(state, preview_changed, reason="preview_filtered")
 
@@ -403,11 +432,14 @@ def commit_live_row(
     row_text: str,
     preview_text: str,
     now: datetime,
-    settings: Optional[dict[str, int]] = None,
+    settings: Optional[dict[str, Any]] = None,
     meta: Optional[LiveRowCommitMeta] = None,
 ) -> PipelineResult:
     _update_state_metadata(state, now, meta)
-    normalized_preview = utils.clean_text_display(preview_text) or utils.clean_text_display(row_text)
+    normalized_preview = _normalize_runtime_text(
+        preview_text,
+        settings,
+    ) or _normalize_runtime_text(row_text, settings)
     preview_changed = state.preview_text != normalized_preview
     baseline_compact = (
         meta.baseline_compact if meta and meta.baseline_compact is not None else state.confirmed_compact
@@ -421,8 +453,9 @@ def commit_live_row(
         row_text,
         baseline_compact,
         recent_baseline,
+        settings,
     )
-    candidate_text = _sanitize_committed_text(extraction.text)
+    candidate_text = _sanitize_committed_text(extraction.text, settings)
     if not candidate_text:
         return PipelineResult(
             state,
@@ -438,7 +471,7 @@ def commit_live_row(
         entry.update_text(candidate_text)
         entry.end_time = now
         _apply_source_meta(entry, meta)
-        state.last_processed_raw = utils.clean_text_display(row_text)
+        state.last_processed_raw = _normalize_runtime_text(row_text, settings)
         state.last_committed_reset_at = None
         rebuild_confirmed_history(state, settings)
         changed = preview_changed or before_text != entry.text
@@ -464,7 +497,7 @@ def commit_live_row(
             force_new_entry=True,
         ),
     )
-    state.last_processed_raw = utils.clean_text_display(row_text)
+    state.last_processed_raw = _normalize_runtime_text(row_text, settings)
     state.last_committed_reset_at = None
     rebuild_confirmed_history(state, settings)
     return PipelineResult(
@@ -481,7 +514,7 @@ def apply_structured_entry(
     text: str,
     preview_text: str,
     now: datetime,
-    settings: Optional[dict[str, int]] = None,
+    settings: Optional[dict[str, Any]] = None,
     meta: Optional[PipelineSourceMeta] = None,
 ) -> PipelineResult:
     last_entry = state.entries[-1] if state.entries else None
@@ -549,7 +582,7 @@ def apply_keepalive(
 def apply_reset(
     state: CaptureSessionState,
     now: datetime,
-    settings: Optional[dict[str, int]] = None,
+    settings: Optional[dict[str, Any]] = None,
 ) -> PipelineResult:
     del settings
     state.preview_text = ""
@@ -567,7 +600,7 @@ def apply_reset(
 def finalize_session(
     state: CaptureSessionState,
     now: datetime,
-    settings: Optional[dict[str, int]] = None,
+    settings: Optional[dict[str, Any]] = None,
 ) -> PipelineResult:
     del settings
     state.preview_text = ""
@@ -582,10 +615,10 @@ def finalize_session(
 def flush_pending_previews(
     state: CaptureSessionState,
     now: datetime,
-    settings: Optional[dict[str, int]] = None,
+    settings: Optional[dict[str, Any]] = None,
 ) -> CaptureSessionState:
     prepared_state = state.clone()
-    normalized_preview = utils.clean_text_display(prepared_state.preview_text)
+    normalized_preview = _normalize_runtime_text(prepared_state.preview_text, settings)
     if not normalized_preview:
         return prepared_state
     apply_preview(

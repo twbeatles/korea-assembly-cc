@@ -749,8 +749,8 @@ class MainWindowCaptureMixin(MainWindowHost):
                                     selector_candidates,
                                     preferred_frame_path=preferred_frame_path,
                                 )
-                                text = utils.clean_text_display(
-                                    str(probe.get("text", "") or "")
+                                text = self._normalize_subtitle_text_for_option(
+                                    probe.get("text", "") or ""
                                 ).strip()
                                 matched_selector = str(
                                     probe.get("matched_selector", "") or ""
@@ -1166,7 +1166,9 @@ class MainWindowCaptureMixin(MainWindowHost):
                 for row in rows:
                     if not isinstance(row, dict):
                         continue
-                    text = utils.clean_text_display(str(row.get("text", ""))).strip()
+                    text = self._normalize_subtitle_text_for_option(
+                        row.get("text", "")
+                    ).strip()
                     if not utils.compact_subtitle_text(text):
                         continue
                     node_key = str(row.get("nodeKey", "") or "").strip()
@@ -1380,7 +1382,9 @@ class MainWindowCaptureMixin(MainWindowHost):
                     }
                 result = result or {}
                 return {
-                    "text": utils.clean_text_display(str(result.get("text", ""))).strip(),
+                    "text": self._normalize_subtitle_text_for_option(
+                        result.get("text", "")
+                    ).strip(),
                     "matched_selector": str(result.get("matchedSelector", "") or ""),
                     "found": bool(result.get("found", False)),
                     "rows": _normalize_rows(result.get("rows", [])),
@@ -1479,10 +1483,12 @@ class MainWindowCaptureMixin(MainWindowHost):
                     normalized_rows: list[tuple[str, str, str]] = []
                     for row in rows:
                         if isinstance(row, dict):
-                            row_text = utils.clean_text_display(str(row.get("text", ""))).strip()
+                            row_text = self._normalize_subtitle_text_for_option(
+                                row.get("text", "")
+                            )
                             row_id = str(row.get("id", "")).strip()
                         else:
-                            row_text = utils.clean_text_display(str(row)).strip()
+                            row_text = self._normalize_subtitle_text_for_option(row)
                             row_id = ""
                         if not row_text:
                             continue
@@ -1526,7 +1532,7 @@ class MainWindowCaptureMixin(MainWindowHost):
                         continue
                     except Exception:
                         text = ""
-                    return text, sel, True
+                    return self._normalize_subtitle_text_for_option(text), sel, True
                 return "", "", False
 
             # 선호 프레임(Observer가 설치된 프레임)을 우선 확인

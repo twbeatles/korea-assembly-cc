@@ -30,11 +30,12 @@ class MainWindowPipelineMixin(MainWindowHost):
                 self._pending_subtitle_reset_timer = timer
 
 
-    def _current_capture_settings(self) -> dict[str, int]:
+    def _current_capture_settings(self) -> dict[str, int | bool]:
             return {
                 "merge_gap_seconds": int(Config.ENTRY_MERGE_MAX_GAP),
                 "merge_max_chars": int(Config.ENTRY_MERGE_MAX_CHARS),
                 "confirmed_compact_max_len": int(Config.CONFIRMED_COMPACT_MAX_LEN),
+                "auto_clean_newlines": bool(self._is_auto_clean_newlines_enabled()),
             }
 
 
@@ -127,7 +128,7 @@ class MainWindowPipelineMixin(MainWindowHost):
 
             for row in rows:
                 if isinstance(row, ObservedSubtitleRow):
-                    text = utils.clean_text_display(row.text).strip()
+                    text = self._normalize_subtitle_text_for_option(row.text).strip()
                     if not utils.compact_subtitle_text(text):
                         continue
                     observed.append(
@@ -145,8 +146,8 @@ class MainWindowPipelineMixin(MainWindowHost):
                     continue
 
                 node_key = str(row.get("node_key") or row.get("nodeKey") or "").strip()
-                text = utils.clean_text_display(
-                    str(row.get("text", "") or "")
+                text = self._normalize_subtitle_text_for_option(
+                    row.get("text", "")
                 ).strip()
                 if not node_key or not utils.compact_subtitle_text(text):
                     continue
@@ -189,7 +190,9 @@ class MainWindowPipelineMixin(MainWindowHost):
                 for row in self._coerce_observed_rows(probe_result.get("rows", []))
             ]
             return {
-                "raw": utils.clean_text_display(str(probe_result.get("text", "") or "")).strip(),
+                "raw": self._normalize_subtitle_text_for_option(
+                    probe_result.get("text", "")
+                ).strip(),
                 "rows": rows,
                 "selector": str(
                     probe_result.get("matched_selector")
@@ -219,8 +222,8 @@ class MainWindowPipelineMixin(MainWindowHost):
                 payload.get("frame_path") or payload.get("framePath")
             )
             observed_rows = self._coerce_observed_rows(payload.get("rows", []))
-            raw = utils.clean_text_display(
-                str(payload.get("raw") or payload.get("text") or "")
+            raw = self._normalize_subtitle_text_for_option(
+                payload.get("raw") or payload.get("text") or ""
             ).strip()
 
             self._cancel_scheduled_subtitle_reset()
@@ -379,7 +382,7 @@ class MainWindowPipelineMixin(MainWindowHost):
             if raw is None:
                 return None
 
-            normalized = utils.clean_text_display(str(raw)).strip()
+            normalized = self._normalize_subtitle_text_for_option(raw).strip()
             if not normalized:
                 return None
 
@@ -488,7 +491,9 @@ class MainWindowPipelineMixin(MainWindowHost):
                             if prepared:
                                 self._process_raw_text(prepared)
                             elif data:
-                                forced = utils.clean_text_display(str(data)).strip()
+                                forced = self._normalize_subtitle_text_for_option(
+                                    data
+                                ).strip()
                                 if forced:
                                     self._process_raw_text(forced)
                     elif msg_type == "subtitle_reset":

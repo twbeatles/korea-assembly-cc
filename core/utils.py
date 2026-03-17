@@ -7,6 +7,7 @@ from core.text_utils import (
     clean_text,
     clean_text_display,
     compact_subtitle_text,
+    flatten_subtitle_text,
     find_compact_suffix_prefix_overlap,
     find_list_overlap,
     generate_filename,

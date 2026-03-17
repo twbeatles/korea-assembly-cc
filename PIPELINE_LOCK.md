@@ -27,7 +27,9 @@
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.14.0)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.14.1)
+- `core/subtitle_pipeline.py`: `auto_clean_newlines` 런타임 옵션 도입, preview/live-row/flush 정규화 경로 통일
+- `ui/main_window.py`/`ui/main_window_ui.py`: `✨ 자동 줄넘김 정리` 체크박스 추가, 기본 활성화 + `QSettings` 영속화
 - `_extract_new_part`: `find()` → `rfind()` 전환 — suffix 충돌 시 과잉 추출 방지
 - `_prepare_preview_raw`: 전체 리셋 → `_soft_resync()` 소프트 리셋 — 대량 중복 유입 방지
 - `_extraction_worker`: MutationObserver 하이브리드 아키텍처 도입
@@ -63,6 +65,7 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
   -> selector 후보 우선순위 정렬 (.smi_word:last-child 우선)
   -> .smi_word 목록 기반 창(window) 텍스트 조합
   -> 기본 문서 + 중첩 iframe/frame 순회
+  -> auto_clean_newlines 옵션(기본 ON)에 따라 줄바꿈/빈 줄 평탄화
   -> clean/compact 기준 중복 전송 억제
   -> 동일 raw 유지 구간 keepalive 메시지 발행
   -> 자막 영역 클리어 감지 → subtitle_reset (완전 리셋)
