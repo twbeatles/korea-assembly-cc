@@ -11,7 +11,7 @@
 > **v16.13.2(2026-03-05) 정합성 반영**: `_confirmed_compact` 상한(`50000`) 도입, 병합 기준 Config 일원화(`5초/300자`), 세션 병합 dedupe 시간창(30초) 적용, 종료 lifecycle drain 통합이 반영되었습니다.
 > **v16.14.0(2026-03-16) 정합성 반영**: Chrome 확장 기반 `live row ledger + subtitle pipeline`이 `core/live_capture.py`와 `core/subtitle_pipeline.py`로 고정되었고, `framePath::nodeKey` row reconciliation, grace reset, prepared snapshot 저장 경로가 운영 기본값이 되었습니다. `ui/main_window.py`는 파사드로 축소되고 관련 책임은 `ui/main_window_*` 모듈로 분리되었습니다.
 > **v16.14.1(2026-03-17) 정합성 반영**: 자동 줄넘김 정리가 사용자 옵션(`auto_clean_newlines`, 기본 ON)으로 노출되었고, preview/live-row/flush 정규화 경로가 동일 설정을 읽도록 통일되었습니다. 이 변경은 글로벌 히스토리 + suffix 코어 의미론을 바꾸지 않고 입력 정규화 정책만 옵션화합니다.
-> **v16.14.2(2026-03-18) 성능 정합성 반영**: Worker는 observer idle 구간에서 매 200ms full probe를 수행하지 않고 `observer change`, `keepalive`, `1.0초 health probe`, reconnect 시점에만 structured probe를 수행합니다. `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()`, streaming JSON 저장, delta render/tail patch가 추가되었고, `commit_live_row` 1,500회 benchmark는 약 `10.3초 -> 3.8초`로 단축되었습니다.
+> **v16.14.2(2026-03-18) 성능 정합성 반영**: `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()`, streaming JSON 저장, delta render/tail patch가 추가되었고, `commit_live_row` 1,500회 benchmark는 약 `10.3초 -> 3.8초`로 단축되었습니다. 이후 자막 수집 회귀 대응으로 Worker 캡처 루프는 이전 안정 structured probe 경로로 복귀했습니다.
 > 후속 Pylance/인코딩 위생 보강(`ui/main_window_types.py`, `tests/test_pyright_regression.py`, 확장된 `tests/test_encoding_hygiene.py`)은 이 문서가 분석하는 자막 추출 알고리즘 자체를 바꾸지 않습니다.
 
 ---
@@ -19,15 +19,14 @@
 ## 1. 알고리즘 구조 요약
 
 ```text
-Worker(event-driven hybrid)
+Worker(stable hybrid)
   → selector 후보 우선순위 정렬 (.smi_word:last-child 우선)
   → .smi_word 목록 전체 기반 최근 창(window) 텍스트 조합
   → 기본 문서 + iframe/frame 순회
-  → frame path cache + frame별 JS probe bridge 1회 주입
   → Observer 주입 우선, 실패 시 JS 폴링 브리지(180ms)
-  → observer change / keepalive / 1.0초 health probe / reconnect 시만 structured probe
+  → Observer 버퍼 우선 수집, 미수집 시 structured probe fallback
   → compact 기준 중복 전송 억제
-  → Queue(preview: StructuredPreviewPayload)
+  → Queue(preview: dict payload)
   → _prepare_preview_raw (정규화, 게이트, fallback)
   → _process_raw_text (GlobalHistory + Suffix 코어)
   → 후단 정제 (get_word_diff, recent compact tail)

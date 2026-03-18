@@ -70,31 +70,6 @@ class NormalizedCaptureEvent:
 
 
 @dataclass(slots=True)
-class StructuredPreviewPayload:
-    raw: str
-    rows: list[ObservedSubtitleRow]
-    selector: str = ""
-    frame_path: tuple[int, ...] = ()
-
-    def to_legacy_dict(self) -> dict[str, object]:
-        return {
-            "raw": self.raw,
-            "rows": [
-                {
-                    "nodeKey": row.node_key,
-                    "text": row.text,
-                    "speakerColor": row.speaker_color,
-                    "speakerChannel": row.speaker_channel,
-                    "unstableKey": row.unstable_key,
-                }
-                for row in self.rows
-            ],
-            "selector": self.selector,
-            "frame_path": self.frame_path,
-        }
-
-
-@dataclass(slots=True)
 class LiveRowChange:
     key: str
     row: LiveCaptureRow

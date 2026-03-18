@@ -31,7 +31,7 @@
 ┌───────────────────────▼──────────────────────┐
 │         Worker Thread (Background)           │
 │  - Selenium 구동                              │
-│  - event-driven hybrid probe                  │
+│  - MutationObserver + structured probe hybrid │
 │  - keepalive 기반 end_time 연장                │
 │  - 자동 재연결 (지수 백오프)                   │
 │  - stop_event 기반 안전 종료                  │
@@ -52,12 +52,12 @@
 - 스마트 스크롤: 사용자가 스크롤하면 자동 스크롤 일시 중지 및 위치 유지
 
 ### 4.2 자막 처리 흐름
-1. Worker: MutationObserver 우선, observer idle 시 `observer change`/`keepalive`/`1.0초 health probe`에서만 structured probe 수행 후 `preview` 전송
+1. Worker: MutationObserver 버퍼를 우선 수집하고, 미수집 시 structured probe fallback으로 `preview` 전송
 2. Worker: 시작/재연결 시 URL에 `xcgcd`가 없으면 `xcode` 기준 자동 감지를 1회 수행해 보완 URL로 재접속
 3. Worker: 선택자 우선순위(`.smi_word:last-child` 우선) + 기본 문서/iframe 순회로 자막 요소 탐색
 4. Worker: `.smi_word`는 단일 노드 대신 목록 전체를 수집해 최근 창(window) 텍스트로 조합
-5. Worker: frame path cache / active selector cache를 재사용하고, 타겟 미탐색 시 `allow_poll_fallback` 기반 JS 폴링 브리지 활성화
-6. Worker: preview 기본 계약은 `StructuredPreviewPayload`이며 legacy dict 수신도 유지
+5. Worker: 타겟 미탐색 시 `allow_poll_fallback` 기반 JS 폴링 브리지 활성화
+6. Worker: preview 기본 계약은 dict payload 유지
 7. UI: `_prepare_preview_raw`에서 정규화/게이팅/재동기화 처리 (desync 시 `_soft_resync`)
 8. Core: `_process_raw_text`(GlobalHistory + Suffix, `rfind` 기반)로 새 부분 추출
 9. 후단 정제: `get_word_diff` + recent compact tail 체크 + 유의미 텍스트 게이트(짧은 발화 허용/노이즈 차단)
@@ -336,8 +336,7 @@ pip install -r requirements-dev.txt
 
 ## 9.9 v16.14.2 성능 최적화 중심 리팩토링
 ### ⚙️ Worker CPU 절감
-- observer idle 상태에서는 매 200ms full probe를 반복하지 않고 `1.0초 health probe`와 change/keepalive/reconnect 시점에만 structured probe 수행
-- selector refresh(`5초`)와 frame inventory refresh(`10초`)를 분리하고 frame path cache를 재사용
+- 자막 수집 회귀 대응으로 Worker 캡처 루프는 이전 안정 structured probe 경로로 복귀
 ### 🧠 Pipeline / Memory 최적화
 - `confirmed_segments` 증분 갱신으로 append/tail update hot path에서 전체 history rebuild를 피함
 - `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()`, streaming JSON 저장으로 메모리 피크 완화

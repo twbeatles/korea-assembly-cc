@@ -217,21 +217,31 @@ class MainWindowPipelineMixin(MainWindowHost):
     def _build_preview_payload_from_probe(
             self,
             probe_result: dict[str, Any],
-        ) -> StructuredPreviewPayload:
-            return StructuredPreviewPayload(
-                raw=self._normalize_subtitle_text_for_option(
+        ) -> dict[str, Any]:
+            rows = [
+                {
+                    "nodeKey": row.node_key,
+                    "text": row.text,
+                    "speakerColor": row.speaker_color,
+                    "speakerChannel": row.speaker_channel,
+                    "unstableKey": row.unstable_key,
+                }
+                for row in self._coerce_observed_rows(probe_result.get("rows", []))
+            ]
+            return {
+                "raw": self._normalize_subtitle_text_for_option(
                     probe_result.get("text", "")
                 ).strip(),
-                rows=self._coerce_observed_rows(probe_result.get("rows", [])),
-                selector=str(
+                "rows": rows,
+                "selector": str(
                     probe_result.get("matched_selector")
                     or probe_result.get("selector")
                     or ""
                 ),
-                frame_path=self._coerce_frame_path(
+                "frame_path": self._coerce_frame_path(
                     probe_result.get("frame_path") or probe_result.get("framePath")
                 ),
-            )
+            }
 
 
     def _apply_structured_preview_payload(
@@ -239,24 +249,19 @@ class MainWindowPipelineMixin(MainWindowHost):
             payload: object,
             now: datetime | None = None,
         ) -> bool:
-            if isinstance(payload, StructuredPreviewPayload):
-                selector = payload.selector.strip()
-                frame_path = payload.frame_path
-                observed_rows = list(payload.rows)
-                raw = self._normalize_subtitle_text_for_option(payload.raw).strip()
-            elif isinstance(payload, dict):
-                selector = str(
-                    payload.get("selector") or payload.get("matched_selector") or ""
-                ).strip()
-                frame_path = self._coerce_frame_path(
-                    payload.get("frame_path") or payload.get("framePath")
-                )
-                observed_rows = self._coerce_observed_rows(payload.get("rows", []))
-                raw = self._normalize_subtitle_text_for_option(
-                    payload.get("raw") or payload.get("text") or ""
-                ).strip()
-            else:
+            if not isinstance(payload, dict):
                 return False
+
+            selector = str(
+                payload.get("selector") or payload.get("matched_selector") or ""
+            ).strip()
+            frame_path = self._coerce_frame_path(
+                payload.get("frame_path") or payload.get("framePath")
+            )
+            observed_rows = self._coerce_observed_rows(payload.get("rows", []))
+            raw = self._normalize_subtitle_text_for_option(
+                payload.get("raw") or payload.get("text") or ""
+            ).strip()
 
             self._ensure_capture_runtime_state()
             now = now or datetime.now()

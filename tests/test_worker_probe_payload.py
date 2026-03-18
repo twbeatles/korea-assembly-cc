@@ -3,7 +3,6 @@ import threading
 import time
 
 import pytest
-from core.live_capture import StructuredPreviewPayload
 
 mw_mod = pytest.importorskip("ui.main_window")
 MainWindow = mw_mod.MainWindow
@@ -108,17 +107,7 @@ def test_extraction_worker_emits_structured_preview_payload(monkeypatch):
 
     assert len(preview_payloads) == 1
     preview_payload = preview_payloads[0]
-    assert isinstance(preview_payload, StructuredPreviewPayload)
-    assert preview_payload.raw == "첫 문장 보정"
-    assert preview_payload.selector == "#viewSubtit .smi_word"
-    assert preview_payload.rows[0].node_key == "row_1"
-
-    legacy_payload = preview_payload.to_legacy_dict()
-    assert legacy_payload["raw"] == "첫 문장 보정"
-    assert legacy_payload["selector"] == "#viewSubtit .smi_word"
-    legacy_rows = legacy_payload["rows"]
-    assert isinstance(legacy_rows, list)
-    assert legacy_rows
-    legacy_row = legacy_rows[0]
-    assert isinstance(legacy_row, dict)
-    assert legacy_row["nodeKey"] == "row_1"
+    assert isinstance(preview_payload, dict)
+    assert preview_payload["raw"] == "첫 문장 보정"
+    assert preview_payload["selector"] == "#viewSubtit .smi_word"
+    assert preview_payload["rows"][0]["nodeKey"] == "row_1"

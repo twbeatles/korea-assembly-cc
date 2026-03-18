@@ -31,10 +31,10 @@
 
 ## ✨ v16.14.2 성능 최적화 중심 리팩토링 (2026-03-18)
 
-### ⚙️ 수집 CPU 사용량 절감
-- `MutationObserver`가 살아 있을 때는 매 200ms full probe를 반복하지 않고, `observer change`, `keepalive`, `1.0초 health probe` 시점에만 structured probe를 수행합니다.
-- selector 재탐색은 `5.0초`, frame inventory refresh는 `10.0초` cadence로 제한하고, frame path 캐시를 재사용합니다.
-- 큰 JS probe 본문은 프레임별 1회 bridge 주입 후 짧은 호출만 반복해 브라우저 쪽 CPU/직렬화 비용을 낮췄습니다.
+### ⚙️ 수집 경로 안정화
+- 자막 수집 경로는 회귀 이슈 대응을 위해 이전 안정 structured probe 루프로 복귀했습니다.
+- `MutationObserver` 우선 + structured probe fallback, `.smi_word` 창 수집, iframe/frame 순회, keepalive 동작은 유지합니다.
+- 수집 외 파이프라인/메모리/UI 최적화는 그대로 유지합니다.
 
 ### 🧠 파이프라인 / 메모리 최적화
 - `core/subtitle_pipeline.py`는 `confirmed_segments` 기반 증분 갱신으로 hot path append/tail update에서 전체 history rebuild를 피합니다.
@@ -467,8 +467,7 @@ dist/국회의사중계자막추출기 v16.14.2.exe
 ## 📝 변경 이력
 
 ### v16.14.2 (2026-03-18)
-- Worker를 event-driven hybrid로 정리해 observer idle 상태에서 full probe를 health cadence(`1.0초`)로 제한
-- frame path / selector 캐시, JS bridge 재사용, typed preview payload(`StructuredPreviewPayload`) 기본 계약 도입
+- 자막 수집 경로는 회귀 대응을 위해 이전 안정 structured probe 루프로 복귀
 - `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()`으로 저장/백업 메모리 증폭 완화
 - `atomic_write_json_stream()` 기반 스트리밍 JSON 저장과 `SubtitleEntry` 직접 DB 저장 경로 추가
 - `capture_state.entries` 단일화, tail patch render, queue drain time budget으로 UI 갱신 비용 절감

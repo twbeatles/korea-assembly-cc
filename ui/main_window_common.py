@@ -78,7 +78,6 @@ from core.live_capture import (
     normalize_capture_event,
     reconcile_live_capture,
     set_live_row_baseline,
-    StructuredPreviewPayload,
 )
 from core.logging_utils import logger
 from core.models import CaptureSessionState, ObservedSubtitleRow, SubtitleEntry
