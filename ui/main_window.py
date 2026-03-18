@@ -107,6 +107,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
     def __init__(self):
             super().__init__()
             self.setWindowTitle(f"{Config.APP_NAME} v{Config.VERSION}")
+            self.setWindowIcon(QIcon(Config.get_resource_path("assets/icon.ico")))
             self.setMinimumSize(1100, 750)
             self.resize(1200, 800)
 

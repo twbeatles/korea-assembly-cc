@@ -31,6 +31,16 @@ class Config:
     APP_NAME = "국회 의사중계 자막 추출기"
     APP_BASE_DIR = _resolve_app_base_dir()
     
+    @staticmethod
+    def get_resource_path(relative_path: str) -> str:
+        """앱 내부 리소스 절대 경로를 반환한다 (PyInstaller 임시폴더 대응)"""
+        import sys
+        import os
+        base_path = getattr(sys, '_MEIPASS', None)
+        if base_path:
+            return os.path.join(base_path, relative_path)
+        return os.path.join(Config.APP_BASE_DIR, relative_path)
+    
     # 타이밍 상수 (초)
     SUBTITLE_FINALIZE_DELAY = 3.0      # 자막 확정까지 대기 시간 (앵커 기반 알고리즘)
     ANCHOR_SUFFIX_LENGTH = 80          # 앵커로 저장할 텍스트 길이 (compact 기준)

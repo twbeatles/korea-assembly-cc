@@ -90,6 +90,10 @@ HIDDEN_IMPORTS = [
     'threading',
     'json',
     'logging',
+    'queue',
+    'threading',
+    'json',
+    'logging',
 ]
 
 a = Analysis(
@@ -97,7 +101,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     # Config.VERSION이 README 첫 줄에서 버전을 읽으므로 빌드 산출물에도 함께 포함한다.
-    datas=[('README.md', '.')],
+    datas=[('README.md', '.'), ('assets/icon.ico', 'assets')],
     hiddenimports=HIDDEN_IMPORTS + ['sqlite3'],
     hookspath=[],
     hooksconfig={},
@@ -141,5 +145,5 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     # 아이콘 설정 (있을 경우)
-    # icon='icon.ico',
+    icon='assets/icon.ico',
 )
