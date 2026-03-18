@@ -4,13 +4,16 @@ SQLite 데이터베이스 관리 모듈 (#26)
 국회 의사중계 자막 추출기의 세션 데이터를 체계적으로 관리합니다.
 """
 
+from collections.abc import Iterable
 import logging
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from core.config import Config
+from core.models import SubtitleEntry
 
 logger = logging.getLogger("SubtitleExtractor")
 
@@ -20,6 +23,8 @@ class DatabaseManager:
     
     DEFAULT_DB_PATH = "subtitle_history.db"
     MAX_QUERY_LIMIT = 500
+    STALE_CONNECTION_CLEANUP_INTERVAL = 2.0
+    STALE_CONNECTION_CLEANUP_EVERY = 32
     
     def __init__(self, db_path: str | None = None):
         """데이터베이스 매니저 초기화
@@ -35,6 +40,8 @@ class DatabaseManager:
             
         self.lock = threading.RLock()
         self._thread_connections: dict[int, sqlite3.Connection] = {}
+        self._stale_cleanup_calls = 0
+        self._last_stale_cleanup_at = 0.0
         self._init_db()
 
     def close_all(self) -> None:
@@ -93,10 +100,20 @@ class DatabaseManager:
             return 0
         return max(0, duration)
 
-    def _cleanup_stale_connections_locked(self) -> None:
+    def _cleanup_stale_connections_locked(self, force: bool = False) -> None:
         """종료된 스레드의 캐시 연결을 정리한다. (lock 내부 전용)"""
         if not self._thread_connections:
             return
+        self._stale_cleanup_calls += 1
+        now = time.monotonic()
+        if (
+            not force
+            and
+            self._stale_cleanup_calls % self.STALE_CONNECTION_CLEANUP_EVERY != 0
+            and now - self._last_stale_cleanup_at < self.STALE_CONNECTION_CLEANUP_INTERVAL
+        ):
+            return
+        self._last_stale_cleanup_at = now
         alive_ids = {t.ident for t in threading.enumerate() if t.ident is not None}
         stale_ids = [tid for tid in self._thread_connections if tid not in alive_ids]
         for thread_id in stale_ids:
@@ -109,12 +126,53 @@ class DatabaseManager:
                 logger.debug(f"stale DB 연결 종료 오류 (Thread {thread_id}): {e}")
         if stale_ids:
             logger.debug("stale DB 연결 정리: %s개", len(stale_ids))
+
+    @staticmethod
+    def _iter_subtitle_rows(
+        session_id: int,
+        subtitles: object,
+    ) -> Iterable[tuple[int, str, object, object, object, int]]:
+        if not isinstance(subtitles, Iterable) or isinstance(subtitles, (str, bytes, dict)):
+            return ()
+
+        def _generator() -> Iterable[tuple[int, str, object, object, object, int]]:
+            sequence = 0
+            for item in subtitles:
+                if isinstance(item, SubtitleEntry):
+                    yield (
+                        session_id,
+                        item.text,
+                        item.timestamp.isoformat(),
+                        item.start_time.isoformat() if item.start_time else None,
+                        item.end_time.isoformat() if item.end_time else None,
+                        sequence,
+                    )
+                    sequence += 1
+                elif isinstance(item, dict):
+                    yield (
+                        session_id,
+                        str(item.get("text", "")),
+                        item.get("timestamp"),
+                        item.get("start_time"),
+                        item.get("end_time"),
+                        sequence,
+                    )
+                    sequence += 1
+
+        return _generator()
     
     def _get_connection(self) -> sqlite3.Connection:
         """스레드 안전한 연결 생성 및 캐싱"""
         thread_id = threading.get_ident()
         with self.lock:
-            self._cleanup_stale_connections_locked()
+            force_cleanup = thread_id not in self._thread_connections
+            if not force_cleanup and len(self._thread_connections) > 1:
+                alive_ids = {t.ident for t in threading.enumerate() if t.ident is not None}
+                force_cleanup = any(
+                    cached_thread_id not in alive_ids
+                    for cached_thread_id in self._thread_connections
+                )
+            self._cleanup_stale_connections_locked(force=force_cleanup)
             if thread_id not in self._thread_connections:
                 try:
                     conn = sqlite3.connect(
@@ -253,11 +311,24 @@ class DatabaseManager:
                 cursor = conn.cursor()
                 
                 subtitles_raw = session_data.get("subtitles", [])
-                if isinstance(subtitles_raw, (list, tuple)):
-                    subtitles = [s for s in subtitles_raw if isinstance(s, dict)]
-                else:
-                    subtitles = []
-                total_chars = sum(len(s.get("text", "")) for s in subtitles)
+                subtitles = (
+                    subtitles_raw
+                    if isinstance(subtitles_raw, Iterable)
+                    and not isinstance(subtitles_raw, (str, bytes, dict))
+                    else ()
+                )
+                if not isinstance(subtitles, (list, tuple)):
+                    subtitles = tuple(subtitles)
+
+                total_subtitles = 0
+                total_chars = 0
+                for item in subtitles:
+                    if isinstance(item, SubtitleEntry):
+                        total_subtitles += 1
+                        total_chars += item.char_count
+                    elif isinstance(item, dict):
+                        total_subtitles += 1
+                        total_chars += len(str(item.get("text", "")))
                 duration_seconds = self._sanitize_duration(
                     session_data.get("duration_seconds", 0)
                 )
@@ -271,7 +342,7 @@ class DatabaseManager:
                 """, (
                     session_data.get("url", ""),
                     session_data.get("committee_name", ""),
-                    len(subtitles),
+                    total_subtitles,
                     total_chars,
                     duration_seconds,
                     session_data.get("version", ""),
@@ -284,27 +355,15 @@ class DatabaseManager:
                 
                 # 자막 대량 삽입 (executemany 사용)
                 # 딕셔너리 리스트를 튜플 리스트로 변환
-                subtitle_data = [
-                    (
-                        session_id,
-                        s.get("text", ""),
-                        s.get("timestamp"),
-                        s.get("start_time"),
-                        s.get("end_time"),
-                        i
-                    )
-                    for i, s in enumerate(subtitles)
-                ]
-                
-                if subtitle_data:
+                if total_subtitles:
                     cursor.executemany("""
                         INSERT INTO subtitles 
                         (session_id, text, timestamp, start_time, end_time, sequence)
                         VALUES (?, ?, ?, ?, ?, ?)
-                    """, subtitle_data)
+                    """, self._iter_subtitle_rows(session_id, subtitles))
                 
                 conn.commit()
-                logger.info(f"세션 저장 완료: ID={session_id}, 자막={len(subtitles)}개")
+                logger.info(f"세션 저장 완료: ID={session_id}, 자막={total_subtitles}개")
                 return session_id
                 
             except Exception as e:

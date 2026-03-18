@@ -65,6 +65,83 @@ def _create_entry_id() -> str:
     return f"subtitle_{uuid4().hex}"
 
 
+def _apply_confirmed_segments(
+    state: CaptureSessionState,
+    segments: list[str],
+    settings: Optional[dict[str, Any]] = None,
+) -> None:
+    max_length = _resolve_confirmed_compact_max_length(settings)
+    normalized_segments = [segment for segment in segments if segment]
+    if max_length > 0 and normalized_segments:
+        total_length = sum(len(segment) for segment in normalized_segments)
+        trim = total_length - max_length
+        while trim > 0 and normalized_segments:
+            first = normalized_segments[0]
+            if len(first) <= trim:
+                trim -= len(first)
+                normalized_segments.pop(0)
+                continue
+            normalized_segments[0] = first[trim:]
+            trim = 0
+
+    state.confirmed_segments = normalized_segments
+    state.confirmed_compact = "".join(normalized_segments)
+    state.trailing_suffix = state.confirmed_compact[-SUFFIX_LENGTH:]
+
+
+def _append_confirmed_entry(
+    state: CaptureSessionState,
+    entry: SubtitleEntry,
+    settings: Optional[dict[str, Any]] = None,
+) -> None:
+    compact = entry.compact_text
+    if not compact:
+        return
+    segments = list(state.confirmed_segments)
+    segments.append(compact)
+    _apply_confirmed_segments(state, segments, settings)
+
+
+def _replace_tail_confirmed_entry(
+    state: CaptureSessionState,
+    previous_compact: str,
+    entry: SubtitleEntry,
+    settings: Optional[dict[str, Any]] = None,
+) -> bool:
+    if not previous_compact or not state.confirmed_segments:
+        return False
+    if state.confirmed_segments[-1] != previous_compact:
+        return False
+
+    segments = list(state.confirmed_segments)
+    next_compact = entry.compact_text
+    if next_compact:
+        segments[-1] = next_compact
+    else:
+        segments.pop()
+    _apply_confirmed_segments(state, segments, settings)
+    return True
+
+
+def _confirmed_history_without_last_entry(
+    state: CaptureSessionState,
+    settings: Optional[dict[str, Any]] = None,
+) -> str:
+    if not state.entries:
+        return ""
+
+    last_compact = state.entries[-1].compact_text
+    if state.confirmed_segments and last_compact and state.confirmed_segments[-1] == last_compact:
+        compact = "".join(state.confirmed_segments[:-1])
+        max_length = _resolve_confirmed_compact_max_length(settings)
+        return compact[-max_length:] if max_length > 0 else compact
+
+    return build_confirmed_compact_history(
+        state.entries[:-1],
+        _resolve_confirmed_compact_max_length(settings),
+    )
+
+
 def build_confirmed_compact_history(
     entries: list[SubtitleEntry],
     max_length: int = Config.CONFIRMED_COMPACT_MAX_LEN,
@@ -75,7 +152,7 @@ def build_confirmed_compact_history(
     parts: list[str] = []
     current_length = 0
     for entry in reversed(entries):
-        compact = utils.compact_subtitle_text(entry.text)
+        compact = entry.compact_text
         if not compact:
             continue
         parts.insert(0, compact)
@@ -119,11 +196,18 @@ def rebuild_confirmed_history(
     state: CaptureSessionState,
     settings: Optional[dict[str, Any]] = None,
 ) -> None:
-    state.confirmed_compact = build_confirmed_compact_history(
-        state.entries,
-        _resolve_confirmed_compact_max_length(settings),
-    )
-    state.trailing_suffix = state.confirmed_compact[-SUFFIX_LENGTH:]
+    max_length = _resolve_confirmed_compact_max_length(settings)
+    segments: list[str] = []
+    current_length = 0
+    for entry in reversed(state.entries):
+        compact = entry.compact_text
+        if not compact:
+            continue
+        segments.insert(0, compact)
+        current_length += len(compact)
+        if max_length > 0 and current_length >= max_length:
+            break
+    _apply_confirmed_segments(state, segments, settings)
 
 
 def soft_resync_history(
@@ -131,20 +215,16 @@ def soft_resync_history(
     settings: Optional[dict[str, Any]] = None,
 ) -> None:
     recent_entries = state.entries[-RECENT_RESYNC_ENTRIES:]
-    state.confirmed_compact = build_confirmed_compact_history(
-        recent_entries,
-        _resolve_confirmed_compact_max_length(settings),
-    )
-    state.trailing_suffix = state.confirmed_compact[-SUFFIX_LENGTH:]
+    segments = [entry.compact_text for entry in recent_entries if entry.compact_text]
+    _apply_confirmed_segments(state, segments, settings)
     state.preview_desync_count = 0
     state.preview_ambiguous_skip_count = 0
 
 
 def build_recent_compact_history(entries: list[SubtitleEntry]) -> str:
-    return build_confirmed_compact_history(
-        entries[-RECENT_HISTORY_ENTRIES:],
-        RECENT_HISTORY_COMPACT_LENGTH,
-    )
+    recent_entries = entries[-RECENT_HISTORY_ENTRIES:]
+    parts = [entry.compact_text for entry in recent_entries if entry.compact_text]
+    return "".join(parts)[-RECENT_HISTORY_COMPACT_LENGTH:]
 
 
 def _slice_from_compact_index(text: str, compact_index: int) -> str:
@@ -322,7 +402,7 @@ def _append_or_merge_entry(
     now: datetime,
     settings: Optional[dict[str, Any]] = None,
     meta: Optional[PipelineSourceMeta] = None,
-) -> SubtitleEntry:
+) -> tuple[SubtitleEntry, bool, str]:
     last_entry = state.entries[-1] if state.entries else None
     merge_gap_seconds = _resolve_merge_gap_seconds(settings)
     merge_max_chars = _resolve_merge_max_chars(settings)
@@ -346,10 +426,11 @@ def _append_or_merge_entry(
             and len(last_entry.text) + len(text) < merge_max_chars
         )
         if can_merge:
+            previous_compact = last_entry.compact_text
             last_entry.update_text(_join_stream_text(last_entry.text, text))
             last_entry.end_time = now
             _apply_source_meta(last_entry, meta)
-            return last_entry
+            return last_entry, False, previous_compact
 
     entry = SubtitleEntry(
         text,
@@ -360,7 +441,7 @@ def _append_or_merge_entry(
     entry.end_time = now
     _apply_source_meta(entry, meta)
     state.entries.append(entry)
-    return entry
+    return entry, True, ""
 
 
 def apply_preview(
@@ -412,17 +493,26 @@ def apply_preview(
     if not candidate_text:
         return PipelineResult(state, preview_changed, reason="preview_filtered")
 
-    appended_entry = _append_or_merge_entry(state, candidate_text, now, settings, meta)
+    entry, appended_new, previous_compact = _append_or_merge_entry(
+        state,
+        candidate_text,
+        now,
+        settings,
+        meta,
+    )
     state.last_processed_raw = normalized_raw
     state.last_committed_reset_at = None
     state.preview_desync_count = 0
     state.preview_ambiguous_skip_count = 0
-    rebuild_confirmed_history(state, settings)
+    if appended_new:
+        _append_confirmed_entry(state, entry, settings)
+    elif not _replace_tail_confirmed_entry(state, previous_compact, entry, settings):
+        rebuild_confirmed_history(state, settings)
     return PipelineResult(
         state,
         True,
-        appended_entry=appended_entry,
-        updated_entry=appended_entry,
+        appended_entry=entry if appended_new else None,
+        updated_entry=entry,
         reason=f"preview_{extraction.reason}",
     )
 
@@ -468,12 +558,20 @@ def commit_live_row(
         if not entry:
             return PipelineResult(state, preview_changed, reason="row_entry_missing")
         before_text = entry.text
+        previous_compact = entry.compact_text
         entry.update_text(candidate_text)
         entry.end_time = now
         _apply_source_meta(entry, meta)
         state.last_processed_raw = _normalize_runtime_text(row_text, settings)
         state.last_committed_reset_at = None
-        rebuild_confirmed_history(state, settings)
+        if (
+            state.entries
+            and entry is state.entries[-1]
+            and _replace_tail_confirmed_entry(state, previous_compact, entry, settings)
+        ):
+            pass
+        else:
+            rebuild_confirmed_history(state, settings)
         changed = preview_changed or before_text != entry.text
         return PipelineResult(
             state,
@@ -482,7 +580,7 @@ def commit_live_row(
             reason="row_update",
         )
 
-    appended_entry = _append_or_merge_entry(
+    entry, appended_new, previous_compact = _append_or_merge_entry(
         state,
         candidate_text,
         now,
@@ -499,12 +597,15 @@ def commit_live_row(
     )
     state.last_processed_raw = _normalize_runtime_text(row_text, settings)
     state.last_committed_reset_at = None
-    rebuild_confirmed_history(state, settings)
+    if appended_new:
+        _append_confirmed_entry(state, entry, settings)
+    elif not _replace_tail_confirmed_entry(state, previous_compact, entry, settings):
+        rebuild_confirmed_history(state, settings)
     return PipelineResult(
         state,
         True,
-        appended_entry=appended_entry,
-        updated_entry=appended_entry,
+        appended_entry=entry if appended_new else None,
+        updated_entry=entry,
         reason="row_append",
     )
 
@@ -525,7 +626,7 @@ def apply_structured_entry(
         and last_entry.source_node_key == meta.source_node_key
         and not meta.force_new_entry
     ):
-        baseline_compact = build_confirmed_compact_history(state.entries[:-1])
+        baseline_compact = _confirmed_history_without_last_entry(state, settings)
         return commit_live_row(
             state,
             text,
@@ -571,7 +672,7 @@ def apply_keepalive(
         return PipelineResult(state, False, reason="no_entries")
 
     raw_compact = utils.compact_subtitle_text(raw)
-    if raw_compact and raw_compact != utils.compact_subtitle_text(last_entry.text):
+    if raw_compact and raw_compact != last_entry.compact_text:
         return PipelineResult(state, False, reason="raw_mismatch")
 
     last_entry.end_time = now
@@ -584,10 +685,8 @@ def apply_reset(
     now: datetime,
     settings: Optional[dict[str, Any]] = None,
 ) -> PipelineResult:
-    del settings
     state.preview_text = ""
-    state.confirmed_compact = ""
-    state.trailing_suffix = ""
+    _apply_confirmed_segments(state, [], settings)
     state.last_observed_raw = ""
     state.last_processed_raw = ""
     state.preview_desync_count = 0
@@ -617,7 +716,7 @@ def flush_pending_previews(
     now: datetime,
     settings: Optional[dict[str, Any]] = None,
 ) -> CaptureSessionState:
-    prepared_state = state.clone()
+    prepared_state = state.snapshot_clone(clone_last_entry=bool(state.preview_text))
     normalized_preview = _normalize_runtime_text(prepared_state.preview_text, settings)
     if not normalized_preview:
         return prepared_state

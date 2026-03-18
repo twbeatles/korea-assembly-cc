@@ -13,7 +13,7 @@ from pathlib import Path
 block_cipher = None
 
 
-def _load_version_from_readme(default: str = "16.14.1") -> str:
+def _load_version_from_readme(default: str = "16.14.2") -> str:
     spec_path = Path(globals().get("__file__", "subtitle_extractor.spec")).resolve()
     readme_path = spec_path.parent / "README.md"
     try:
@@ -54,19 +54,25 @@ EXCLUDES = [
 
 # 숨겨진 import 명시
 HIDDEN_IMPORTS = [
+    'database',
     'docx',
     'docx.shared',
     'docx.enum.text',
     'core.database_manager',
     'core.file_io',
     'core.live_capture',
+    'core.logging_utils',
+    'core.models',
     'core.reflow',
     'core.subtitle_pipeline',
     'core.text_utils',
+    'core.utils',
     'selenium.webdriver.chrome.service',
     'selenium.webdriver.common.by',
     'selenium.webdriver.support.ui',
     'selenium.webdriver.support.expected_conditions',
+    'ui.dialogs',
+    'ui.main_window',
     'ui.main_window_capture',
     'ui.main_window_common',
     'ui.main_window_database',
@@ -75,6 +81,8 @@ HIDDEN_IMPORTS = [
     'ui.main_window_types',
     'ui.main_window_ui',
     'ui.main_window_view',
+    'ui.themes',
+    'ui.widgets',
     'win32com',
     'win32com.client',
     'pythoncom',

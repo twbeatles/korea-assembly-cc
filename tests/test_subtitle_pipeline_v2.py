@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta
 
+import pytest
+
+import core.subtitle_pipeline as pipeline_mod
 from core.subtitle_pipeline import (
     LiveRowCommitMeta,
     apply_keepalive,
@@ -181,3 +184,91 @@ def test_apply_preview_can_preserve_line_breaks_when_auto_cleanup_disabled():
 
     assert len(state.entries) == 1
     assert state.entries[0].text == "첫 문장\n\n둘째 문장"
+
+
+def test_commit_live_row_hot_path_skips_full_rebuild_for_append_and_tail_update(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = create_empty_capture_state()
+    now = datetime(2026, 3, 11, 8, 30, 0)
+
+    commit_live_row(
+        state,
+        "위원장님 질의 순서를 진행하겠습니다",
+        "위원장님 질의 순서를 진행하겠습니다",
+        now,
+        meta=LiveRowCommitMeta(
+            source_node_key="top::row_1",
+            baseline_compact=state.confirmed_compact,
+        ),
+    )
+
+    row_2_baseline = state.confirmed_compact
+
+    def fail_rebuild(*_args, **_kwargs):
+        raise AssertionError("hot path should not rebuild confirmed history")
+
+    monkeypatch.setattr(pipeline_mod, "rebuild_confirmed_history", fail_rebuild)
+
+    appended = commit_live_row(
+        state,
+        "위원장님 질의 순서를 진행하겠습니다 다음 안건을 상정합니다",
+        "위원장님 질의 순서를 진행하겠습니다 다음 안건을 상정합니다",
+        now + timedelta(seconds=1),
+        meta=LiveRowCommitMeta(
+            source_node_key="top::row_2",
+            baseline_compact=row_2_baseline,
+        ),
+    )
+    assert appended.appended_entry is not None
+
+    updated = commit_live_row(
+        state,
+        "위원장님 질의 순서를 진행하겠습니다 다음 안건을 상정하고 토론을 시작합니다",
+        "위원장님 질의 순서를 진행하겠습니다 다음 안건을 상정하고 토론을 시작합니다",
+        now + timedelta(seconds=2),
+        meta=LiveRowCommitMeta(
+            source_node_key="top::row_2",
+            source_entry_id=appended.appended_entry.entry_id or "",
+            baseline_compact=row_2_baseline,
+        ),
+    )
+
+    assert updated.changed is True
+    assert len(state.entries) == 2
+    assert state.entries[-1].text == "다음 안건을 상정하고 토론을 시작합니다"
+
+
+def test_snapshot_clone_reuses_entries_until_tail_clone_is_needed():
+    state = create_empty_capture_state()
+    now = datetime(2026, 3, 11, 8, 35, 0)
+
+    commit_live_row(
+        state,
+        "첫 번째 확정 문장",
+        "첫 번째 확정 문장",
+        now,
+        meta=LiveRowCommitMeta(
+            source_node_key="top::row_1",
+            baseline_compact=state.confirmed_compact,
+        ),
+    )
+    commit_live_row(
+        state,
+        "첫 번째 확정 문장 두 번째 확정 문장",
+        "첫 번째 확정 문장 두 번째 확정 문장",
+        now + timedelta(seconds=1),
+        meta=LiveRowCommitMeta(
+            source_node_key="top::row_2",
+            baseline_compact=state.confirmed_compact,
+        ),
+    )
+
+    shallow_snapshot = state.snapshot_clone(clone_last_entry=False)
+    assert shallow_snapshot.entries[0] is state.entries[0]
+    assert shallow_snapshot.entries[1] is state.entries[1]
+
+    tail_snapshot = state.snapshot_clone(clone_last_entry=True)
+    assert tail_snapshot.entries[0] is state.entries[0]
+    assert tail_snapshot.entries[1] is not state.entries[1]
+    assert tail_snapshot.entries[1].text == state.entries[1].text

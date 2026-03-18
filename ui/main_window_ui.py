@@ -1006,8 +1006,11 @@ class MainWindowUIMixin(MainWindowHost):
             icon = icons.get(status_type, "")
             color = colors.get(status_type, "#eaeaea")
             rendered = f"{icon} {text}"[:100]
-            self.status_label.setText(rendered)
-            self.status_label.setStyleSheet(f"color: {color};")
+            current_style = f"color: {color};"
+            if self.status_label.text() != rendered:
+                self.status_label.setText(rendered)
+            if self.status_label.styleSheet() != current_style:
+                self.status_label.setStyleSheet(current_style)
             self._last_status_message = rendered
 
 
@@ -1016,7 +1019,9 @@ class MainWindowUIMixin(MainWindowHost):
             with self.subtitle_lock:
                 count = len(self.subtitles)
             chars = self._cached_total_chars
-            self.count_label.setText(f"📝 {count}문장 | {chars:,}자")
+            rendered = f"📝 {count}문장 | {chars:,}자"
+            if self.count_label.text() != rendered:
+                self.count_label.setText(rendered)
 
 
     def _update_connection_status(self, status: str, latency: int | None = None):

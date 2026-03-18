@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QTextEdit,
 )
 
-from core.live_capture import LiveCaptureLedger
+from core.live_capture import LiveCaptureLedger, StructuredPreviewPayload
 from core.models import CaptureSessionState, SubtitleEntry
 from core.subtitle_processor import SubtitleProcessor
 from ui.widgets import CollapsibleGroupBox, ToastWidget
@@ -67,6 +67,7 @@ if TYPE_CHECKING:
         _last_rendered_last_text: str
         _last_render_offset: int
         _last_render_show_ts: bool | None
+        _last_render_chunk_specs: list[tuple[str, str, str]]
         active_toasts: list[ToastWidget]
         realtime_file: TextIO | None
         capture_state: CaptureSessionState
@@ -171,7 +172,7 @@ if TYPE_CHECKING:
         def _build_prepared_entries_snapshot(self) -> list[SubtitleEntry]: ...
         def _build_preview_payload_from_probe(
             self, probe_result: dict[str, Any]
-        ) -> dict[str, Any]: ...
+        ) -> StructuredPreviewPayload: ...
         def _check_keyword_alert(self, text: str) -> None: ...
         def _clean_newlines(self) -> None: ...
         def _clear_preview(self) -> None: ...

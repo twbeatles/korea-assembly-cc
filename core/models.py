@@ -19,6 +19,23 @@ def _clone_frame_path(frame_path: Optional[list[int]]) -> Optional[list[int]]:
 class SubtitleEntry:
     """Subtitle item with cached counts and optional runtime source metadata."""
 
+    __slots__ = (
+        "entry_id",
+        "text",
+        "timestamp",
+        "start_time",
+        "end_time",
+        "source_selector",
+        "source_frame_path",
+        "source_node_key",
+        "speaker_color",
+        "speaker_channel",
+        "speaker_changed",
+        "_char_count",
+        "_word_count",
+        "_compact_text",
+    )
+
     def __init__(
         self,
         text: str,
@@ -45,6 +62,7 @@ class SubtitleEntry:
         self.speaker_changed: bool = speaker_changed
         self._char_count: int = len(text)
         self._word_count: int = len(text.split())
+        self._compact_text: Optional[str] = None
 
     @property
     def char_count(self) -> int:
@@ -54,10 +72,19 @@ class SubtitleEntry:
     def word_count(self) -> int:
         return self._word_count
 
+    @property
+    def compact_text(self) -> str:
+        if self._compact_text is None:
+            from core.text_utils import compact_subtitle_text
+
+            self._compact_text = compact_subtitle_text(self.text)
+        return self._compact_text
+
     def update_text(self, new_text: str) -> None:
         self.text = new_text
         self._char_count = len(new_text)
         self._word_count = len(new_text.split())
+        self._compact_text = None
 
     def append(self, additional_text: str, separator: str = " ") -> None:
         if additional_text:
@@ -78,6 +105,7 @@ class SubtitleEntry:
         )
         copied.start_time = self.start_time
         copied.end_time = self.end_time
+        copied._compact_text = self._compact_text
         return copied
 
     def to_dict(self) -> Dict[str, Optional[str] | list[int] | bool]:
@@ -149,11 +177,12 @@ class ObservedSubtitleRow:
     unstable_key: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class CaptureSessionState:
     entries: list[SubtitleEntry] = field(default_factory=list)
     preview_text: str = ""
     confirmed_compact: str = ""
+    confirmed_segments: list[str] = field(default_factory=list)
     trailing_suffix: str = ""
     last_observed_raw: str = ""
     last_processed_raw: str = ""
@@ -171,6 +200,30 @@ class CaptureSessionState:
             entries=[entry.clone() for entry in self.entries],
             preview_text=self.preview_text,
             confirmed_compact=self.confirmed_compact,
+            confirmed_segments=list(self.confirmed_segments),
+            trailing_suffix=self.trailing_suffix,
+            last_observed_raw=self.last_observed_raw,
+            last_processed_raw=self.last_processed_raw,
+            preview_desync_count=self.preview_desync_count,
+            preview_ambiguous_skip_count=self.preview_ambiguous_skip_count,
+            current_selector=self.current_selector,
+            current_frame_path=tuple(self.current_frame_path),
+            observer_active=self.observer_active,
+            last_observer_event_at=self.last_observer_event_at,
+            last_keepalive_at=self.last_keepalive_at,
+            last_committed_reset_at=self.last_committed_reset_at,
+        )
+
+    def snapshot_clone(self, clone_last_entry: bool = False) -> "CaptureSessionState":
+        entries = list(self.entries)
+        if clone_last_entry and entries:
+            entries[-1] = entries[-1].clone()
+
+        return CaptureSessionState(
+            entries=entries,
+            preview_text=self.preview_text,
+            confirmed_compact=self.confirmed_compact,
+            confirmed_segments=list(self.confirmed_segments),
             trailing_suffix=self.trailing_suffix,
             last_observed_raw=self.last_observed_raw,
             last_processed_raw=self.last_processed_raw,

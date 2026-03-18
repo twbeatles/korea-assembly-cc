@@ -27,7 +27,14 @@
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.14.1)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.14.2)
+- `core/live_capture.py`/`ui/main_window_capture.py`: Observer idle 구간에서는 매 200ms full probe를 반복하지 않고, `observer change`, `keepalive`, `1.0초 health probe`, observer death/reconnect 시점에만 structured probe를 수행
+- `_read_subtitle_probe_by_selectors`: frame path 캐시 재사용 + 프레임별 1회 JS bridge 주입 후 짧은 probe 호출만 반복
+- `StructuredPreviewPayload`: worker 기본 preview 계약을 typed payload로 전환하고, legacy dict 수신 경로는 호환 유지
+- `core/subtitle_pipeline.py`: `confirmed_segments` 기반 증분 confirmed-history 갱신으로 append/keepalive/last-row update hot path에서 전체 rebuild를 회피
+- `core/models.py`: `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()` 도입으로 prepared snapshot 메모리 복제를 완화
+- `ui/main_window_pipeline.py`/`ui/main_window_view.py`: `capture_state.entries`를 단일 source of truth로 고정하고, append/tail update는 delta 기반 갱신 + tail patch render 사용
+- `ui/main_window_persistence.py`/`core/file_io.py`/`core/database_manager.py`: streaming JSON 저장, `SubtitleEntry` 직접 DB 저장, stale thread connection cleanup cadence 완화
 - `core/subtitle_pipeline.py`: `auto_clean_newlines` 런타임 옵션 도입, preview/live-row/flush 정규화 경로 통일
 - `ui/main_window.py`/`ui/main_window_ui.py`: `✨ 자동 줄넘김 정리` 체크박스 추가, 기본 활성화 + `QSettings` 영속화
 - `_extract_new_part`: `find()` → `rfind()` 전환 — suffix 충돌 시 과잉 추출 방지
@@ -60,22 +67,26 @@
 ## 3. 현재 고정 파이프라인
 
 ```text
-Worker(raw) [MutationObserver 우선 + 폴링 fallback]
+Worker(raw) [event-driven hybrid: MutationObserver 우선 + bounded probe fallback]
   -> 시작/재연결 시 _detect_live_broadcast로 xcgcd 보완 URL 확정
   -> selector 후보 우선순위 정렬 (.smi_word:last-child 우선)
   -> .smi_word 목록 기반 창(window) 텍스트 조합
   -> 기본 문서 + 중첩 iframe/frame 순회
+  -> frame path cache 재사용 + JS probe bridge 1회 주입
+  -> observer change / keepalive / 1.0초 health probe / reconnect 시점만 structured probe 수행
+  -> selector refresh 5.0초, frame inventory refresh 10.0초 cadence
   -> auto_clean_newlines 옵션(기본 ON)에 따라 줄바꿈/빈 줄 평탄화
   -> clean/compact 기준 중복 전송 억제
   -> 동일 raw 유지 구간 keepalive 메시지 발행
   -> 자막 영역 클리어 감지 → subtitle_reset (완전 리셋)
-  -> Queue(preview)
+  -> Queue(preview: StructuredPreviewPayload, legacy dict 호환)
   -> _prepare_preview_raw(정규화, 게이트, 재동기화, fallback)
      (desync/ambiguous 반복 시 _soft_resync 소프트 리셋)
   -> _process_raw_text(GlobalHistory+Suffix core, rfind 기반)
   -> 후단 정제(get_word_diff, recent compact tail)
   -> _add_text_to_subtitles (is_meaningful_subtitle_text 필터)
   -> Queue(keepalive) -> _handle_keepalive(end_time 연장)
+  -> UI delta 반영 (append/tail update 증분 갱신, tail patch render)
   -> 종료 시 _drain_pending_previews 강제 플러시
 ```
 
@@ -85,7 +96,7 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 
 ### 4.1 Worker 입력 안정화 (하이브리드)
 - 시작/재연결 시 `_detect_live_broadcast`로 최종 URL(`xcgcd`) 우선 확정
-- MutationObserver 우선 → 폴링 fallback — `_inject_mutation_observer`, `_collect_observer_changes`
+- MutationObserver 우선 → bounded probe fallback — `_inject_mutation_observer`, `_collect_observer_changes`
 - 고정 선택자 우선순위
   - `#viewSubtit .smi_word:last-child`
   - `#viewSubtit .smi_word`
@@ -102,6 +113,12 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - Observer 주입 2단계 고정
   - 1차: 타겟 기반 Observer (`allow_poll_fallback=False`)
   - 2차: 타겟 미탐색 시 폴링 브리지 (`allow_poll_fallback=True`)
+- structured probe cadence 고정
+  - observer active + idle: health probe `1.0초`
+  - selector refresh: `5.0초`
+  - frame inventory refresh: `10.0초`
+  - observer death/reconnect/keepalive due 시 즉시 probe 허용
+- frame path cache / active selector cache를 재사용하고, 매 tick 전체 frame tree 재순회를 피한다
 - `clean_text_display` 적용
 - compact 기준으로 동일 입력 반복 전송 억제
 - 동일 raw 유지 시 keepalive 주기 발행 (`Config.SUBTITLE_KEEPALIVE_INTERVAL`)
@@ -154,6 +171,14 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - 게이트 통과 실패 시에도 강제 처리 (`forced = clean_text_display(data)`)
 - 누락 감소를 위한 2회 drain + `_finalize_pending_subtitle`
 
+### 4.7 저장/렌더링 경로 고정
+- `capture_state.entries`가 런타임 단일 source of truth이며, `self.subtitles`는 alias/view로만 유지한다
+- prepared snapshot은 `CaptureSessionState.snapshot_clone()`을 사용한다
+  - pending preview 없음: shallow list snapshot
+  - pending preview 있음: 마지막 엔트리만 clone 허용
+- 세션 저장/자동 백업은 streaming JSON writer를 사용하고, DB 저장은 `SubtitleEntry` 직접 입력을 허용한다
+- UI는 `PipelineResult` delta 기준으로 append/tail update를 증분 반영하며, 마지막 visible entry 수정은 full clear 대신 tail patch를 우선 사용한다
+
 ---
 
 ## 5. 리셋 정책 정리
@@ -203,7 +228,11 @@ Worker(raw) [MutationObserver 우선 + 폴링 fallback]
 - `_confirmed_compact` 최대 길이: `Config.CONFIRMED_COMPACT_MAX_LEN = 50000`
 - 세션 병합 dedupe 버킷: `Config.MERGE_DEDUP_TIME_BUCKET_SECONDS = 30`
 - Observer 재시도 간격: `3.0초`
+- observer health probe 간격: `1.0초`
+- selector refresh 간격: `5.0초`
+- frame inventory refresh 간격: `10.0초`
 - 폴링 브리지 간격: `180ms`
+- UI queue drain budget: `약 8ms`, 최대 `50`건
 
 ---
 

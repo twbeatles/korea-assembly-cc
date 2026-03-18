@@ -23,16 +23,8 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_file = backup_dir / f"backup_{timestamp}.json"
-
-                # 스레드 안전하게 자막 스냅샷 생성 (UI 스레드)
-                subtitles_copy = [s.to_dict() for s in prepared_entries]
-
-                data = {
-                    "version": Config.VERSION,
-                    "created": datetime.now().isoformat(),
-                    "url": self._get_current_url(),
-                    "subtitles": subtitles_copy,
-                }
+                created_at = datetime.now().isoformat()
+                current_url = self._get_current_url()
 
             except Exception as e:
                 try:
@@ -44,11 +36,16 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
             def write_backup():
                 try:
-                    utils.atomic_write_json(
+                    utils.atomic_write_json_stream(
                         backup_file,
-                        data,
+                        head_items=[
+                            ("version", Config.VERSION),
+                            ("created", created_at),
+                            ("url", current_url),
+                        ],
+                        sequence_key="subtitles",
+                        sequence_items=utils.iter_serialized_subtitles(prepared_entries),
                         ensure_ascii=False,
-                        indent=2,
                     )
 
                     # 오래된 백업 삭제 (최대 개수 유지)
@@ -748,21 +745,18 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
             def background_save():
                 try:
-                    subtitles_copy = [entry.to_dict() for entry in prepared_entries]
-
-                    data = {
-                        "version": Config.VERSION,
-                        "created": datetime.now().isoformat(),
-                        "url": current_url,
-                        "committee_name": committee_name,
-                        "subtitles": subtitles_copy,
-                    }
-
-                    utils.atomic_write_json(
+                    created_at = datetime.now().isoformat()
+                    utils.atomic_write_json_stream(
                         path,
-                        data,
+                        head_items=[
+                            ("version", Config.VERSION),
+                            ("created", created_at),
+                            ("url", current_url),
+                            ("committee_name", committee_name),
+                        ],
+                        sequence_key="subtitles",
+                        sequence_items=utils.iter_serialized_subtitles(prepared_entries),
                         ensure_ascii=False,
-                        indent=2,
                     )
 
                     db_saved = False
@@ -773,7 +767,7 @@ class MainWindowPersistenceMixin(MainWindowHost):
                             db_data = {
                                 "url": current_url,
                                 "committee_name": committee_name,
-                                "subtitles": subtitles_copy,
+                                "subtitles": prepared_entries,
                                 "version": Config.VERSION,
                                 "duration_seconds": duration,
                             }
@@ -787,7 +781,7 @@ class MainWindowPersistenceMixin(MainWindowHost):
                             "session_save_done",
                             {
                                 "path": path,
-                                "saved_count": len(subtitles_copy),
+                                "saved_count": len(prepared_entries),
                                 "db_saved": db_saved,
                                 "db_error": db_error,
                             },

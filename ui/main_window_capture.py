@@ -674,8 +674,12 @@ class MainWindowCaptureMixin(MainWindowHost):
                     driver, ",".join(selector_candidates)
                 )
                 observer_retry_interval = 3.0
+                observer_health_interval = 1.0
+                frame_inventory_refresh_interval = 10.0
                 last_observer_retry = time.time()
+                last_observer_health_check = time.time()
                 last_selector_refresh = time.time()
+                last_frame_inventory_refresh = 0.0
 
                 last_check = time.time()
                 last_connection_check = time.time()
@@ -684,6 +688,26 @@ class MainWindowCaptureMixin(MainWindowHost):
                 worker_last_raw_compact = ""
                 reconnect_attempt = 0
                 last_keepalive_emit = 0.0
+                self._cached_capture_frame_paths = []
+
+                def refresh_cached_frame_paths(force: bool = False) -> None:
+                    nonlocal last_frame_inventory_refresh
+                    now_ts = time.time()
+                    if (
+                        not force
+                        and self._cached_capture_frame_paths
+                        and now_ts - last_frame_inventory_refresh
+                        < frame_inventory_refresh_interval
+                    ):
+                        return
+                    self._cached_capture_frame_paths = self._iter_frame_paths(
+                        driver,
+                        max_depth=3,
+                        max_frames=60,
+                    )
+                    last_frame_inventory_refresh = now_ts
+
+                refresh_cached_frame_paths(force=True)
 
                 # stop_event 사용으로 더 빠른 종료 응답
                 while not self.stop_event.is_set():
@@ -708,19 +732,20 @@ class MainWindowCaptureMixin(MainWindowHost):
                             last_connection_check = now
 
                         if now - last_check >= 0.2:
-                            changes_processed = False
-                            used_structured_probe = False
+                            should_probe = not observer_active
+                            force_frame_refresh = False
                             if observer_active:
                                 observer_changes = self._collect_observer_changes(
                                     driver, observer_frame_path
                                 )
                                 if observer_changes is None:
                                     observer_active = False
+                                    should_probe = True
+                                    force_frame_refresh = True
                                     logger.warning(
                                         "MutationObserver 비활성화, polling fallback"
                                     )
                                 elif observer_changes:
-                                    used_structured_probe = False
                                     should_reset = any(
                                         change == "__SUBTITLE_CLEARED__"
                                         or (
@@ -731,16 +756,38 @@ class MainWindowCaptureMixin(MainWindowHost):
                                         for change in observer_changes
                                     )
                                     if should_reset:
-                                        used_structured_probe = True
                                         self.message_queue.put(
                                             ("subtitle_reset", "observer_cleared")
                                         )
                                         worker_last_raw_text = ""
                                         worker_last_raw_compact = ""
                                         last_keepalive_emit = 0.0
-                                        changes_processed = True
+                                        should_probe = True
+                                    else:
+                                        should_probe = True
 
-                            if not used_structured_probe:
+                                if (
+                                    not should_probe
+                                    and now - last_keepalive_emit
+                                    >= Config.SUBTITLE_KEEPALIVE_INTERVAL
+                                    and worker_last_raw_compact
+                                ):
+                                    should_probe = True
+
+                                if (
+                                    not should_probe
+                                    and now - last_observer_health_check
+                                    >= observer_health_interval
+                                ):
+                                    should_probe = True
+                                    last_observer_health_check = now
+
+                            if should_probe:
+                                if force_frame_refresh or (
+                                    now - last_frame_inventory_refresh
+                                    >= frame_inventory_refresh_interval
+                                ):
+                                    refresh_cached_frame_paths(force=True)
                                 preferred_frame_path = (
                                     observer_frame_path if observer_active else ()
                                 ) or getattr(self, "_last_subtitle_frame_path", ())
@@ -752,6 +799,7 @@ class MainWindowCaptureMixin(MainWindowHost):
                                 text = self._normalize_subtitle_text_for_option(
                                     probe.get("text", "") or ""
                                 ).strip()
+                                worker_mode = str(probe.get("source_mode", "") or "")
                                 matched_selector = str(
                                     probe.get("matched_selector", "") or ""
                                 )
@@ -768,6 +816,7 @@ class MainWindowCaptureMixin(MainWindowHost):
                                             )
                                         )
                                 elif now - last_selector_refresh >= 5.0:
+                                    refresh_cached_frame_paths(force=True)
                                     detected_selector = self._find_subtitle_selector(driver)
                                     if detected_selector:
                                         selector_candidates = (
@@ -781,15 +830,22 @@ class MainWindowCaptureMixin(MainWindowHost):
                                             active_selector,
                                         )
                                     last_selector_refresh = now
+                                    if not selector_found:
+                                        force_frame_refresh = True
 
                                 if (
                                     not observer_active
                                     and now - last_observer_retry >= observer_retry_interval
                                 ):
+                                    if force_frame_refresh:
+                                        refresh_cached_frame_paths(force=True)
                                     observer_active, observer_frame_path = self._inject_mutation_observer(
                                         driver, ",".join(selector_candidates)
                                     )
                                     last_observer_retry = now
+                                    last_observer_health_check = now
+                                    if observer_active:
+                                        refresh_cached_frame_paths(force=False)
 
                                 if (
                                     text
@@ -805,7 +861,6 @@ class MainWindowCaptureMixin(MainWindowHost):
                                             self._build_preview_payload_from_probe(probe),
                                         )
                                     )
-                                    changes_processed = True
                                 elif (
                                     text
                                     and text_compact
@@ -817,7 +872,6 @@ class MainWindowCaptureMixin(MainWindowHost):
                                 ):
                                     self.message_queue.put(("keepalive", text))
                                     last_keepalive_emit = now
-                                    changes_processed = True
                                 elif (
                                     not text
                                     and selector_found
@@ -829,122 +883,13 @@ class MainWindowCaptureMixin(MainWindowHost):
                                     worker_last_raw_text = ""
                                     worker_last_raw_compact = ""
                                     last_keepalive_emit = 0.0
-                                    changes_processed = True
+
+                                if worker_mode == "smi-window" and not observer_active:
+                                    last_observer_health_check = now
 
                             last_check = now
                             self.stop_event.wait(timeout=0.05)
                             continue
-
-                            # 1단계: MutationObserver 버퍼에서 수집 (이벤트 기반)
-                            if observer_active:
-                                observer_changes = self._collect_observer_changes(
-                                    driver, observer_frame_path
-                                )
-                                if observer_changes is None:
-                                    # Observer가 죽었으면 비활성화 후 폴링 fallback
-                                    observer_active = False
-                                    logger.warning("MutationObserver 비활성화, 폴링 fallback")
-                                elif observer_changes:
-                                    for change_text in observer_changes:
-                                        # 클리어 마커 감지 (발언자 전환)
-                                        if change_text == "__SUBTITLE_CLEARED__":
-                                            self.message_queue.put(
-                                                ("subtitle_reset", "observer_cleared")
-                                            )
-                                            worker_last_raw_text = ""
-                                            worker_last_raw_compact = ""
-                                            last_keepalive_emit = 0.0
-                                            continue
-                                        c_text = utils.clean_text_display(change_text)
-                                        c_compact = utils.compact_subtitle_text(c_text)
-                                        if (
-                                            c_text
-                                            and c_compact
-                                            and c_compact != worker_last_raw_compact
-                                        ):
-                                            worker_last_raw_text = c_text
-                                            worker_last_raw_compact = c_compact
-                                            last_keepalive_emit = now
-                                            self.message_queue.put(("preview", c_text))
-                                            changes_processed = True
-
-                            # 2단계: Observer 결과가 없으면 기존 폴링 fallback
-                            if not changes_processed:
-                                text, matched_selector, selector_found = (
-                                    self._read_subtitle_text_by_selectors(
-                                        driver, selector_candidates
-                                    )
-                                )
-                                if selector_found:
-                                    reconnect_attempt = 0
-                                    if matched_selector and matched_selector != active_selector:
-                                        active_selector = matched_selector
-                                        selector_candidates = (
-                                            self._build_subtitle_selector_candidates(
-                                                active_selector, selector_candidates
-                                            )
-                                        )
-                                elif now - last_selector_refresh >= 5.0:
-                                    # 셀렉터 변화 대응: 주기적 자동 재탐색
-                                    detected_selector = self._find_subtitle_selector(driver)
-                                    if detected_selector:
-                                        selector_candidates = (
-                                            self._build_subtitle_selector_candidates(
-                                                detected_selector, selector_candidates
-                                            )
-                                        )
-                                        active_selector = selector_candidates[0]
-                                        logger.info(
-                                            "자막 셀렉터 자동 전환: %s", active_selector
-                                        )
-                                    last_selector_refresh = now
-
-                                if (
-                                    not observer_active
-                                    and now - last_observer_retry >= observer_retry_interval
-                                ):
-                                    observer_active, observer_frame_path = self._inject_mutation_observer(
-                                        driver, ",".join(selector_candidates)
-                                    )
-                                    last_observer_retry = now
-
-                                text = utils.clean_text_display(text)
-                                text_compact = utils.compact_subtitle_text(text)
-
-                                if (
-                                    text
-                                    and text_compact
-                                    and text_compact != worker_last_raw_compact
-                                ):
-                                    worker_last_raw_text = text
-                                    worker_last_raw_compact = text_compact
-                                    last_keepalive_emit = now
-                                    self.message_queue.put(("preview", text))
-                                elif (
-                                    text
-                                    and text_compact
-                                    and text_compact == worker_last_raw_compact
-                                    and (
-                                        now - last_keepalive_emit
-                                        >= Config.SUBTITLE_KEEPALIVE_INTERVAL
-                                    )
-                                ):
-                                    self.message_queue.put(("keepalive", text))
-                                    last_keepalive_emit = now
-                                elif (
-                                    not text
-                                    and selector_found
-                                    and worker_last_raw_compact
-                                ):
-                                    # 폴링에서도 빈 텍스트 감지 (발언자 전환)
-                                    self.message_queue.put(
-                                        ("subtitle_reset", "polling_cleared")
-                                    )
-                                    worker_last_raw_text = ""
-                                    worker_last_raw_compact = ""
-                                    last_keepalive_emit = 0.0
-
-                            last_check = now
 
                         # stop_event 대기 (0.05초, 즉시 응답 가능)
                         self.stop_event.wait(timeout=0.05)
@@ -1041,6 +986,7 @@ class MainWindowCaptureMixin(MainWindowHost):
                                     worker_last_raw_text = ""
                                     worker_last_raw_compact = ""
                                     last_keepalive_emit = 0.0
+                                    refresh_cached_frame_paths(force=True)
                                     detected_selector = self._find_subtitle_selector(driver)
                                     if detected_selector:
                                         selector_candidates = (
@@ -1054,6 +1000,7 @@ class MainWindowCaptureMixin(MainWindowHost):
                                         driver, ",".join(selector_candidates)
                                     )
                                     last_observer_retry = time.time()
+                                    last_observer_health_check = time.time()
                                     continue
                                 except Exception as reconnect_error:
                                     logger.error(f"재연결 실패: {reconnect_error}")
@@ -1150,6 +1097,227 @@ class MainWindowCaptureMixin(MainWindowHost):
             return sorted(candidates, key=_weight)
 
 
+    def _get_cached_probe_frame_paths(
+            self,
+            driver,
+            preferred_frame_path: tuple[int, ...] = (),
+        ) -> list[tuple[int, ...]]:
+            frame_paths: list[tuple[int, ...]] = []
+            if preferred_frame_path:
+                frame_paths.append(preferred_frame_path)
+            frame_paths.append(())
+
+            cached_paths = self.__dict__.get("_cached_capture_frame_paths")
+            if isinstance(cached_paths, list) and cached_paths:
+                candidates = cached_paths
+            else:
+                candidates = self._iter_frame_paths(driver, max_depth=3, max_frames=60)
+
+            for frame_path in candidates:
+                if frame_path not in frame_paths:
+                    frame_paths.append(frame_path)
+            return frame_paths
+
+
+    def _ensure_subtitle_probe_bridge_here(self, driver) -> bool:
+            try:
+                bridge_ready = driver.execute_script(
+                    "return window.__assemblySubtitleProbeVersion === 1 && "
+                    "typeof window.__assemblySubtitleProbeBridge === 'function';"
+                )
+                if bridge_ready:
+                    return True
+
+                driver.execute_script(
+                    """
+                    window.__assemblySubtitleProbeVersion = 1;
+                    window.__assemblySubtitleProbeBridge = function(selectorsArg, filterUnconfirmedArg) {
+                        function normalizeText(value) {
+                            return String(value || '').replace(/\\s+/g, ' ').trim();
+                        }
+                        function compactText(value) {
+                            return normalizeText(value).replace(/\\s+/g, '');
+                        }
+                        function queryAllSafe(selector) {
+                            try { return Array.from(document.querySelectorAll(selector)); }
+                            catch (e) { return []; }
+                        }
+                        function queryOneSafe(selector) {
+                            try { return document.querySelector(selector); }
+                            catch (e) { return null; }
+                        }
+                        function normalizeSpeakerColor(color) {
+                            var probe = document.createElement('span');
+                            probe.style.color = String(color || '').trim();
+                            (document.body || document.documentElement).appendChild(probe);
+                            var normalized = window.getComputedStyle(probe).color;
+                            probe.remove();
+                            return normalized;
+                        }
+                        function classifySpeakerChannel(color) {
+                            var normalized = normalizeSpeakerColor(color);
+                            if (normalized === 'rgb(35, 124, 147)') return 'primary';
+                            if (normalized === 'rgb(30, 30, 30)') return 'secondary';
+                            return 'unknown';
+                        }
+                        function hasOpaqueBackground(backgroundColor) {
+                            var normalized = String(backgroundColor || '').replace(/\\s+/g, '').toLowerCase();
+                            return Boolean(normalized) && normalized !== 'transparent' && normalized !== 'rgba(0,0,0,0)';
+                        }
+                        function isConfirmedSubtitleNode(node) {
+                            var bg = window.getComputedStyle(node).backgroundColor;
+                            if (hasOpaqueBackground(bg)) return false;
+                            var descendants = Array.from(node.querySelectorAll('*'));
+                            var limit = Math.min(descendants.length, 48);
+                            for (var i = 0; i < limit; i++) {
+                                var childBg = window.getComputedStyle(descendants[i]).backgroundColor;
+                                if (hasOpaqueBackground(childBg)) return false;
+                            }
+                            return true;
+                        }
+                        function normalizeRowQuery(selector) {
+                            return String(selector || '')
+                                .replace(/:last-child/g, '')
+                                .replace(/:last-of-type/g, '')
+                                .trim();
+                        }
+                        function getSmiWordNodes(selector) {
+                            var query = normalizeRowQuery(selector) || '#viewSubtit .smi_word';
+                            var nodes = queryAllSafe(query);
+                            return nodes.length ? nodes : queryAllSafe('#viewSubtit .smi_word');
+                        }
+                        function extractClassNodeKey(node) {
+                            var classes = String(node.className || '')
+                                .split(/\\s+/)
+                                .map(function(token) { return token.trim(); })
+                                .filter(function(token) { return token && token !== 'smi_word'; });
+                            return classes[0] || '';
+                        }
+                        function extractAttributeNodeKey(node) {
+                            var candidates = [node.getAttribute('data-id'), node.getAttribute('data-key'), node.id];
+                            for (var i = 0; i < candidates.length; i++) {
+                                var candidate = String(candidates[i] || '').trim();
+                                if (candidate) return candidate;
+                            }
+                            return '';
+                        }
+                        function ensureGeneratedNodeKey(node) {
+                            if (!node.dataset.assemblyRowKey) {
+                                node.dataset.assemblyRowKey = 'row_' + Math.random().toString(36).slice(2, 9) + '_' + Date.now();
+                            }
+                            return node.dataset.assemblyRowKey;
+                        }
+                        function readObservedRows(selector) {
+                            var rows = [];
+                            var nodes = getSmiWordNodes(selector);
+                            var classKeyCounts = new Map();
+                            nodes.forEach(function(node) {
+                                var classKey = extractClassNodeKey(node);
+                                if (!classKey) return;
+                                classKeyCounts.set(classKey, (classKeyCounts.get(classKey) || 0) + 1);
+                            });
+                            nodes.forEach(function(node) {
+                                if (filterUnconfirmedArg && !isConfirmedSubtitleNode(node)) {
+                                    return;
+                                }
+                                var text = normalizeText(node.innerText || node.textContent || '');
+                                if (!compactText(text)) return;
+                                var classNodeKey = extractClassNodeKey(node);
+                                var attrNodeKey = extractAttributeNodeKey(node);
+                                var uniqueClassKey = Boolean(classNodeKey) && classKeyCounts.get(classNodeKey) === 1;
+                                var nodeKey = uniqueClassKey
+                                    ? 'class:' + classNodeKey
+                                    : (attrNodeKey ? 'attr:' + attrNodeKey : ensureGeneratedNodeKey(node));
+                                var speakerNode = node.querySelector('span') || node.querySelector('[style*="color"]') || node;
+                                var speakerColor = normalizeSpeakerColor(window.getComputedStyle(speakerNode).color);
+                                var row = {
+                                    nodeKey: nodeKey,
+                                    text: text,
+                                    speakerColor: speakerColor,
+                                    speakerChannel: classifySpeakerChannel(speakerColor),
+                                    unstableKey: !uniqueClassKey && !attrNodeKey
+                                };
+                                var previous = rows.length ? rows[rows.length - 1] : null;
+                                if (
+                                    previous &&
+                                    compactText(previous.text) === compactText(row.text) &&
+                                    (previous.nodeKey === row.nodeKey || (previous.unstableKey && row.unstableKey))
+                                ) {
+                                    rows[rows.length - 1] = row;
+                                    return;
+                                }
+                                rows.push(row);
+                            });
+                            return rows;
+                        }
+                        function buildPreview(rows) {
+                            return rows.slice(-3).map(function(row) { return row.text; }).filter(Boolean).join(' ').trim();
+                        }
+                        function normalizeContainerText(node) {
+                            var raw = node ? (node.innerText || node.textContent || '') : '';
+                            var text = normalizeText(raw);
+                            if (!text) return '';
+                            if (text.length <= 400) return text;
+                            var lines = String(raw || '').split('\\n').map(normalizeText).filter(Boolean);
+                            return lines.slice(-3).join(' ');
+                        }
+                        function shouldBlockContainerFallback() {
+                            if (!filterUnconfirmedArg) return false;
+                            var smiNodes = queryAllSafe('#viewSubtit .smi_word');
+                            if (!smiNodes.length) return false;
+                            return readObservedRows('#viewSubtit .smi_word').length === 0;
+                        }
+
+                        var selectors = Array.isArray(selectorsArg) ? selectorsArg : [];
+                        var blockContainerFallback = shouldBlockContainerFallback();
+                        var fallbackSelectors = [
+                            '#viewSubtit .incont',
+                            '#viewSubtit',
+                            '.subtitle_area',
+                            '.ai_subtitle',
+                            "[class*='subtitle']"
+                        ];
+                        for (var i = 0; i < selectors.length; i++) {
+                            var selector = String(selectors[i] || '').trim();
+                            if (!selector) continue;
+                            if (selector.indexOf('.smi_word') >= 0) {
+                                var rows = readObservedRows(selector);
+                                var preview = buildPreview(rows);
+                                if (preview) {
+                                    return { text: preview, matchedSelector: selector, found: true, rows: rows, sourceMode: 'smi-window' };
+                                }
+                                continue;
+                            }
+                            if (blockContainerFallback) continue;
+                            var node = queryOneSafe(selector);
+                            if (!node) continue;
+                            var text = normalizeContainerText(node);
+                            if (!text) continue;
+                            return { text: text, matchedSelector: selector, found: true, rows: [], sourceMode: 'container' };
+                        }
+
+                        if (!blockContainerFallback) {
+                            for (var j = 0; j < fallbackSelectors.length; j++) {
+                                var fallbackSelector = fallbackSelectors[j];
+                                var fallbackNode = queryOneSafe(fallbackSelector);
+                                if (!fallbackNode) continue;
+                                var fallbackText = normalizeContainerText(fallbackNode);
+                                if (!fallbackText) continue;
+                                return { text: fallbackText, matchedSelector: fallbackSelector, found: true, rows: [], sourceMode: 'container' };
+                            }
+                        }
+
+                        return { text: '', matchedSelector: '', found: false, rows: [], sourceMode: '' };
+                    };
+                    return true;
+                    """
+                )
+                return True
+            except Exception as e:
+                logger.debug("subtitle probe bridge injection error: %s", e)
+                return False
+
+
     def _read_subtitle_probe_by_selectors(
             self,
             driver,
@@ -1189,185 +1357,18 @@ class MainWindowCaptureMixin(MainWindowHost):
                 return observed
 
             def _probe_in_current_context() -> dict[str, Any]:
+                if not self._ensure_subtitle_probe_bridge_here(driver):
+                    return {
+                        "text": "",
+                        "matched_selector": "",
+                        "found": False,
+                        "rows": [],
+                        "source_mode": "",
+                    }
                 try:
                     result = driver.execute_script(
-                        """
-                        return (function(selectorsArg, filterUnconfirmedArg) {
-                            function normalizeText(value) {
-                                return String(value || '').replace(/\\s+/g, ' ').trim();
-                            }
-                            function compactText(value) {
-                                return normalizeText(value).replace(/\\s+/g, '');
-                            }
-                            function queryAllSafe(selector) {
-                                try { return Array.from(document.querySelectorAll(selector)); }
-                                catch (e) { return []; }
-                            }
-                            function queryOneSafe(selector) {
-                                try { return document.querySelector(selector); }
-                                catch (e) { return null; }
-                            }
-                            function normalizeSpeakerColor(color) {
-                                var probe = document.createElement('span');
-                                probe.style.color = String(color || '').trim();
-                                (document.body || document.documentElement).appendChild(probe);
-                                var normalized = window.getComputedStyle(probe).color;
-                                probe.remove();
-                                return normalized;
-                            }
-                            function classifySpeakerChannel(color) {
-                                var normalized = normalizeSpeakerColor(color);
-                                if (normalized === 'rgb(35, 124, 147)') return 'primary';
-                                if (normalized === 'rgb(30, 30, 30)') return 'secondary';
-                                return 'unknown';
-                            }
-                            function hasOpaqueBackground(backgroundColor) {
-                                var normalized = String(backgroundColor || '').replace(/\\s+/g, '').toLowerCase();
-                                return Boolean(normalized) && normalized !== 'transparent' && normalized !== 'rgba(0,0,0,0)';
-                            }
-                            function isConfirmedSubtitleNode(node) {
-                                var bg = window.getComputedStyle(node).backgroundColor;
-                                if (hasOpaqueBackground(bg)) return false;
-                                var descendants = Array.from(node.querySelectorAll('*'));
-                                var limit = Math.min(descendants.length, 48);
-                                for (var i = 0; i < limit; i++) {
-                                    var childBg = window.getComputedStyle(descendants[i]).backgroundColor;
-                                    if (hasOpaqueBackground(childBg)) return false;
-                                }
-                                return true;
-                            }
-                            function normalizeRowQuery(selector) {
-                                return String(selector || '')
-                                    .replace(/:last-child/g, '')
-                                    .replace(/:last-of-type/g, '')
-                                    .trim();
-                            }
-                            function getSmiWordNodes(selector) {
-                                var query = normalizeRowQuery(selector) || '#viewSubtit .smi_word';
-                                var nodes = queryAllSafe(query);
-                                return nodes.length ? nodes : queryAllSafe('#viewSubtit .smi_word');
-                            }
-                            function extractClassNodeKey(node) {
-                                var classes = String(node.className || '')
-                                    .split(/\\s+/)
-                                    .map(function(token) { return token.trim(); })
-                                    .filter(function(token) { return token && token !== 'smi_word'; });
-                                return classes[0] || '';
-                            }
-                            function extractAttributeNodeKey(node) {
-                                var candidates = [node.getAttribute('data-id'), node.getAttribute('data-key'), node.id];
-                                for (var i = 0; i < candidates.length; i++) {
-                                    var candidate = String(candidates[i] || '').trim();
-                                    if (candidate) return candidate;
-                                }
-                                return '';
-                            }
-                            function ensureGeneratedNodeKey(node) {
-                                if (!node.dataset.assemblyRowKey) {
-                                    node.dataset.assemblyRowKey = 'row_' + Math.random().toString(36).slice(2, 9) + '_' + Date.now();
-                                }
-                                return node.dataset.assemblyRowKey;
-                            }
-                            function readObservedRows(selector) {
-                                var rows = [];
-                                var nodes = getSmiWordNodes(selector);
-                                var classKeyCounts = new Map();
-                                nodes.forEach(function(node) {
-                                    var classKey = extractClassNodeKey(node);
-                                    if (!classKey) return;
-                                    classKeyCounts.set(classKey, (classKeyCounts.get(classKey) || 0) + 1);
-                                });
-                                nodes.forEach(function(node) {
-                                    if (filterUnconfirmedArg && !isConfirmedSubtitleNode(node)) {
-                                        return;
-                                    }
-                                    var text = normalizeText(node.innerText || node.textContent || '');
-                                    if (!compactText(text)) return;
-                                    var classNodeKey = extractClassNodeKey(node);
-                                    var attrNodeKey = extractAttributeNodeKey(node);
-                                    var uniqueClassKey = Boolean(classNodeKey) && classKeyCounts.get(classNodeKey) === 1;
-                                    var nodeKey = uniqueClassKey
-                                        ? 'class:' + classNodeKey
-                                        : (attrNodeKey ? 'attr:' + attrNodeKey : ensureGeneratedNodeKey(node));
-                                    var speakerNode = node.querySelector('span') || node.querySelector('[style*="color"]') || node;
-                                    var speakerColor = normalizeSpeakerColor(window.getComputedStyle(speakerNode).color);
-                                    var row = {
-                                        nodeKey: nodeKey,
-                                        text: text,
-                                        speakerColor: speakerColor,
-                                        speakerChannel: classifySpeakerChannel(speakerColor),
-                                        unstableKey: !uniqueClassKey && !attrNodeKey
-                                    };
-                                    var previous = rows.length ? rows[rows.length - 1] : null;
-                                    if (
-                                        previous &&
-                                        compactText(previous.text) === compactText(row.text) &&
-                                        (previous.nodeKey === row.nodeKey || (previous.unstableKey && row.unstableKey))
-                                    ) {
-                                        rows[rows.length - 1] = row;
-                                        return;
-                                    }
-                                    rows.push(row);
-                                });
-                                return rows;
-                            }
-                            function buildPreview(rows) {
-                                return rows.slice(-3).map(function(row) { return row.text; }).filter(Boolean).join(' ').trim();
-                            }
-                            function normalizeContainerText(node) {
-                                var raw = node ? (node.innerText || node.textContent || '') : '';
-                                var text = normalizeText(raw);
-                                if (!text) return '';
-                                if (text.length <= 400) return text;
-                                var lines = String(raw || '').split('\\n').map(normalizeText).filter(Boolean);
-                                return lines.slice(-3).join(' ');
-                            }
-                            function shouldBlockContainerFallback() {
-                                if (!filterUnconfirmedArg) return false;
-                                var smiNodes = queryAllSafe('#viewSubtit .smi_word');
-                                if (!smiNodes.length) return false;
-                                return readObservedRows('#viewSubtit .smi_word').length === 0;
-                            }
-                            var selectors = Array.isArray(selectorsArg) ? selectorsArg : [];
-                            var blockContainerFallback = shouldBlockContainerFallback();
-                            var fallbackSelectors = [
-                                '#viewSubtit .incont',
-                                '#viewSubtit',
-                                '.subtitle_area',
-                                '.ai_subtitle',
-                                "[class*='subtitle']"
-                            ];
-                            for (var i = 0; i < selectors.length; i++) {
-                                var selector = String(selectors[i] || '').trim();
-                                if (!selector) continue;
-                                if (selector.indexOf('.smi_word') >= 0) {
-                                    var rows = readObservedRows(selector);
-                                    var preview = buildPreview(rows);
-                                    if (preview) {
-                                        return { text: preview, matchedSelector: selector, found: true, rows: rows, sourceMode: 'smi-window' };
-                                    }
-                                    continue;
-                                }
-                                if (blockContainerFallback) continue;
-                                var node = queryOneSafe(selector);
-                                if (!node) continue;
-                                var text = normalizeContainerText(node);
-                                if (!text) continue;
-                                return { text: text, matchedSelector: selector, found: true, rows: [], sourceMode: 'container' };
-                            }
-                            if (!blockContainerFallback) {
-                                for (var j = 0; j < fallbackSelectors.length; j++) {
-                                    var fallbackSelector = fallbackSelectors[j];
-                                    var fallbackNode = queryOneSafe(fallbackSelector);
-                                    if (!fallbackNode) continue;
-                                    var fallbackText = normalizeContainerText(fallbackNode);
-                                    if (!fallbackText) continue;
-                                    return { text: fallbackText, matchedSelector: fallbackSelector, found: true, rows: [], sourceMode: 'container' };
-                                }
-                            }
-                            return { text: '', matchedSelector: '', found: false, rows: [], sourceMode: '' };
-                        })(arguments[0], arguments[1]);
-                        """,
+                        "return window.__assemblySubtitleProbeBridge("
+                        "arguments[0], arguments[1]);",
                         selectors,
                         bool(filter_unconfirmed_enabled),
                     )
@@ -1391,13 +1392,10 @@ class MainWindowCaptureMixin(MainWindowHost):
                     "source_mode": str(result.get("sourceMode", "") or ""),
                 }
 
-            frame_paths: list[tuple[int, ...]] = []
-            if preferred_frame_path:
-                frame_paths.append(preferred_frame_path)
-            frame_paths.append(())
-            for frame_path in self._iter_frame_paths(driver, max_depth=3, max_frames=60):
-                if frame_path not in frame_paths:
-                    frame_paths.append(frame_path)
+            frame_paths = self._get_cached_probe_frame_paths(
+                driver,
+                preferred_frame_path=preferred_frame_path,
+            )
 
             for frame_path in frame_paths:
                 try:
@@ -1436,18 +1434,22 @@ class MainWindowCaptureMixin(MainWindowHost):
             selectors: list[str],
             preferred_frame_path: tuple[int, ...] = (),
         ) -> tuple[str, str, bool]:
-            """여러 셀렉터를 순차 시도해 자막 텍스트를 읽는다.
+            """여러 셀렉터를 순차 시도해 자막 텍스트를 읽는다."""
+            probe = self._read_subtitle_probe_by_selectors(
+                driver,
+                selectors,
+                preferred_frame_path=preferred_frame_path,
+                filter_unconfirmed_enabled=False,
+            )
+            if bool(probe.get("found", False)):
+                return (
+                    str(probe.get("text", "") or ""),
+                    str(probe.get("matched_selector", "") or ""),
+                    True,
+                )
 
-            Returns:
-                (text, matched_selector, found_element)
-            """
             def _read_in_current_context() -> tuple[str, str, bool]:
                 def _read_smi_word_window(sel: str) -> tuple[str, bool]:
-                    """`.smi_word` 전체를 수집해 최근 창(window) 텍스트를 반환한다.
-
-                    확장프로그램(Assembly Webcast Subtitle Saver)처럼 단일 노드가 아닌
-                    `.smi_word` 목록을 기준으로 최신 변화를 추적해 첫 문장 이후 정체를 줄인다.
-                    """
                     try:
                         rows = driver.execute_script(
                             """
@@ -1473,44 +1475,33 @@ class MainWindowCaptureMixin(MainWindowHost):
                             """,
                             sel,
                         )
-                    except Exception as e:
-                        logger.debug("smi_word 수집 오류 (%s): %s", sel, e)
+                    except Exception:
                         return "", False
 
                     if not isinstance(rows, list) or not rows:
                         return "", False
 
-                    normalized_rows: list[tuple[str, str, str]] = []
+                    normalized_rows: list[tuple[str, str]] = []
                     for row in rows:
+                        row_text = ""
                         if isinstance(row, dict):
                             row_text = self._normalize_subtitle_text_for_option(
                                 row.get("text", "")
                             )
-                            row_id = str(row.get("id", "")).strip()
-                        else:
-                            row_text = self._normalize_subtitle_text_for_option(row)
-                            row_id = ""
                         if not row_text:
                             continue
-
                         row_compact = utils.compact_subtitle_text(row_text)
-                        if not row_compact:
-                            continue
-
-                        # 인접 중복(동일 compact)은 하나로 압축해 불필요한 정체를 줄인다.
-                        if normalized_rows and normalized_rows[-1][2] == row_compact:
-                            normalized_rows[-1] = (row_id, row_text, row_compact)
+                        if normalized_rows and normalized_rows[-1][1] == row_compact:
+                            normalized_rows[-1] = (row_text, row_compact)
                         else:
-                            normalized_rows.append((row_id, row_text, row_compact))
+                            normalized_rows.append((row_text, row_compact))
 
                     if not normalized_rows:
                         return "", False
 
-                    tail_texts = [t for _, t, _ in normalized_rows[-3:]]
+                    tail_texts = [text for text, _compact in normalized_rows[-3:]]
                     window_text = " ".join(tail_texts).strip()
-                    if not window_text:
-                        return "", False
-                    return window_text, True
+                    return (window_text, True) if window_text else ("", False)
 
                 for sel in selectors:
                     if ".smi_word" in sel:
@@ -1520,22 +1511,16 @@ class MainWindowCaptureMixin(MainWindowHost):
 
                     try:
                         element = driver.find_element(By.CSS_SELECTOR, sel)
-                    except (NoSuchElementException, StaleElementReferenceException):
-                        continue
-                    except Exception as e:
-                        logger.debug("셀렉터 조회 오류 (%s): %s", sel, e)
+                    except Exception:
                         continue
 
                     try:
                         text = (element.text or "").strip()
-                    except StaleElementReferenceException:
-                        continue
                     except Exception:
                         text = ""
                     return self._normalize_subtitle_text_for_option(text), sel, True
                 return "", "", False
 
-            # 선호 프레임(Observer가 설치된 프레임)을 우선 확인
             if preferred_frame_path:
                 try:
                     if self._switch_to_frame_path(driver, preferred_frame_path):
@@ -1544,9 +1529,11 @@ class MainWindowCaptureMixin(MainWindowHost):
                             self._last_subtitle_frame_path = preferred_frame_path
                             return result
                 finally:
-                    driver.switch_to.default_content()
+                    try:
+                        driver.switch_to.default_content()
+                    except Exception:
+                        pass
 
-            # 기본 문서 확인
             try:
                 driver.switch_to.default_content()
             except Exception:
@@ -1556,8 +1543,9 @@ class MainWindowCaptureMixin(MainWindowHost):
                 self._last_subtitle_frame_path = ()
                 return result
 
-            # 중첩 iframe/frame 순회 확인
-            for frame_path in self._iter_frame_paths(driver, max_depth=3, max_frames=60):
+            for frame_path in self._get_cached_probe_frame_paths(driver):
+                if not frame_path:
+                    continue
                 try:
                     if self._switch_to_frame_path(driver, frame_path):
                         result = _read_in_current_context()
@@ -1862,8 +1850,7 @@ class MainWindowCaptureMixin(MainWindowHost):
                 last_path = getattr(self, "_last_subtitle_frame_path", ())
                 if isinstance(last_path, tuple):
                     priority_paths.append(last_path)
-                priority_paths.append(())
-                for p in self._iter_frame_paths(driver, max_depth=3, max_frames=60):
+                for p in self._get_cached_probe_frame_paths(driver):
                     if p not in priority_paths:
                         priority_paths.append(p)
 

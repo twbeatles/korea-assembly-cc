@@ -151,9 +151,6 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             self._preview_resync_threshold = 10
             self._preview_ambiguous_resync_threshold = 6
 
-            # 자막 데이터 (타임스탬프 포함)
-            self.subtitles: list[SubtitleEntry] = []
-
             # [Fix] 자막 중복 방지 프로세서 (#SubtitleRepetitionFix)
             self.subtitle_processor = SubtitleProcessor()
 
@@ -205,6 +202,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             self._last_rendered_last_text = ""
             self._last_render_offset = 0
             self._last_render_show_ts = None
+            self._last_render_chunk_specs: list[tuple[str, str, str]] = []
 
             # 토스트 스택 관리
             self.active_toasts: list[ToastWidget] = []
@@ -215,6 +213,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
 
             # 중지 시 브라우저 유지용 (종료 시 정리)
             self.capture_state: CaptureSessionState = create_empty_capture_state()
+            self.subtitles: list[SubtitleEntry] = self.capture_state.entries
             self.live_capture_ledger = create_empty_live_capture_ledger()
             self._pending_subtitle_reset_source = ""
             self._pending_subtitle_reset_timer = QTimer(self)
@@ -319,9 +318,8 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
 
                 # 초기화
                 self.subtitle_text.clear()
-                with self.subtitle_lock:
-                    self.subtitles = []
                 self.capture_state = create_empty_capture_state()
+                self._bind_subtitles_to_capture_state()
                 self.live_capture_ledger = create_empty_live_capture_ledger()
                 self._cancel_scheduled_subtitle_reset()
                 self._cached_total_chars = 0
@@ -330,6 +328,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 self._last_rendered_last_text = ""
                 self._last_render_offset = 0
                 self._last_render_show_ts = None
+                self._last_render_chunk_specs = []
                 self._last_printed_ts = None
                 self._update_count_label()
 

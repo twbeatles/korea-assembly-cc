@@ -2,6 +2,7 @@ import threading
 from pathlib import Path
 
 from core.config import Config
+from core.models import SubtitleEntry
 from database import DatabaseManager
 
 
@@ -87,5 +88,32 @@ def test_database_default_path_uses_config(monkeypatch, tmp_path):
     db = DatabaseManager()
     try:
         assert Path(db.db_path).resolve() == expected.resolve()
+    finally:
+        db.close_all()
+
+
+def test_database_save_session_accepts_subtitle_entry_objects(tmp_path):
+    db_path = tmp_path / "subtitle_history.db"
+    db = DatabaseManager(str(db_path))
+    try:
+        subtitles = [
+            SubtitleEntry("첫 문장"),
+            SubtitleEntry("둘째 문장"),
+        ]
+        session_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": subtitles,
+                "duration_seconds": 12,
+                "version": "test",
+            }
+        )
+
+        loaded = db.load_session(session_id)
+        assert loaded is not None
+        assert loaded["total_subtitles"] == 2
+        assert loaded["total_characters"] == len("첫 문장") + len("둘째 문장")
+        assert [row["text"] for row in loaded["subtitles"]] == ["첫 문장", "둘째 문장"]
     finally:
         db.close_all()

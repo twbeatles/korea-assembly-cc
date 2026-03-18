@@ -7,15 +7,30 @@ from ui.main_window_types import MainWindowHost
 
 class MainWindowPipelineMixin(MainWindowHost):
 
+    def _bind_subtitles_to_capture_state(self) -> None:
+            if not hasattr(self, "capture_state") or not isinstance(
+                self.capture_state, CaptureSessionState
+            ):
+                return
+            with self.subtitle_lock:
+                if getattr(self, "subtitles", None) is not self.capture_state.entries:
+                    self.subtitles = self.capture_state.entries
+
+
     def _ensure_capture_runtime_state(self) -> None:
             if not hasattr(self, "capture_state") or not isinstance(
                 self.capture_state, CaptureSessionState
             ):
                 state = create_empty_capture_state()
-                state.entries = list(getattr(self, "subtitles", []))
+                existing_entries = getattr(self, "subtitles", [])
+                if isinstance(existing_entries, list):
+                    state.entries = existing_entries
+                else:
+                    state.entries = list(existing_entries)
                 if state.entries:
                     rebuild_confirmed_history(state)
                 self.capture_state = state
+            self._bind_subtitles_to_capture_state()
             if not hasattr(self, "live_capture_ledger"):
                 self.live_capture_ledger = create_empty_live_capture_ledger()
             if not hasattr(self, "_pending_subtitle_reset_source"):
@@ -41,8 +56,7 @@ class MainWindowPipelineMixin(MainWindowHost):
 
     def _sync_capture_state_entries(self, force_refresh: bool = False) -> None:
             self._ensure_capture_runtime_state()
-            with self.subtitle_lock:
-                self.subtitles = list(self.capture_state.entries)
+            self._bind_subtitles_to_capture_state()
             self._rebuild_stats_cache()
             self._update_count_label()
             self._refresh_text(force_full=force_refresh)
@@ -50,6 +64,31 @@ class MainWindowPipelineMixin(MainWindowHost):
                 getattr(self.live_capture_ledger, "preview_text", "")
                 or self.capture_state.preview_text
             )
+            self._set_preview_text(preview_text)
+
+
+    def _apply_capture_pipeline_refresh(
+            self,
+            *,
+            preview_text: str,
+            appended_entries: list[SubtitleEntry] | None = None,
+            updated_existing: bool = False,
+            force_refresh: bool = False,
+        ) -> None:
+            self._ensure_capture_runtime_state()
+            self._bind_subtitles_to_capture_state()
+
+            for entry in appended_entries or []:
+                self._cached_total_chars += entry.char_count
+                self._cached_total_words += entry.word_count
+
+            if updated_existing:
+                self._rebuild_stats_cache()
+
+            if appended_entries or updated_existing:
+                self._update_count_label()
+                self._refresh_text(force_full=force_refresh)
+
             self._set_preview_text(preview_text)
 
 
@@ -101,7 +140,7 @@ class MainWindowPipelineMixin(MainWindowHost):
 
 
     def _build_prepared_entries_snapshot(self) -> list[SubtitleEntry]:
-            return list(self._build_prepared_capture_state().entries)
+            return self._build_prepared_capture_state().entries
 
 
     def _coerce_frame_path(self, value: object) -> tuple[int, ...]:
@@ -178,31 +217,21 @@ class MainWindowPipelineMixin(MainWindowHost):
     def _build_preview_payload_from_probe(
             self,
             probe_result: dict[str, Any],
-        ) -> dict[str, Any]:
-            rows = [
-                {
-                    "nodeKey": row.node_key,
-                    "text": row.text,
-                    "speakerColor": row.speaker_color,
-                    "speakerChannel": row.speaker_channel,
-                    "unstableKey": row.unstable_key,
-                }
-                for row in self._coerce_observed_rows(probe_result.get("rows", []))
-            ]
-            return {
-                "raw": self._normalize_subtitle_text_for_option(
+        ) -> StructuredPreviewPayload:
+            return StructuredPreviewPayload(
+                raw=self._normalize_subtitle_text_for_option(
                     probe_result.get("text", "")
                 ).strip(),
-                "rows": rows,
-                "selector": str(
+                rows=self._coerce_observed_rows(probe_result.get("rows", [])),
+                selector=str(
                     probe_result.get("matched_selector")
                     or probe_result.get("selector")
                     or ""
                 ),
-                "frame_path": self._coerce_frame_path(
+                frame_path=self._coerce_frame_path(
                     probe_result.get("frame_path") or probe_result.get("framePath")
                 ),
-            }
+            )
 
 
     def _apply_structured_preview_payload(
@@ -210,22 +239,27 @@ class MainWindowPipelineMixin(MainWindowHost):
             payload: object,
             now: datetime | None = None,
         ) -> bool:
-            if not isinstance(payload, dict):
+            if isinstance(payload, StructuredPreviewPayload):
+                selector = payload.selector.strip()
+                frame_path = payload.frame_path
+                observed_rows = list(payload.rows)
+                raw = self._normalize_subtitle_text_for_option(payload.raw).strip()
+            elif isinstance(payload, dict):
+                selector = str(
+                    payload.get("selector") or payload.get("matched_selector") or ""
+                ).strip()
+                frame_path = self._coerce_frame_path(
+                    payload.get("frame_path") or payload.get("framePath")
+                )
+                observed_rows = self._coerce_observed_rows(payload.get("rows", []))
+                raw = self._normalize_subtitle_text_for_option(
+                    payload.get("raw") or payload.get("text") or ""
+                ).strip()
+            else:
                 return False
 
             self._ensure_capture_runtime_state()
             now = now or datetime.now()
-            selector = str(
-                payload.get("selector") or payload.get("matched_selector") or ""
-            ).strip()
-            frame_path = self._coerce_frame_path(
-                payload.get("frame_path") or payload.get("framePath")
-            )
-            observed_rows = self._coerce_observed_rows(payload.get("rows", []))
-            raw = self._normalize_subtitle_text_for_option(
-                payload.get("raw") or payload.get("text") or ""
-            ).strip()
-
             self._cancel_scheduled_subtitle_reset()
 
             event = normalize_capture_event(
@@ -239,6 +273,8 @@ class MainWindowPipelineMixin(MainWindowHost):
             self.live_capture_ledger = reconciliation.ledger
             settings = self._current_capture_settings()
             changed = reconciliation.changed
+            appended_entries: list[SubtitleEntry] = []
+            updated_existing = False
             force_refresh = False
 
             if event.rows:
@@ -286,6 +322,10 @@ class MainWindowPipelineMixin(MainWindowHost):
                         )
 
                     changed = changed or result.changed
+                    if result.appended_entry:
+                        appended_entries.append(result.appended_entry)
+                    elif result.updated_entry:
+                        updated_existing = True
                     committed_entry = result.updated_entry or result.appended_entry
                     if committed_entry and committed_entry.entry_id:
                         self.live_capture_ledger = set_live_row_baseline(
@@ -298,6 +338,11 @@ class MainWindowPipelineMixin(MainWindowHost):
                             row_change.key,
                             committed_entry.entry_id,
                         )
+                    if (
+                        result.updated_entry
+                        and self.capture_state.entries
+                        and result.updated_entry is not self.capture_state.entries[-1]
+                    ):
                         force_refresh = True
 
                 self.capture_state.preview_text = event.preview_text
@@ -320,11 +365,17 @@ class MainWindowPipelineMixin(MainWindowHost):
                     ),
                 )
                 changed = changed or preview_result.changed
-                force_refresh = force_refresh or bool(
-                    preview_result.appended_entry or preview_result.updated_entry
-                )
+                if preview_result.appended_entry:
+                    appended_entries.append(preview_result.appended_entry)
+                elif preview_result.updated_entry:
+                    updated_existing = True
 
-            self._sync_capture_state_entries(force_refresh=force_refresh)
+            self._apply_capture_pipeline_refresh(
+                preview_text=event.preview_text,
+                appended_entries=appended_entries,
+                updated_existing=updated_existing,
+                force_refresh=force_refresh,
+            )
             return changed
 
 
@@ -561,10 +612,10 @@ class MainWindowPipelineMixin(MainWindowHost):
             if keep_history_from_subtitles is None:
                 keep_history_from_subtitles = bool(new_subtitles)
 
-            with self.subtitle_lock:
-                self.subtitles = list(new_subtitles)
+            entries = new_subtitles if isinstance(new_subtitles, list) else list(new_subtitles)
             self.capture_state = create_empty_capture_state()
-            self.capture_state.entries = list(new_subtitles)
+            self.capture_state.entries = entries
+            self._bind_subtitles_to_capture_state()
             if keep_history_from_subtitles and self.capture_state.entries:
                 rebuild_confirmed_history(
                     self.capture_state,
@@ -582,11 +633,13 @@ class MainWindowPipelineMixin(MainWindowHost):
     def _process_message_queue(self):
             """메시지 큐 처리 (100ms마다 호출) - 예외 처리 강화"""
             try:
-                # 최대 10개 메시지까지 처리 (무한 루프 방지)
-                for _ in range(10):
+                deadline = time.perf_counter() + 0.008
+                processed = 0
+                while processed < 50 and time.perf_counter() <= deadline:
                     try:
                         msg_type, data = self.message_queue.get_nowait()
                         self._handle_message(msg_type, data)
+                        processed += 1
                     except queue.Empty:
                         break
             except Exception as e:
@@ -1210,7 +1263,6 @@ class MainWindowPipelineMixin(MainWindowHost):
             self._ensure_capture_runtime_state()
             result = apply_keepalive(self.capture_state, raw, datetime.now())
             if result.changed:
-                self._sync_capture_state_entries(force_refresh=False)
                 return
 
             if self.last_subtitle:

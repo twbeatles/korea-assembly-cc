@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.1
+- **버전**: v16.14.2
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ## 2. 기술 스택
@@ -31,14 +31,14 @@
 ┌───────────────────────▼──────────────────────┐
 │         Worker Thread (Background)           │
 │  - Selenium 구동                              │
-│  - MutationObserver 우선 + 폴링 fallback     │
+│  - event-driven hybrid probe                  │
 │  - keepalive 기반 end_time 연장                │
 │  - 자동 재연결 (지수 백오프)                   │
 │  - stop_event 기반 안전 종료                  │
 └───────────────────────┬──────────────────────┘
                         │
 ┌───────────────────────▼──────────────────────┐
-│         DatabaseManager (database.py)        │
+│   DatabaseManager (core/database_manager.py) │
 │  - SQLite 세션/자막 저장 및 검색               │
 └──────────────────────────────────────────────┘
 ```
@@ -52,16 +52,18 @@
 - 스마트 스크롤: 사용자가 스크롤하면 자동 스크롤 일시 중지 및 위치 유지
 
 ### 4.2 자막 처리 흐름
-1. Worker: MutationObserver 우선, 폴링 fallback → compact 기준 중복 전송 억제 후 `preview` 전송
+1. Worker: MutationObserver 우선, observer idle 시 `observer change`/`keepalive`/`1.0초 health probe`에서만 structured probe 수행 후 `preview` 전송
 2. Worker: 시작/재연결 시 URL에 `xcgcd`가 없으면 `xcode` 기준 자동 감지를 1회 수행해 보완 URL로 재접속
 3. Worker: 선택자 우선순위(`.smi_word:last-child` 우선) + 기본 문서/iframe 순회로 자막 요소 탐색
 4. Worker: `.smi_word`는 단일 노드 대신 목록 전체를 수집해 최근 창(window) 텍스트로 조합
-5. Worker: 타겟 미탐색 시 `allow_poll_fallback` 기반 JS 폴링 브리지 활성화
-6. UI: `_prepare_preview_raw`에서 정규화/게이팅/재동기화 처리 (desync 시 `_soft_resync`)
-7. Core: `_process_raw_text`(GlobalHistory + Suffix, `rfind` 기반)로 새 부분 추출
-8. 후단 정제: `get_word_diff` + recent compact tail 체크 + 유의미 텍스트 게이트(짧은 발화 허용/노이즈 차단)
-9. 중지 시: `_drain_pending_previews`로 큐를 소진하고 강제 플러시로 누락 방지
-10. 동일 자막 유지 시: 마지막 엔트리 `end_time` 주기 갱신
+5. Worker: frame path cache / active selector cache를 재사용하고, 타겟 미탐색 시 `allow_poll_fallback` 기반 JS 폴링 브리지 활성화
+6. Worker: preview 기본 계약은 `StructuredPreviewPayload`이며 legacy dict 수신도 유지
+7. UI: `_prepare_preview_raw`에서 정규화/게이팅/재동기화 처리 (desync 시 `_soft_resync`)
+8. Core: `_process_raw_text`(GlobalHistory + Suffix, `rfind` 기반)로 새 부분 추출
+9. 후단 정제: `get_word_diff` + recent compact tail 체크 + 유의미 텍스트 게이트(짧은 발화 허용/노이즈 차단)
+10. UI/Persistence: `capture_state.entries` 단일화, delta render/tail patch, `snapshot_clone()` + streaming JSON 저장
+11. 중지 시: `_drain_pending_previews`로 큐를 소진하고 강제 플러시로 누락 방지
+12. 동일 자막 유지 시: 마지막 엔트리 `end_time` 주기 갱신
 
 ### 4.3 예외 처리
 - 파일 I/O: `try-except` 필수
@@ -332,7 +334,21 @@ pip install -r requirements-dev.txt
 - **Observer 타겟 보강**: `.incont`/`#viewSubtit` 컨테이너 우선 탐색으로 DOM 구조 변화 대응 강화
 - **긴 텍스트 축약 보강**: Observer 버퍼에 과도한 컨테이너 텍스트가 들어올 때 최근 라인 중심으로 축약
 
-## 9.9 v16.14.1 자동 줄넘김 정리 기본 활성화 (2026-03-17)
+## 9.9 v16.14.2 성능 최적화 중심 리팩토링
+### ⚙️ Worker CPU 절감
+- observer idle 상태에서는 매 200ms full probe를 반복하지 않고 `1.0초 health probe`와 change/keepalive/reconnect 시점에만 structured probe 수행
+- selector refresh(`5초`)와 frame inventory refresh(`10초`)를 분리하고 frame path cache를 재사용
+### 🧠 Pipeline / Memory 최적화
+- `confirmed_segments` 증분 갱신으로 append/tail update hot path에서 전체 history rebuild를 피함
+- `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()`, streaming JSON 저장으로 메모리 피크 완화
+### 🖥️ UI 체감 성능
+- `capture_state.entries`를 단일 source of truth로 유지하고, `PipelineResult` delta 기준 append/tail update만 증분 반영
+- 마지막 visible row 수정은 tail patch render를 사용하고 queue drain은 `약 8ms / 최대 50건` 예산으로 처리
+### ✅ 검증 상태
+- `commit_live_row` 1,500회 benchmark 약 `10.3초 -> 3.8초`
+- `pytest -q` 59 pass, `pyright` 0 errors
+
+## 9.10 v16.14.1 자동 줄넘김 정리 기본 활성화 (2026-03-17)
 ### 🧹 자동 줄넘김 정리 옵션
 - 메인 옵션 영역에 `✨ 자동 줄넘김 정리` 체크박스를 추가하고 기본값을 활성화
 - 설정은 `QSettings`에 저장되며, 수집 중 줄바꿈/빈 줄만 자동 정리하고 자막 내용은 유지
@@ -340,7 +356,7 @@ pip install -r requirements-dev.txt
 - `core/subtitle_pipeline.py`가 `auto_clean_newlines` 설정을 읽어 preview/live-row/flush 경로의 정규화를 통일
 - 옵션이 꺼진 경우 개행을 유지하는 회귀 테스트로 기본 동작과 예외 경로를 함께 검증
 
-## 9.10 v16.14.0 크롬 파이프라인 정리 + SOLID 분할 리팩토링 (2026-03-16)
+## 9.11 v16.14.0 크롬 파이프라인 정리 + SOLID 분할 리팩토링 (2026-03-16)
 ### 🧩 코어 구조 고정
 - `core/live_capture.py`와 `core/subtitle_pipeline.py`를 기준 구조로 유지하고, row reconciliation / grace reset / prepared snapshot 동작을 운영 기본 경로로 고정
 ### 🏗️ MainWindow 책임 분리
@@ -350,7 +366,7 @@ pip install -r requirements-dev.txt
 ### 🛡️ Pylance / UTF-8 회귀 보강
 - `ui/main_window_types.py`의 `MainWindowHost`로 분할 mixin의 공통 `self` 타입을 고정하고, `tests/test_pyright_regression.py`와 확장된 `tests/test_encoding_hygiene.py`로 품질 게이트를 강화
 
-## 9.11 v16.13.2 운영 정합성 업데이트 (2026-03-05)
+## 9.12 v16.13.2 운영 정합성 업데이트 (2026-03-05)
 
 ### 🔒 종료 lifecycle 통합
 - 파일 저장/세션 저장·불러오기/DB task를 공통 백그라운드 레지스트리로 추적

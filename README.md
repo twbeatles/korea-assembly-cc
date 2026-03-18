@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.14.1
+# 🏛️ 국회 의사중계 자막 추출기 v16.14.2
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 데스크톱 프로그램입니다.
 
@@ -10,6 +10,7 @@
 ---
 
 ## 📋 목차
+- [성능 최적화 중심 리팩토링 (v16.14.2)](#-v16142-성능-최적화-중심-리팩토링-2026-03-18)
 - [자동 줄넘김 정리 기본 활성화 (v16.14.1)](#-v16141-자동-줄넘김-정리-기본-활성화-2026-03-17)
 - [크롬 파이프라인 정리 + SOLID 분할 리팩토링 (v16.14.0)](#-v16140-크롬-파이프라인-정리--solid-분할-리팩토링-2026-03-16)
 - [운영 정합성 업데이트 (v16.13.2)](#-v16132-운영-정합성-업데이트-2026-03-05)
@@ -25,6 +26,32 @@
 - [빌드 방법](#️-빌드-방법)
 - [변경 이력](#-변경-이력)
 - [파이프라인 고정 문서](#-파이프라인-고정-문서)
+
+---
+
+## ✨ v16.14.2 성능 최적화 중심 리팩토링 (2026-03-18)
+
+### ⚙️ 수집 CPU 사용량 절감
+- `MutationObserver`가 살아 있을 때는 매 200ms full probe를 반복하지 않고, `observer change`, `keepalive`, `1.0초 health probe` 시점에만 structured probe를 수행합니다.
+- selector 재탐색은 `5.0초`, frame inventory refresh는 `10.0초` cadence로 제한하고, frame path 캐시를 재사용합니다.
+- 큰 JS probe 본문은 프레임별 1회 bridge 주입 후 짧은 호출만 반복해 브라우저 쪽 CPU/직렬화 비용을 낮췄습니다.
+
+### 🧠 파이프라인 / 메모리 최적화
+- `core/subtitle_pipeline.py`는 `confirmed_segments` 기반 증분 갱신으로 hot path append/tail update에서 전체 history rebuild를 피합니다.
+- `SubtitleEntry`는 `__slots__` + compact cache를 사용하고, `CaptureSessionState.snapshot_clone()`은 no-preview 경로에서 기존 엔트리를 재복제하지 않습니다.
+- 세션 저장/자동 백업은 `atomic_write_json_stream()`으로 JSON 배열을 스트리밍 저장하고, DB 저장은 `SubtitleEntry` 객체 리스트를 직접 소비해 중간 dict 복제를 줄였습니다.
+
+### 🖥️ UI 체감 성능 개선
+- `capture_state.entries`를 단일 source of truth로 두고 `self.subtitles`는 alias로 유지합니다.
+- append/tail update는 `PipelineResult` delta 기반으로 통계/카운트/렌더링을 증분 반영하고, 마지막 visible entry 수정은 full clear 대신 tail patch를 사용합니다.
+- queue drain은 고정 10건 대신 `약 8ms` 예산과 `최대 50건` cap으로 처리해 burst backlog를 줄였습니다.
+
+### ✅ 현재 검증 상태
+- `commit_live_row` 1,500회 benchmark: 약 `10.3초 -> 3.8초`
+- `pytest -q`: `63 passed`
+- `pyright --outputjson`: `0 errors`
+- `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`를 `v16.14.2` 기준으로 동기화했습니다.
+- PyInstaller hidden import 목록을 현재 분할 구조와 optional import 경로 기준으로 재점검했습니다.
 
 ---
 
@@ -428,7 +455,7 @@ pip install pyinstaller
 pyinstaller subtitle_extractor.spec
 
 # 결과물
-dist/국회의사중계자막추출기 v16.14.1.exe
+dist/국회의사중계자막추출기 v16.14.2.exe
 ```
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
@@ -438,6 +465,15 @@ dist/국회의사중계자막추출기 v16.14.1.exe
 ---
 
 ## 📝 변경 이력
+
+### v16.14.2 (2026-03-18)
+- Worker를 event-driven hybrid로 정리해 observer idle 상태에서 full probe를 health cadence(`1.0초`)로 제한
+- frame path / selector 캐시, JS bridge 재사용, typed preview payload(`StructuredPreviewPayload`) 기본 계약 도입
+- `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()`으로 저장/백업 메모리 증폭 완화
+- `atomic_write_json_stream()` 기반 스트리밍 JSON 저장과 `SubtitleEntry` 직접 DB 저장 경로 추가
+- `capture_state.entries` 단일화, tail patch render, queue drain time budget으로 UI 갱신 비용 절감
+- `subtitle_extractor.spec` hidden import 기준을 현재 모듈 구조와 optional import 경로에 맞게 재점검
+- 성능 회귀 테스트 추가 후 `pytest -q` 63개 전체 통과, `pyright` 0 errors 확인
 
 ### v16.14.1 (2026-03-17)
 - `✨ 자동 줄넘김 정리` 옵션 추가 및 기본 활성화

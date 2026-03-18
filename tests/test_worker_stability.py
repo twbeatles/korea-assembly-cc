@@ -2,6 +2,7 @@ import queue
 import threading
 
 import pytest
+import ui.main_window_capture as capture_mod
 
 mw_mod = pytest.importorskip("ui.main_window")
 MainWindow = mw_mod.MainWindow
@@ -60,6 +61,23 @@ class _StopAfterSecondWaitEvent:
     def wait(self, timeout=None):
         self._wait_calls += 1
         if self._wait_calls >= 2:
+            self._is_set = True
+            return True
+        return False
+
+
+class _StopAfterNWaitsEvent:
+    def __init__(self, wait_limit):
+        self._wait_calls = 0
+        self._wait_limit = wait_limit
+        self._is_set = False
+
+    def is_set(self):
+        return self._is_set
+
+    def wait(self, timeout=None):
+        self._wait_calls += 1
+        if self._wait_calls >= self._wait_limit:
             self._is_set = True
             return True
         return False
@@ -331,3 +349,44 @@ def test_read_subtitle_text_flattens_container_line_breaks():
     assert found is True
     assert matched_selector == "#viewSubtit"
     assert text == "첫 문장 둘째 문장 셋째 문장"
+
+
+def test_extraction_worker_uses_health_probe_when_observer_is_idle(monkeypatch):
+    driver = _FakeDriver()
+    win = _build_window(
+        auto_reconnect_enabled=False,
+        stop_event=_StopAfterNWaitsEvent(wait_limit=10),
+    )
+    _configure_basic_worker_stubs(win)
+
+    time_values = iter(index * 0.25 for index in range(64))
+    probe_calls = []
+    frame_refresh_calls = []
+
+    monkeypatch.setattr(capture_mod.time, "time", lambda: next(time_values))
+    monkeypatch.setattr(mw_mod.webdriver, "Chrome", lambda options=None: driver)
+    monkeypatch.setattr(mw_mod, "WebDriverWait", _FakeWebDriverWait)
+
+    win._iter_frame_paths = lambda _driver, max_depth=3, max_frames=60: (
+        frame_refresh_calls.append((max_depth, max_frames)) or []
+    )
+    win._inject_mutation_observer = lambda _driver, _selector: (True, ())
+    win._collect_observer_changes = lambda _driver, _frame_path: []
+    win._read_subtitle_probe_by_selectors = (
+        lambda _driver, _selectors, preferred_frame_path=(), **_kwargs: (
+            probe_calls.append(preferred_frame_path)
+            or {
+                "text": "",
+                "matched_selector": "#viewSubtit",
+                "found": True,
+                "rows": [],
+                "frame_path": preferred_frame_path,
+                "source_mode": "observer",
+            }
+        )
+    )
+
+    MainWindow._extraction_worker(win, "https://example.com/live", "#viewSubtit", False)
+
+    assert len(frame_refresh_calls) == 1
+    assert len(probe_calls) == 3

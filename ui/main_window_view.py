@@ -23,11 +23,15 @@ class MainWindowViewMixin(MainWindowHost):
                 return
             content = (text or "").strip()
             if content:
-                self.preview_label.setText(content)
-                self.preview_frame.show()
+                if self.preview_label.text() != content:
+                    self.preview_label.setText(content)
+                if not self.preview_frame.isVisible():
+                    self.preview_frame.show()
             else:
-                self.preview_label.setText("")
-                self.preview_frame.hide()
+                if self.preview_label.text():
+                    self.preview_label.setText("")
+                if self.preview_frame.isVisible():
+                    self.preview_frame.hide()
 
 
     def _clear_preview(self) -> None:
@@ -38,6 +42,76 @@ class MainWindowViewMixin(MainWindowHost):
     def _update_preview(self, raw: str) -> None:
             """미리보기 업데이트 (별도 UI)"""
             self._set_preview_text(raw)
+
+
+    def _build_render_chunk(
+            self,
+            entry: SubtitleEntry,
+            previous_entry: SubtitleEntry | None,
+            show_ts: bool,
+            last_printed_ts: datetime | None,
+        ) -> tuple[str, str, datetime | None]:
+            separator = ""
+            same_second = False
+            if previous_entry is not None:
+                same_second = entry.timestamp.replace(
+                    microsecond=0
+                ) == previous_entry.timestamp.replace(microsecond=0)
+                separator = " " if same_second else "\n"
+
+            prefix = ""
+            next_last_printed_ts = last_printed_ts
+            if show_ts and not same_second:
+                should_print = False
+                if last_printed_ts is None:
+                    should_print = True
+                elif (entry.timestamp - last_printed_ts).total_seconds() >= 60:
+                    should_print = True
+
+                if should_print:
+                    prefix = f"[{entry.timestamp.strftime('%H:%M:%S')}] "
+                    next_last_printed_ts = entry.timestamp
+
+            return separator, prefix, next_last_printed_ts
+
+
+    def _insert_render_chunk(
+            self,
+            cursor,
+            separator: str,
+            prefix: str,
+            text: str,
+        ) -> None:
+            if separator:
+                cursor.insertText(separator, self._normal_fmt)
+            if prefix:
+                cursor.insertText(prefix, self._timestamp_fmt)
+            self._insert_highlighted_text(cursor, text)
+
+
+    def _patch_last_render_chunk(self, text: str) -> bool:
+            specs = getattr(self, "_last_render_chunk_specs", [])
+            if not specs:
+                return False
+
+            document = self.subtitle_text.document()
+            if document is None:
+                return False
+
+            start_pos = sum(len(sep) + len(prefix) + len(chunk_text) for sep, prefix, chunk_text in specs[:-1])
+            cursor = self.subtitle_text.textCursor()
+            cursor.setPosition(start_pos)
+            cursor.setPosition(
+                document.characterCount() - 1,
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+            cursor.removeSelectedText()
+
+            separator, prefix, _old_text = specs[-1]
+            self._insert_render_chunk(cursor, separator, prefix, text)
+            specs[-1] = (separator, prefix, text)
+            self._last_render_chunk_specs = specs
+            return True
 
 
     def _render_subtitles(self, force_full: bool = False) -> None:
@@ -79,6 +153,10 @@ class MainWindowViewMixin(MainWindowHost):
             show_ts_changed = (
                 self._last_render_show_ts is not None and show_ts != self._last_render_show_ts
             )
+            tail_text_changed = (
+                total_count == self._last_rendered_count
+                and last_text != self._last_rendered_last_text
+            )
 
             needs_full_render = (
                 force_full
@@ -86,80 +164,55 @@ class MainWindowViewMixin(MainWindowHost):
                 or show_ts_changed
                 or (total_count < self._last_rendered_count)
                 or (previous_visible_count > visible_count)
-                or (
-                    total_count == self._last_rendered_count
-                    and last_text != self._last_rendered_last_text
-                )
             )
 
             if needs_full_render:
                 self.subtitle_text.clear()
                 self._last_printed_ts = None  # 풀 렌더링 시 초기화
                 cursor = self.subtitle_text.textCursor()
+                chunk_specs: list[tuple[str, str, str]] = []
+                last_printed_ts = None
 
                 for i, entry in enumerate(subtitles_copy):
-                    same_second = False
-                    if i > 0:
-                        prev_entry = subtitles_copy[i - 1]
-                        same_second = entry.timestamp.replace(
-                            microsecond=0
-                        ) == prev_entry.timestamp.replace(microsecond=0)
-                        cursor.insertText(" " if same_second else "\n")
+                    prev_entry = subtitles_copy[i - 1] if i > 0 else None
+                    separator, prefix, last_printed_ts = self._build_render_chunk(
+                        entry,
+                        prev_entry,
+                        show_ts,
+                        last_printed_ts,
+                    )
+                    self._insert_render_chunk(cursor, separator, prefix, entry.text)
+                    chunk_specs.append((separator, prefix, entry.text))
 
-                    if show_ts:
-                        # 1분 간격 타임스탬프 로직
-                        should_print = False
-                        if not same_second:
-                            if self._last_printed_ts is None:
-                                should_print = True
-                            elif (
-                                entry.timestamp - self._last_printed_ts
-                            ).total_seconds() >= 60:
-                                should_print = True
+                self._last_printed_ts = last_printed_ts
+                self._last_render_chunk_specs = chunk_specs
 
-                        if should_print:
-                            cursor.insertText(
-                                f"[{entry.timestamp.strftime('%H:%M:%S')}] ",
-                                self._timestamp_fmt,
-                            )
-                            self._last_printed_ts = entry.timestamp
-
-                    self._insert_highlighted_text(cursor, entry.text)
+            elif tail_text_changed and visible_count == previous_visible_count and visible_count > 0:
+                if not self._patch_last_render_chunk(last_text):
+                    self._render_subtitles(force_full=True)
+                    return
 
             else:
                 cursor = self.subtitle_text.textCursor()
                 cursor.movePosition(QTextCursor.MoveOperation.End)
+                chunk_specs = list(getattr(self, "_last_render_chunk_specs", []))
+                last_printed_ts = self._last_printed_ts
 
                 start_local_idx = min(previous_visible_count, visible_count)
                 for local_idx in range(start_local_idx, visible_count):
                     entry = subtitles_copy[local_idx]
-                    same_second = False
-                    if local_idx > 0:
-                        prev_entry = subtitles_copy[local_idx - 1]
-                        same_second = entry.timestamp.replace(
-                            microsecond=0
-                        ) == prev_entry.timestamp.replace(microsecond=0)
-                        cursor.insertText(" " if same_second else "\n")
+                    prev_entry = subtitles_copy[local_idx - 1] if local_idx > 0 else None
+                    separator, prefix, last_printed_ts = self._build_render_chunk(
+                        entry,
+                        prev_entry,
+                        show_ts,
+                        last_printed_ts,
+                    )
+                    self._insert_render_chunk(cursor, separator, prefix, entry.text)
+                    chunk_specs.append((separator, prefix, entry.text))
 
-                    if show_ts:
-                        # 1분 간격 타임스탬프 로직 (증분)
-                        should_print = False
-                        if not same_second:
-                            if self._last_printed_ts is None:
-                                should_print = True
-                            elif (
-                                entry.timestamp - self._last_printed_ts
-                            ).total_seconds() >= 60:
-                                should_print = True
-
-                        if should_print:
-                            cursor.insertText(
-                                f"[{entry.timestamp.strftime('%H:%M:%S')}] ",
-                                self._timestamp_fmt,
-                            )
-                            self._last_printed_ts = entry.timestamp
-
-                    self._insert_highlighted_text(cursor, entry.text)
+                self._last_printed_ts = last_printed_ts
+                self._last_render_chunk_specs = chunk_specs
 
             self._last_rendered_count = total_count
             self._last_rendered_last_text = last_text

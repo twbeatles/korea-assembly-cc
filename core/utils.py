@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 
-from core.file_io import atomic_write_bytes, atomic_write_json, atomic_write_text
+from core.file_io import (
+    atomic_write_bytes,
+    atomic_write_json,
+    atomic_write_json_stream,
+    atomic_write_text,
+    iter_serialized_subtitles,
+)
 from core.reflow import reflow_subtitles
 from core.text_utils import (
     _find_match_with_window,
