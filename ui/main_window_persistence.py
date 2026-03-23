@@ -3,6 +3,7 @@
 from ui.main_window_common import *
 from ui.main_window_common import _import_optional_module
 from ui.main_window_types import MainWindowHost
+from core.hwpx_export import save_hwpx_document
 
 
 class MainWindowPersistenceMixin(MainWindowHost):
@@ -431,6 +432,30 @@ class MainWindowPersistenceMixin(MainWindowHost):
                     doc.save(filepath)
 
                 self._save_in_background(do_save, path, "DOCX 저장 완료!", "DOCX 저장 실패")
+
+
+    def _save_hwpx(self):
+            """HWPX 파일로 저장"""
+            prepared_entries = self._build_prepared_entries_snapshot()
+            if not prepared_entries:
+                QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
+                return
+
+            filename = self._generate_smart_filename("hwpx")
+            path, _ = QFileDialog.getSaveFileName(
+                self, "HWPX 저장", filename, "한글 문서 (*.hwpx)"
+            )
+
+            if path:
+                subtitles_snapshot = [
+                    (entry.timestamp, entry.text) for entry in prepared_entries
+                ]
+                generated_at = datetime.now()
+
+                def do_save(filepath):
+                    save_hwpx_document(filepath, subtitles_snapshot, generated_at)
+
+                self._save_in_background(do_save, path, "HWPX 저장 완료!", "HWPX 저장 실패")
 
 
     def _save_hwp(self):

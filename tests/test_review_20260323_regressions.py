@@ -4,6 +4,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from zipfile import ZipFile
 
 import pytest
 
@@ -233,6 +234,42 @@ def test_save_srt_and_vtt_keep_fallback_when_end_time_is_missing(tmp_path, monke
 
     assert "09:00:00,000 --> 09:00:03,000" in srt_path.read_text(encoding="utf-8")
     assert "09:00:00.000 --> 09:00:03.000" in vtt_path.read_text(encoding="utf-8")
+
+
+def test_save_hwpx_writes_basic_package_with_preview_text(tmp_path, monkeypatch):
+    win = _build_window()
+    entries = [
+        SubtitleEntry("첫 문장", datetime(2026, 3, 23, 10, 0, 0)),
+        SubtitleEntry("둘째 문장", datetime(2026, 3, 23, 10, 1, 5)),
+    ]
+    win._build_prepared_entries_snapshot = lambda: entries
+    win._generate_smart_filename = lambda extension: f"out.{extension}"
+    win._save_in_background = lambda save_func, path, *_args: save_func(path)
+
+    target = tmp_path / "output.hwpx"
+    monkeypatch.setattr(
+        persistence_mod.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(target), ""),
+    )
+
+    MainWindow._save_hwpx(win)
+
+    assert target.exists()
+    with ZipFile(target) as archive:
+        names = set(archive.namelist())
+        assert "mimetype" in names
+        assert "Contents/header.xml" in names
+        assert "Contents/section0.xml" in names
+        assert "Preview/PrvText.txt" in names
+        preview_text = archive.read("Preview/PrvText.txt").decode("utf-8")
+        section_xml = archive.read("Contents/section0.xml").decode("utf-8")
+
+    assert "국회 의사중계 자막" in preview_text
+    assert "[10:00:00] 첫 문장" in preview_text
+    assert "[10:01:05] 둘째 문장" in preview_text
+    assert "첫 문장" in section_xml
+    assert "둘째 문장" in section_xml
 
 
 def test_save_hwp_falls_back_to_rtf_when_pywin32_is_missing(monkeypatch):

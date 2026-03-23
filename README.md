@@ -222,7 +222,7 @@
 - 중복 자막 자동 제거 및 스마트 이어붙이기
 
 ### 💾 다양한 저장 형식
-TXT, SRT, VTT, DOCX, HWP, RTF, JSON 세션 저장
+TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션 저장
 
 ### 🔍 검색 및 하이라이트
 - **실시간 검색** (Ctrl+F)
@@ -259,6 +259,7 @@ pip install -r requirements-dev.txt
 ### 3. 선택 기능 참고
 - `requirements-dev.txt`에는 DOCX(`python-docx`)와 HWP(`pywin32`) 저장 기능용 패키지가 함께 정리되어 있습니다.
 - 최소 실행만 필요하면 `pip install PyQt6 selenium`만 설치해도 됩니다.
+- HWPX 저장은 추가 외부 프로그램 없이 기본 기능으로 사용할 수 있습니다.
 - HWP 저장은 Windows 환경과 한컴오피스가 추가로 필요합니다.
 
 ### 4. Chrome 브라우저
@@ -319,6 +320,7 @@ python "국회의사중계 자막.py"
 - **파일 → TXT 저장** (Ctrl+S) - 일반 텍스트
 - **파일 → SRT 저장** - 자막 파일 형식
 - **파일 → DOCX 저장** - Word 문서
+- **파일 → HWPX 저장** - 한글 문서(기본 포맷)
 - **파일 → 세션 저장** (Ctrl+Shift+S) - 나중에 다시 불러오기 가능 + DB 저장
 
 ---
@@ -368,6 +370,7 @@ python "국회의사중계 자막.py"
 | **SRT** | .srt | SubRip 자막 파일 | 없음 |
 | **VTT** | .vtt | WebVTT 자막 파일 | 없음 |
 | **DOCX** | .docx | Word 문서 | python-docx |
+| **HWPX** | .hwpx | 한글 문서 (기본 포맷) | 없음 |
 | **HWP** | .hwp | 한글 문서 | pywin32 + 한컴오피스 |
 | **RTF** | .rtf | 서식 있는 텍스트 (HWP 호환) | 없음 |
 | **JSON** | .json | 세션 저장 (복원 가능) | 없음 |
