@@ -227,7 +227,7 @@ def test_extraction_worker_detects_live_url_when_xcgcd_missing(monkeypatch):
 
     MainWindow._extraction_worker(win, original_url, "#viewSubtit", False)
 
-    assert detect_calls[:2] == [original_url, resolved_url]
+    assert detect_calls == [original_url]
     assert driver.get_calls[:2] == [original_url, resolved_url]
 
     queued = []
@@ -291,8 +291,7 @@ def test_extraction_worker_reconnect_reuses_detected_url(monkeypatch):
     assert len(drivers) >= 2
     assert drivers[0].get_calls[:2] == [original_url, detected_url]
     assert drivers[1].get_calls[0] == detected_url
-    assert detect_calls[0] == original_url
-    assert detect_calls[1] == detected_url
+    assert detect_calls == [original_url]
 
 
 def test_read_subtitle_text_collects_smi_word_window():

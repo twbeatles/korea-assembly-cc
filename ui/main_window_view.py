@@ -124,9 +124,10 @@ class MainWindowViewMixin(MainWindowHost):
                 saved_scroll = scrollbar.value()
                 scrollbar.blockSignals(True)
 
-            # Snapshot for rendering
+            # Snapshot for rendering: clone visible entries so incremental render does not
+            # observe live mutations after subtitle_lock is released.
             with self.subtitle_lock:
-                subtitles_copy = list(self.subtitles)
+                subtitles_copy = [entry.clone() for entry in self.subtitles]
 
             total_count = len(subtitles_copy)
 
@@ -288,104 +289,48 @@ class MainWindowViewMixin(MainWindowHost):
             """
             if not text:
                 return
+            text = str(text).strip()
+            if not text:
+                return
 
-            # [Fix] 중복 처리 방지: _process_raw_text에서 이미 처리된 텍스트면 건너뜀
-            # _last_processed_raw가 동일하면 이미 _process_raw_text에서 자막이 추가됨
-            if text == self._last_processed_raw:
+            # UI thread 전용 상태이므로 별도 락 없이 빠르게 중복 필터링한다.
+            last_processed_raw = self.__dict__.get("_last_processed_raw", "")
+            capture_state = self.__dict__.get("capture_state")
+            capture_last_processed_raw = (
+                getattr(capture_state, "last_processed_raw", "") if capture_state is not None else ""
+            )
+            if text == last_processed_raw or text == capture_last_processed_raw:
                 return
 
             # [Fix] 확정된 자막을 프로세서에 등록 (#SubtitleRepetitionFix)
             self.subtitle_processor.add_confirmed(text)
+            now = datetime.now()
+            new_part = text
+            force_new_entry = False
 
-            # 스레드 안전하게 자막 접근
             with self.subtitle_lock:
-                # 이전에 확정된 자막이 있으면, 겹치는 부분 제거
                 if self.subtitles:
                     last_text = self.subtitles[-1].text
-
-                    # [Smart Merge] 단어 단위 겹침 분석하여 새로운 단어만 추출
                     new_part = utils.get_word_diff(last_text, text)
-
                     if new_part:
-                        # [Length Check] 문장이 너무 길어지면 강제로 끊고 시 타임스탬프 생성
-                        current_len = len(last_text)
-                        new_len = len(new_part)
-
-                        # 기존 길이에 새 내용을 더했을 때 최대 길이를 초과하면 분리
-                        if current_len + new_len > Config.STREAM_SUBTITLE_MAX_LENGTH:
-                            entry = SubtitleEntry(new_part)
-                            entry.start_time = datetime.now()
-                            entry.end_time = datetime.now()
-                            self.subtitles.append(entry)
-                            # 통계 캐시 갱신
-                            self._cached_total_chars += entry.char_count
-                            self._cached_total_words += entry.word_count
-
-                            if self.realtime_file:
-                                try:
-                                    # 분리된 새 문장으로 저장
-                                    timestamp = entry.timestamp.strftime("%H:%M:%S")
-                                    self.realtime_file.write(f"[{timestamp}] {new_part}\n")
-                                    self.realtime_file.flush()
-                                except IOError as e:
-                                    logger.warning(f"실시간 저장 쓰기 오류: {e}")
-                        else:
-                            # 새로운 내용이 있으면 이어붙이기 - update_text()로 캐시 갱신 포함
-                            old_chars = self.subtitles[-1].char_count
-                            old_words = self.subtitles[-1].word_count
-                            self.subtitles[-1].update_text(
-                                self._join_stream_text(self.subtitles[-1].text, new_part)
-                            )
-                            self.subtitles[-1].end_time = datetime.now()
-                            # 통계 캐시 갱신
-                            self._cached_total_chars += (
-                                self.subtitles[-1].char_count - old_chars
-                            )
-                            self._cached_total_words += (
-                                self.subtitles[-1].word_count - old_words
-                            )
-
-                            # 실시간 저장
-                            if self.realtime_file:
-                                try:
-                                    # + 기호로 이어붙여진 내용임을 표시
-                                    self.realtime_file.write(f"+ {new_part}\n")
-                                    self.realtime_file.flush()
-                                except IOError as e:
-                                    logger.warning(f"실시간 저장 쓰기 오류: {e}")
-                        return
+                        new_part = new_part.strip()
+                    if new_part:
+                        force_new_entry = (
+                            len(last_text) + len(new_part)
+                            > Config.STREAM_SUBTITLE_MAX_LENGTH
+                        )
                     else:
-                        # 겹치는 내용만 있고 새로운 내용이 없으면 (부분집합)
-                        # 시간만 갱신하고 종료
-                        self.subtitles[-1].end_time = datetime.now()
+                        self.subtitles[-1].end_time = now
                         return
 
-                # 첫 번째 자막 또는 완전히 새로운 문장
-                entry = SubtitleEntry(text)
-                entry.start_time = datetime.now()
-                entry.end_time = datetime.now()
-
-                self.subtitles.append(entry)
-                # 통계 캐시 갱신
-                self._cached_total_chars += entry.char_count
-                self._cached_total_words += entry.word_count
-
-            # 키워드 알림 확인 (락 밖에서 - UI 작업)
-            self._check_keyword_alert(text)
-
-            # 카운트 라벨 업데이트
-            self._update_count_label()
-
-            # 실시간 저장
-            if self.realtime_file:
-                try:
-                    timestamp = entry.timestamp.strftime("%H:%M:%S")
-                    self.realtime_file.write(f"[{timestamp}] {text}\n")
-                    self.realtime_file.flush()
-                except IOError as e:
-                    logger.warning(f"실시간 저장 쓰기 오류: {e}")
-
-            self._refresh_text(force_full=False)
+            result = self._append_text_to_subtitles_shared(
+                new_part,
+                now=now,
+                force_new_entry=force_new_entry,
+            )
+            if result.get("changed"):
+                self.capture_state.last_processed_raw = text
+                self._last_processed_raw = text
 
 
     def _insert_highlighted_text(self, cursor, text):
@@ -535,7 +480,7 @@ class MainWindowViewMixin(MainWindowHost):
                 total_words = self._cached_total_words
 
                 self.stat_chars.setText(f"📝 글자 수: {total_chars:,}")
-                self.stat_words.setText(f"📖 단어 수: {total_words:,}")
+                self.stat_words.setText(f"📖 공백 기준 단어 수: {total_words:,}")
                 self.stat_sents.setText(f"💬 문장 수: {subtitle_count}")
 
                 if elapsed > 0:

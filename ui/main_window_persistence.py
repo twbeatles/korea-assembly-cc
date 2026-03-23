@@ -189,12 +189,12 @@ class MainWindowPersistenceMixin(MainWindowHost):
                         f.write("-" * 30 + "\n")
                         f.write(f"  총 문장 수: {len(subtitles_snapshot):,}개\n")
                         f.write(f"  총 글자 수: {total_chars:,}자\n")
-                        f.write(f"  총 단어 수: {total_words:,}개\n")
+                        f.write(f"  총 공백 기준 단어 수: {total_words:,}개\n")
                         f.write(
                             f"  평균 문장 길이: {total_chars / len(subtitles_snapshot):.1f}자\n"
                         )
                         f.write(
-                            f"  평균 단어 수: {total_words / len(subtitles_snapshot):.1f}개\n\n"
+                            f"  평균 공백 기준 단어 수: {total_words / len(subtitles_snapshot):.1f}개\n\n"
                         )
 
                         f.write("📏 문장 분석\n")

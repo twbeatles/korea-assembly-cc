@@ -6,6 +6,7 @@ import queue
 import re
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib import import_module
 from pathlib import Path
@@ -83,7 +84,10 @@ from core.logging_utils import logger
 from core.models import CaptureSessionState, ObservedSubtitleRow, SubtitleEntry
 from core.subtitle_pipeline import (
     LiveRowCommitMeta,
+    PREVIEW_AMBIGUOUS_RESYNC_THRESHOLD,
+    PREVIEW_RESYNC_THRESHOLD,
     PipelineSourceMeta,
+    SUFFIX_LENGTH,
     apply_keepalive,
     apply_preview,
     apply_reset,
@@ -153,6 +157,62 @@ except ImportError:
 
 class RecoverableWebDriverError(RuntimeError):
     """웹드라이버 재연결로 복구 가능한 오류"""
+
+
+@dataclass(slots=True)
+class WorkerQueueMessage:
+    """Run-scoped worker message envelope used to drop stale capture runs."""
+
+    run_id: int
+    msg_type: str
+    payload: Any
+
+
+class MainWindowMessageQueue:
+    """Queue wrapper that automatically envelopes worker-thread messages."""
+
+    def __init__(self, owner: Any, maxsize: int = 0) -> None:
+        self._owner = owner
+        self._queue: queue.Queue[Any] = queue.Queue(maxsize=maxsize)
+        self._worker_local = threading.local()
+
+    def set_worker_run_id(self, run_id: int | None) -> None:
+        self._worker_local.run_id = run_id
+
+    def clear_worker_run_id(self) -> None:
+        self._worker_local.run_id = None
+
+    def _get_worker_run_id(self) -> int | None:
+        run_id = getattr(self._worker_local, "run_id", None)
+        return int(run_id) if run_id is not None else None
+
+    def put(self, item: object, block: bool = True, timeout: float | None = None) -> None:
+        run_id = self._get_worker_run_id()
+        if run_id is not None and isinstance(item, tuple) and len(item) == 2:
+            msg_type, data = item
+            self._owner._emit_worker_message(str(msg_type), data, run_id=run_id)
+            return
+        if timeout is None:
+            self._queue.put(item, block=block)
+            return
+        self._queue.put(item, block=block, timeout=timeout)
+
+    def put_nowait(self, item: object) -> None:
+        self.put(item, block=False)
+
+    def get(self, block: bool = True, timeout: float | None = None) -> Any:
+        if timeout is None:
+            return self._queue.get(block=block)
+        return self._queue.get(block=block, timeout=timeout)
+
+    def get_nowait(self) -> Any:
+        return self._queue.get_nowait()
+
+    def empty(self) -> bool:
+        return self._queue.empty()
+
+    def qsize(self) -> int:
+        return self._queue.qsize()
 
 
 def _import_optional_module(module_name: str) -> Any:

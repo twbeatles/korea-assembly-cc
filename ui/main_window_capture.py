@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+from typing import Any, Callable, cast
+
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 
@@ -579,9 +581,52 @@ class MainWindowCaptureMixin(MainWindowHost):
             return int((time.time() - start) * 1000)
 
 
-    def _extraction_worker(self, url, selector, headless):
+    def _create_chrome_driver(self, options: Options) -> Any:
+            """webdriver monkeypatch 호환성을 유지하면서 Chrome 드라이버 생성"""
+            chrome_factory = cast(Callable[..., Any], getattr(webdriver, "Chrome"))
+            return chrome_factory(options=options)
+
+    def _resolve_live_url_for_driver(
+            self,
+            driver: Any,
+            url: str,
+            *,
+            reconnecting: bool = False,
+        ) -> str:
+            if self._get_query_param(url, "xcgcd").strip():
+                return url
+            try:
+                resolved_url = self._detect_live_broadcast(driver, url)
+                if isinstance(resolved_url, str):
+                    resolved_url = resolved_url.strip()
+                if resolved_url and resolved_url != url:
+                    self.message_queue.put(("resolved_url", resolved_url))
+                    self.message_queue.put(
+                        (
+                            "status",
+                            "감지된 생중계 URL로 재접속 중..."
+                            if reconnecting
+                            else "감지된 생중계 URL로 재접속 중...",
+                        )
+                    )
+                    driver.get(resolved_url)
+                    return resolved_url
+            except Exception as live_err:
+                if reconnecting:
+                    logger.warning("재연결 후 생중계 자동 감지 실패: %s", live_err)
+                else:
+                    logger.warning("생중계 자동 감지 실패: %s", live_err)
+            return url
+
+
+    def _extraction_worker(self, url, selector, headless, run_id: int | None = None):
             """자막 추출 워커 스레드 (Legacy Logic Restoration)"""
             driver = None
+            run_id = int(run_id) if run_id is not None else self._ensure_active_capture_run()
+            set_worker_run_id = getattr(self.message_queue, "set_worker_run_id", None)
+            clear_worker_run_id = getattr(self.message_queue, "clear_worker_run_id", None)
+            if callable(set_worker_run_id):
+                set_worker_run_id(run_id)
 
             try:
                 options = Options()
@@ -599,8 +644,8 @@ class MainWindowCaptureMixin(MainWindowHost):
                     self.message_queue.put(("status", "헤드리스 모드로 시작 중..."))
 
                 try:
-                    driver = webdriver.Chrome(options=options)
-                    self.driver = driver
+                    driver = self._create_chrome_driver(options)
+                    self._set_current_driver(driver)
                     self.message_queue.put(("status", "Chrome 시작 완료"))
                 except Exception as e:
                     self.message_queue.put(("error", f"Chrome 오류: {e}"))
@@ -608,29 +653,7 @@ class MainWindowCaptureMixin(MainWindowHost):
 
                 self.message_queue.put(("status", "페이지 로딩 중..."))
                 driver.get(url)
-
-                if not self._get_query_param(url, "xcgcd").strip():
-                    try:
-                        resolved_url = self._detect_live_broadcast(driver, url)
-                        if isinstance(resolved_url, str):
-                            resolved_url = resolved_url.strip()
-                        if resolved_url and resolved_url != url:
-                            url = resolved_url
-                            self.message_queue.put(("resolved_url", url))
-                            self.message_queue.put(
-                                ("status", "감지된 생중계 URL로 재접속 중...")
-                            )
-                            driver.get(url)
-                    except Exception as live_err:
-                        logger.warning("생중계 자동 감지 실패: %s", live_err)
-
-                self.stop_event.wait(timeout=3)
-                resolved_url = self._detect_live_broadcast(driver, url)
-                if resolved_url and resolved_url != url:
-                    url = resolved_url
-                    self.message_queue.put(("status", "감지된 생중계 주소로 재진입 중..."))
-                    driver.get(url)
-                    self.stop_event.wait(timeout=2)
+                url = self._resolve_live_url_for_driver(driver, url)
 
                 self.message_queue.put(("status", "AI 자막 활성화 중..."))
                 self._activate_subtitle(driver)
@@ -985,47 +1008,22 @@ class MainWindowCaptureMixin(MainWindowHost):
                                         )
                                         with self._detached_drivers_lock:
                                             self._detached_drivers.append(driver)
+                                    finally:
+                                        self._clear_current_driver_if(driver)
 
                                 # 대기 후 재연결 (종료 신호에 즉시 반응)
                                 if self.stop_event.wait(timeout=delay):
                                     break
 
                                 try:
-                                    driver = webdriver.Chrome(options=options)
-                                    self.driver = driver
+                                    driver = self._create_chrome_driver(options)
+                                    self._set_current_driver(driver)
                                     driver.get(url)
-                                    if not self._get_query_param(url, "xcgcd").strip():
-                                        try:
-                                            resolved_url = self._detect_live_broadcast(
-                                                driver, url
-                                            )
-                                            if isinstance(resolved_url, str):
-                                                resolved_url = resolved_url.strip()
-                                            if resolved_url and resolved_url != url:
-                                                url = resolved_url
-                                                self.message_queue.put(
-                                                    ("resolved_url", url)
-                                                )
-                                                self.message_queue.put(
-                                                    (
-                                                        "status",
-                                                        "감지된 생중계 URL로 재접속 중...",
-                                                    )
-                                                )
-                                                driver.get(url)
-                                        except Exception as live_err:
-                                            logger.warning(
-                                                "재연결 후 생중계 자동 감지 실패: %s",
-                                                live_err,
-                                            )
-                                    if self.stop_event.wait(timeout=2):
-                                        break
-                                    resolved_url = self._detect_live_broadcast(driver, url)
-                                    if resolved_url and resolved_url != url:
-                                        url = resolved_url
-                                        driver.get(url)
-                                        if self.stop_event.wait(timeout=2):
-                                            break
+                                    url = self._resolve_live_url_for_driver(
+                                        driver,
+                                        url,
+                                        reconnecting=True,
+                                    )
                                     self._activate_subtitle(driver)
                                     self.message_queue.put(
                                         (
@@ -1080,7 +1078,9 @@ class MainWindowCaptureMixin(MainWindowHost):
                         driver.quit()
                     except Exception as e:
                         logger.debug(f"WebDriver 종료 오류: {e}")
-                    self.driver = None
+                    self._clear_current_driver_if(driver)
+                if callable(clear_worker_run_id):
+                    clear_worker_run_id()
                 self.message_queue.put(("finished", ""))
 
 

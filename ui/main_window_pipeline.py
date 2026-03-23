@@ -4,6 +4,25 @@ from ui.main_window_common import *
 from ui.main_window_common import _ResetTimerShim
 from ui.main_window_types import MainWindowHost
 
+COALESCED_WORKER_MESSAGE_TYPES = {
+    "connection_status",
+    "keepalive",
+    "preview",
+    "reconnected",
+    "reconnecting",
+    "resolved_url",
+    "status",
+}
+COALESCED_WORKER_MESSAGE_ORDER = (
+    "resolved_url",
+    "status",
+    "connection_status",
+    "reconnecting",
+    "reconnected",
+    "preview",
+    "keepalive",
+)
+
 
 class MainWindowPipelineMixin(MainWindowHost):
 
@@ -406,6 +425,203 @@ class MainWindowPipelineMixin(MainWindowHost):
                 return left + right
             return left + " " + right
 
+    def _emit_worker_message(
+            self,
+            msg_type: str,
+            data: Any,
+            *,
+            run_id: int | None = None,
+        ) -> None:
+            resolved_run_id = run_id if run_id is not None else self._ensure_active_capture_run()
+            message = WorkerQueueMessage(int(resolved_run_id), str(msg_type), data)
+            try:
+                self.message_queue.put_nowait(message)
+                return
+            except queue.Full:
+                if msg_type not in COALESCED_WORKER_MESSAGE_TYPES:
+                    self.message_queue.put(message, timeout=1.0)
+                    return
+
+            lock = getattr(self, "_worker_message_lock", None)
+            if lock is None:
+                return
+            with lock:
+                self._coalesced_worker_messages[(int(resolved_run_id), str(msg_type))] = data
+
+    def _unwrap_message_item(self, item: object) -> tuple[str, Any] | None:
+            if isinstance(item, WorkerQueueMessage):
+                if not self._is_active_capture_run(item.run_id):
+                    return None
+                return item.msg_type, item.payload
+            if isinstance(item, tuple) and len(item) == 2:
+                msg_type, data = item
+                return str(msg_type), data
+            return None
+
+    def _pop_coalesced_worker_messages(
+            self,
+            *,
+            max_items: int,
+            allowed_types: set[str] | None = None,
+        ) -> list[tuple[str, Any]]:
+            active_run_id = getattr(self, "_active_capture_run_id", None)
+            lock = getattr(self, "_worker_message_lock", None)
+            if lock is None:
+                return []
+            if active_run_id is None:
+                with lock:
+                    getattr(self, "_coalesced_worker_messages", {}).clear()
+                return []
+
+            collected: list[tuple[str, Any]] = []
+            with lock:
+                pending_messages = getattr(self, "_coalesced_worker_messages", {})
+                stale_keys = [
+                    key
+                    for key in pending_messages.keys()
+                    if not isinstance(key, tuple) or key[0] != active_run_id
+                ]
+                for key in stale_keys:
+                    pending_messages.pop(key, None)
+
+                for msg_type in COALESCED_WORKER_MESSAGE_ORDER:
+                    if allowed_types is not None and msg_type not in allowed_types:
+                        continue
+                    key = (active_run_id, msg_type)
+                    if key not in pending_messages:
+                        continue
+                    collected.append((msg_type, pending_messages.pop(key)))
+                    if len(collected) >= max_items:
+                        break
+
+            return collected
+
+    def _drain_coalesced_worker_messages(
+            self,
+            *,
+            max_items: int,
+            allowed_types: set[str] | None = None,
+            handler: Callable[[str, Any], None] | None = None,
+        ) -> int:
+            processed = 0
+            drain_handler = handler or self._handle_message
+            for msg_type, data in self._pop_coalesced_worker_messages(
+                max_items=max_items,
+                allowed_types=allowed_types,
+            ):
+                drain_handler(msg_type, data)
+                processed += 1
+            return processed
+
+    def _write_realtime_line(self, line: str) -> None:
+            if not line or not self.realtime_file:
+                return
+            try:
+                self.realtime_file.write(line)
+                self.realtime_file.flush()
+                self._realtime_error_count = 0
+            except IOError as e:
+                self._realtime_error_count = getattr(self, "_realtime_error_count", 0) + 1
+                if self._realtime_error_count >= 3:
+                    logger.error(f"실시간 저장 연속 실패: {e}")
+                else:
+                    logger.warning(f"실시간 저장 쓰기 오류: {e}")
+
+    def _append_text_to_subtitles_shared(
+            self,
+            text: str,
+            *,
+            now: datetime | None = None,
+            force_new_entry: bool = False,
+            refresh: bool = True,
+            check_alert: bool = True,
+        ) -> dict[str, Any]:
+            """공유 append/update 로직.
+
+            Returns:
+                dict: changed/action/entry/realtime_line/new_text
+            """
+            result: dict[str, Any] = {
+                "changed": False,
+                "action": "noop",
+                "entry": None,
+                "realtime_line": "",
+                "new_text": "",
+            }
+            if not text or not utils.is_meaningful_subtitle_text(text):
+                return result
+
+            new_text = text.strip()
+            if not new_text:
+                return result
+
+            now = now or datetime.now()
+            realtime_line = ""
+            entry: SubtitleEntry | None = None
+
+            with self.subtitle_lock:
+                if self.subtitles and not force_new_entry:
+                    last_entry = self.subtitles[-1]
+                    if self._should_merge_entry(last_entry, new_text, now):
+                        old_chars = last_entry.char_count
+                        old_words = last_entry.word_count
+                        last_entry.update_text(
+                            self._join_stream_text(last_entry.text, new_text)
+                        )
+                        last_entry.end_time = now
+                        self._cached_total_chars += last_entry.char_count - old_chars
+                        self._cached_total_words += last_entry.word_count - old_words
+                        realtime_line = f"+ {new_text}\n"
+                        entry = last_entry
+                        result.update(
+                            changed=True,
+                            action="update",
+                            entry=entry,
+                            realtime_line=realtime_line,
+                            new_text=new_text,
+                        )
+                    else:
+                        entry = SubtitleEntry(new_text, now)
+                        entry.start_time = now
+                        entry.end_time = now
+                        self.subtitles.append(entry)
+                        self._cached_total_chars += entry.char_count
+                        self._cached_total_words += entry.word_count
+                        realtime_line = f"[{entry.timestamp.strftime('%H:%M:%S')}] {new_text}\n"
+                        result.update(
+                            changed=True,
+                            action="append",
+                            entry=entry,
+                            realtime_line=realtime_line,
+                            new_text=new_text,
+                        )
+                else:
+                    entry = SubtitleEntry(new_text, now)
+                    entry.start_time = now
+                    entry.end_time = now
+                    self.subtitles.append(entry)
+                    self._cached_total_chars += entry.char_count
+                    self._cached_total_words += entry.word_count
+                    realtime_line = f"[{entry.timestamp.strftime('%H:%M:%S')}] {new_text}\n"
+                    result.update(
+                        changed=True,
+                        action="append",
+                        entry=entry,
+                        realtime_line=realtime_line,
+                        new_text=new_text,
+                    )
+
+            if not result["changed"]:
+                return result
+
+            if check_alert:
+                self._check_keyword_alert(new_text)
+            self._update_count_label()
+            if refresh:
+                self._refresh_text(force_full=False)
+            self._write_realtime_line(realtime_line)
+            return result
+
 
     def _clear_message_queue(self) -> None:
             """메시지 큐 비우기 (중지/재시작 안정성용)"""
@@ -414,6 +630,11 @@ class MainWindowPipelineMixin(MainWindowHost):
                     self.message_queue.get_nowait()
             except queue.Empty:
                 pass
+            lock = getattr(self, "_worker_message_lock", None)
+            if lock is None:
+                return
+            with lock:
+                getattr(self, "_coalesced_worker_messages", {}).clear()
 
 
     def _process_subtitle_segments(self, data) -> None:
@@ -535,10 +756,15 @@ class MainWindowPipelineMixin(MainWindowHost):
         ) -> None:
             """큐에 남은 preview/segments 메시지를 소진해 마지막 자막 누락을 줄인다."""
             drained = 0
-            pending = []
+            pending: list[object] = []
             try:
                 while drained < max_items:
-                    msg_type, data = self.message_queue.get_nowait()
+                    raw_item = self.message_queue.get_nowait()
+                    decoded = self._unwrap_message_item(raw_item)
+                    if decoded is None:
+                        drained += 1
+                        continue
+                    msg_type, data = decoded
                     if msg_type == "preview":
                         if isinstance(data, dict):
                             self._apply_structured_preview_payload(data)
@@ -559,17 +785,22 @@ class MainWindowPipelineMixin(MainWindowHost):
                     elif msg_type == "subtitle_segments":
                         self._process_subtitle_segments(data)
                     else:
-                        pending.append((msg_type, data))
+                        pending.append(raw_item)
                     drained += 1
             except queue.Empty:
                 pass
+
+            drained += self._drain_coalesced_worker_messages(
+                max_items=max(0, max_items - drained),
+                allowed_types={"keepalive", "preview", "resolved_url", "status"},
+            )
 
             if drained >= max_items:
                 logger.warning("preview 큐 소진 제한 도달: max_items=%s", max_items)
 
             if requeue_others and pending:
                 for item in pending:
-                    self.message_queue.put(item)
+                    self.message_queue.put_nowait(item)
 
 
     def _finalize_pending_subtitle(self) -> None:
@@ -642,11 +873,21 @@ class MainWindowPipelineMixin(MainWindowHost):
                 processed = 0
                 while processed < 50 and time.perf_counter() <= deadline:
                     try:
-                        msg_type, data = self.message_queue.get_nowait()
+                        raw_item = self.message_queue.get_nowait()
+                        decoded = self._unwrap_message_item(raw_item)
+                        if decoded is None:
+                            processed += 1
+                            continue
+                        msg_type, data = decoded
                         self._handle_message(msg_type, data)
                         processed += 1
                     except queue.Empty:
                         break
+                remaining_budget = max(0, 50 - processed)
+                if remaining_budget > 0 and time.perf_counter() <= deadline:
+                    processed += self._drain_coalesced_worker_messages(
+                        max_items=remaining_budget,
+                    )
             except Exception as e:
                 logger.error(f"큐 처리 오류: {e}")
 
@@ -735,6 +976,8 @@ class MainWindowPipelineMixin(MainWindowHost):
                     self._handle_keepalive(str(data or ""))
 
                 elif msg_type == "error":
+                    self._retire_capture_run()
+                    self.worker = None
                     self.progress.hide()
                     self._reset_ui()
                     self._update_tray_status("⚪ 대기 중")
@@ -743,6 +986,8 @@ class MainWindowPipelineMixin(MainWindowHost):
                     QMessageBox.critical(self, "오류", str(data))
 
                 elif msg_type == "finished":
+                    self._retire_capture_run()
+                    self.worker = None
                     self._cancel_scheduled_subtitle_reset()
                     self._materialize_pending_preview()
                     finalize_session(
@@ -857,6 +1102,8 @@ class MainWindowPipelineMixin(MainWindowHost):
                     QMessageBox.critical(self, "오류", f"불러오기 실패: {err}")
 
                 elif msg_type == "subtitle_not_found":
+                    self._retire_capture_run()
+                    self.worker = None
                     # 자막 요소를 찾지 못했을 때 사용자 안내
                     self.progress.hide()
                     self._reset_ui()
@@ -1116,6 +1363,7 @@ class MainWindowPipelineMixin(MainWindowHost):
             # 자막에 추가
             self._add_text_to_subtitles(new_part)
             self._last_processed_raw = raw
+            self.capture_state.last_processed_raw = raw
 
 
     def _trim_confirmed_compact_history(self) -> None:
@@ -1199,66 +1447,7 @@ class MainWindowPipelineMixin(MainWindowHost):
 
     def _add_text_to_subtitles(self, text: str) -> None:
             """확정된 텍스트를 SubtitleEntry로 변환하여 저장"""
-            if not text or not utils.is_meaningful_subtitle_text(text):
-                return
-            text = text.strip()
-
-            with self.subtitle_lock:
-                # 마지막 엔트리에 이어붙일지, 새 엔트리 만들지 결정
-                if self.subtitles:
-                    last_entry = self.subtitles[-1]
-                    now = datetime.now()
-                    can_append = self._should_merge_entry(last_entry, text, now)
-
-                    if can_append:
-                        old_chars = last_entry.char_count
-                        old_words = last_entry.word_count
-                        last_entry.update_text(
-                            self._join_stream_text(last_entry.text, text)
-                        )
-                        last_entry.end_time = now
-                        self._cached_total_chars += last_entry.char_count - old_chars
-                        self._cached_total_words += last_entry.word_count - old_words
-                    else:
-                        # 새 엔트리
-                        entry = SubtitleEntry(text)
-                        entry.start_time = now
-                        entry.end_time = now
-                        self.subtitles.append(entry)
-                        self._cached_total_chars += entry.char_count
-                        self._cached_total_words += entry.word_count
-                else:
-                    # 첫 엔트리
-                    entry = SubtitleEntry(text)
-                    now = datetime.now()
-                    entry.start_time = now
-                    entry.end_time = now
-                    self.subtitles.append(entry)
-                    self._cached_total_chars += entry.char_count
-                    self._cached_total_words += entry.word_count
-
-            # 키워드 알림 확인
-            self._check_keyword_alert(text)
-
-            # 카운트 라벨 업데이트
-            self._update_count_label()
-
-            # UI 갱신
-            self._refresh_text(force_full=False)
-
-            # 실시간 저장
-            if self.realtime_file:
-                try:
-                    timestamp = datetime.now().strftime("%H:%M:%S")
-                    self.realtime_file.write(f"[{timestamp}] {text}\n")
-                    self.realtime_file.flush()
-                    self._realtime_error_count = 0
-                except IOError as e:
-                    self._realtime_error_count = (
-                        getattr(self, "_realtime_error_count", 0) + 1
-                    )
-                    if self._realtime_error_count == 3:
-                        logger.error(f"실시간 저장 연속 실패: {e}")
+            self._append_text_to_subtitles_shared(text, now=datetime.now())
 
     def _handle_keepalive(self, raw: str) -> None:
             """Refresh the active entry end time without re-appending subtitle text."""

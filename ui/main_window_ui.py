@@ -663,7 +663,7 @@ class MainWindowUIMixin(MainWindowHost):
 
             self.stat_time = QLabel("⏱️ 실행 시간: 00:00:00")
             self.stat_chars = QLabel("📝 글자 수: 0")
-            self.stat_words = QLabel("📖 단어 수: 0")
+            self.stat_words = QLabel("📖 공백 기준 단어 수: 0")
             self.stat_sents = QLabel("💬 문장 수: 0")
             self.stat_cpm = QLabel("⚡ 분당 글자: 0")
 
@@ -1589,7 +1589,7 @@ class MainWindowUIMixin(MainWindowHost):
     자막 추출 중 다른 작업을 할 수 있습니다.</p>
 
     <h3>📊 통계 패널</h3>
-    <p>실행 시간, 글자 수, 단어 수, 분당 글자 수를 표시합니다.</p>
+    <p>실행 시간, 글자 수, 공백 기준 단어 수, 분당 글자 수를 표시합니다.</p>
     """
             msg = QMessageBox(self)
             msg.setWindowTitle("기능 소개")

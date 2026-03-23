@@ -12,6 +12,7 @@
 > **v16.14.0(2026-03-16) 정합성 반영**: Chrome 확장 기반 `live row ledger + subtitle pipeline`이 `core/live_capture.py`와 `core/subtitle_pipeline.py`로 고정되었고, `framePath::nodeKey` row reconciliation, grace reset, prepared snapshot 저장 경로가 운영 기본값이 되었습니다. `ui/main_window.py`는 파사드로 축소되고 관련 책임은 `ui/main_window_*` 모듈로 분리되었습니다.
 > **v16.14.1(2026-03-17) 정합성 반영**: 자동 줄넘김 정리가 사용자 옵션(`auto_clean_newlines`, 기본 ON)으로 노출되었고, preview/live-row/flush 정규화 경로가 동일 설정을 읽도록 통일되었습니다. 이 변경은 글로벌 히스토리 + suffix 코어 의미론을 바꾸지 않고 입력 정규화 정책만 옵션화합니다.
 > **v16.14.2(2026-03-18) 성능 정합성 반영**: `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()`, streaming JSON 저장, delta render/tail patch가 추가되었고, `commit_live_row` 1,500회 benchmark는 약 `10.3초 -> 3.8초`로 단축되었습니다. 이후 자막 수집 회귀 대응으로 Worker 캡처 루프는 이전 안정 structured probe 경로로 복귀했습니다.
+> **v16.14.3(2026-03-23) 운영 정합성 반영**: 코어 알고리즘 자체는 유지하면서, `self.driver` lifecycle이 `_driver_lock`으로 정리되고, Worker 메시지는 bounded `MainWindowMessageQueue(maxsize=500)` + internal `run_id` envelope + coalescing으로 격리되었습니다. `_finalize_subtitle()`는 shared append helper를 사용하고, 렌더는 immutable snapshot clone 기준으로 동작합니다.
 > 후속 Pylance/인코딩 위생 보강(`ui/main_window_types.py`, `tests/test_pyright_regression.py`, 확장된 `tests/test_encoding_hygiene.py`)은 이 문서가 분석하는 자막 추출 알고리즘 자체를 바꾸지 않습니다.
 
 ---
@@ -26,12 +27,12 @@ Worker(stable hybrid)
   → Observer 주입 우선, 실패 시 JS 폴링 브리지(180ms)
   → Observer 버퍼 우선 수집, 미수집 시 structured probe fallback
   → compact 기준 중복 전송 억제
-  → Queue(preview: dict payload)
+  → MainWindowMessageQueue(preview: dict payload, internal run_id envelope)
   → _prepare_preview_raw (정규화, 게이트, fallback)
   → _process_raw_text (GlobalHistory + Suffix 코어)
   → 후단 정제 (get_word_diff, recent compact tail)
-  → _add_text_to_subtitles
-  → delta render / tail patch
+  → _add_text_to_subtitles / _finalize_subtitle(shared append helper)
+  → immutable snapshot render / tail patch
   → 종료 시 _drain_pending_previews
 ```
 
@@ -631,7 +632,7 @@ def _extraction_worker(self, url, selector, headless):
                         text_compact = utils.compact_subtitle_text(text)
                         if text and text_compact and text_compact != worker_last_raw_compact:
                             worker_last_raw_compact = text_compact
-                            self.message_queue.put(("preview", text))
+                            self.message_queue.put(("preview", {"text": text, "selector": selector}))
                 else:
                     # 2. Observer가 작동하지 않으면 기존 폴링 fallback
                     try:
@@ -640,7 +641,7 @@ def _extraction_worker(self, url, selector, headless):
                         text_compact = utils.compact_subtitle_text(text)
                         if text and text_compact and text_compact != worker_last_raw_compact:
                             worker_last_raw_compact = text_compact
-                            self.message_queue.put(("preview", text))
+                            self.message_queue.put(("preview", {"text": text, "selector": selector}))
                     except Exception:
                         pass
 

@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Literal, Optional, cast
+from uuid import uuid4
+
+from core.text_utils import compact_subtitle_text
 
 
 SpeakerChannel = Literal["primary", "secondary", "unknown"]
@@ -17,7 +20,11 @@ def _clone_frame_path(frame_path: Optional[list[int]]) -> Optional[list[int]]:
 
 
 class SubtitleEntry:
-    """Subtitle item with cached counts and optional runtime source metadata."""
+    """Subtitle item with cached counts and optional runtime source metadata.
+
+    word_count is intentionally a whitespace-token count.
+    It is a cheap UI statistic, not a Korean morphology-aware word metric.
+    """
 
     __slots__ = (
         "entry_id",
@@ -49,7 +56,7 @@ class SubtitleEntry:
         speaker_channel: SpeakerChannel = "unknown",
         speaker_changed: bool = False,
     ):
-        self.entry_id: Optional[str] = entry_id
+        self.entry_id: Optional[str] = entry_id or f"subtitle_{uuid4().hex}"
         self.text: str = text
         self.timestamp: datetime = timestamp or datetime.now()
         self.start_time: Optional[datetime] = None
@@ -75,8 +82,6 @@ class SubtitleEntry:
     @property
     def compact_text(self) -> str:
         if self._compact_text is None:
-            from core.text_utils import compact_subtitle_text
-
             self._compact_text = compact_subtitle_text(self.text)
         return self._compact_text
 
@@ -196,6 +201,7 @@ class CaptureSessionState:
     last_committed_reset_at: float | None = None
 
     def clone(self) -> "CaptureSessionState":
+        """Deep-copy the session state and every entry for isolated mutation."""
         return CaptureSessionState(
             entries=[entry.clone() for entry in self.entries],
             preview_text=self.preview_text,
@@ -215,6 +221,7 @@ class CaptureSessionState:
         )
 
     def snapshot_clone(self, clone_last_entry: bool = False) -> "CaptureSessionState":
+        """Shallow-copy immutable session state and optionally clone the mutable tail entry."""
         entries = list(self.entries)
         if clone_last_entry and entries:
             entries[-1] = entries[-1].clone()

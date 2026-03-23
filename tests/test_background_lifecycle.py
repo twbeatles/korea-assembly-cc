@@ -53,3 +53,18 @@ def test_run_db_task_rejected_during_shutdown():
 
     assert started is False
     assert "db_stats" not in win._db_tasks_inflight
+
+
+def test_start_background_thread_rolls_back_on_start_failure(monkeypatch):
+    win = _build_window()
+
+    def fail_start(self):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_start)
+
+    started = MainWindow._start_background_thread(win, lambda: None, "BrokenWorker")
+
+    assert started is False
+    with win._active_background_threads_lock:
+        assert not win._active_background_threads

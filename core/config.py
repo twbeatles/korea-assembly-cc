@@ -109,7 +109,6 @@ class Config:
         "보건복지위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=33",
         "기후환경노동위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=62",
         "국토교통위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=54",
-        "정보위원회": "https://assembly.webcast.go.kr/main/player.asp",
         "성평등가족위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=63",
         "예산결산특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=21",
         # 특별위원회 (문자열 xcode 사용)
@@ -136,7 +135,6 @@ class Config:
         "보건복지위원회": 33,
         "기후환경노동위원회": 62,
         "국토교통위원회": 54,
-        "정보위원회": None,
         "성평등가족위원회": 63,
         "예산결산특별위원회": 21,
         # 특별위원회 (문자열 xcode)
@@ -148,9 +146,10 @@ class Config:
     # 특별위원회 문자열 xcode 목록 (숫자가 아닌 코드들)
     SPECIAL_COMMITTEE_XCODES = {
         "IO": "국정감사/국정조사",
-        "NA": "본회의장",
-        "PP": "기자회견",
     }
+
+    # 정보위원회 xcode/생중계 여부는 이번 배치에서 외부 검증하지 않는다.
+    # 사용자가 직접 확인한 URL은 사용자 프리셋/직접 입력으로 사용할 수 있다.
     
     # 상임위원회 약칭 매핑 (사이트 내 표기 포함)
     COMMITTEE_ABBREVIATIONS = {

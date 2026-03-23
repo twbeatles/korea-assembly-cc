@@ -71,10 +71,16 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 preferred_frame_path=preferred_frame_path,
             )
 
-    def _extraction_worker(self, url: str, selector: str, headless: bool) -> None:
+    def _extraction_worker(
+        self,
+        url: str,
+        selector: str,
+        headless: bool,
+        run_id: int | None = None,
+    ) -> None:
             self._sync_capture_compat_globals()
             return MainWindowCaptureMixin._extraction_worker(
-                self, url, selector, headless
+                self, url, selector, headless, run_id=run_id
             )
 
     def _is_auto_clean_newlines_enabled(self) -> bool:
@@ -104,6 +110,88 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             if settings is not None:
                 settings.setValue("auto_clean_newlines", enabled)
 
+    def _next_capture_run_id(self) -> int:
+            next_run_id = int(self.__dict__.get("_capture_run_sequence", 0)) + 1
+            self._capture_run_sequence = next_run_id
+            return next_run_id
+
+    def _activate_capture_run(self) -> int:
+            run_id = self._next_capture_run_id()
+            self._active_capture_run_id = run_id
+            return run_id
+
+    def _ensure_active_capture_run(self) -> int:
+            active_run_id = self.__dict__.get("_active_capture_run_id")
+            if active_run_id is None:
+                active_run_id = self._activate_capture_run()
+            return int(active_run_id)
+
+    def _retire_capture_run(self, run_id: int | None = None) -> None:
+            target_run_id = (
+                self.__dict__.get("_active_capture_run_id")
+                if run_id is None
+                else int(run_id)
+            )
+            if target_run_id is None:
+                return
+            if self.__dict__.get("_active_capture_run_id") == target_run_id:
+                self._active_capture_run_id = None
+            lock = self.__dict__.get("_worker_message_lock")
+            if lock is None:
+                return
+            with lock:
+                pending = getattr(self, "_coalesced_worker_messages", {})
+                stale_keys = [
+                    key for key in pending.keys() if isinstance(key, tuple) and key[0] == target_run_id
+                ]
+                for key in stale_keys:
+                    pending.pop(key, None)
+
+    def _is_active_capture_run(self, run_id: int | None) -> bool:
+            return run_id is not None and self.__dict__.get("_active_capture_run_id") == int(run_id)
+
+    def _set_current_driver(self, driver: Any | None) -> Any | None:
+            lock = self.__dict__.get("_driver_lock")
+            if lock is None:
+                self.driver = driver
+                return self.__dict__.get("driver")
+            with lock:
+                self.driver = driver
+                return self.driver
+
+    def _get_current_driver(self) -> Any | None:
+            lock = self.__dict__.get("_driver_lock")
+            if lock is None:
+                return self.__dict__.get("driver")
+            with lock:
+                return self.driver
+
+    def _take_current_driver(self) -> Any | None:
+            lock = self.__dict__.get("_driver_lock")
+            if lock is None:
+                driver = self.__dict__.get("driver")
+                self.driver = None
+                return driver
+            with lock:
+                driver = self.driver
+                self.driver = None
+                return driver
+
+    def _clear_current_driver_if(self, driver: Any | None) -> bool:
+            if driver is None:
+                return False
+            lock = self.__dict__.get("_driver_lock")
+            if lock is None:
+                if self.__dict__.get("driver") is driver:
+                    self.driver = None
+                    return True
+                return False
+            with lock:
+                if self.driver is driver:
+                    self.driver = None
+                    return True
+            return False
+
     def __init__(self):
             super().__init__()
             self.setWindowTitle(f"{Config.APP_NAME} v{Config.VERSION}")
@@ -127,11 +215,12 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             )
 
             # 메시지 큐
-            self.message_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+            self.message_queue: Any = MainWindowMessageQueue(self, maxsize=500)
 
             # 상태
             self.worker = None
             self.driver = None
+            self._driver_lock = threading.Lock()
             self.is_running = False
             self.stop_event = threading.Event()  # 스레드 안전한 종료 시그널
             self.subtitle_lock = threading.Lock()  # 자막 리스트 접근 동기화
@@ -145,12 +234,12 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             # [NEW] 글로벌 히스토리 + Suffix 매칭 (#GlobalHistorySuffix)
             self._confirmed_compact = ""  # 확정된 모든 텍스트 (compact, 공백 제거)
             self._trailing_suffix = ""  # 히스토리의 마지막 N자 (suffix 매칭용)
-            self._suffix_length = 50  # suffix 길이
+            self._suffix_length = SUFFIX_LENGTH
             self._preview_desync_count = 0
             self._preview_ambiguous_skip_count = 0
             self._last_good_raw_compact = ""
-            self._preview_resync_threshold = 10
-            self._preview_ambiguous_resync_threshold = 6
+            self._preview_resync_threshold = PREVIEW_RESYNC_THRESHOLD
+            self._preview_ambiguous_resync_threshold = PREVIEW_AMBIGUOUS_RESYNC_THRESHOLD
 
             # [Fix] 자막 중복 방지 프로세서 (#SubtitleRepetitionFix)
             self.subtitle_processor = SubtitleProcessor()
@@ -241,6 +330,10 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             # 스마트 스크롤 상태 (사용자가 위로 스크롤하면 자동 스크롤 일시 중지)
             self._user_scrolled_up = False
             self._is_stopping = False
+            self._capture_run_sequence = 0
+            self._active_capture_run_id: int | None = None
+            self._worker_message_lock = threading.Lock()
+            self._coalesced_worker_messages: dict[tuple[int, str], Any] = {}
             self._last_status_message = ""
             self._session_save_in_progress = False
             self._session_load_in_progress = False
@@ -346,6 +439,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 self._is_stopping = False
                 self._clear_preview()
                 self.start_time = time.time()
+                run_id = self._activate_capture_run()
 
                 # 큐 비우기
                 self._clear_message_queue()
@@ -381,7 +475,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 # 워커 시작
                 self.worker = threading.Thread(
                     target=self._extraction_worker,
-                    args=(url, selector, headless),
+                    args=(url, selector, headless, run_id),
                     daemon=True,
                 )
                 self.worker.start()
@@ -396,6 +490,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
 
             except Exception as e:
                 logger.exception(f"시작 오류: {e}")
+                self._retire_capture_run()
                 # 파일 핸들 정리
                 if self.realtime_file:
                     try:
@@ -432,9 +527,11 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 force_driver_quit = for_app_exit or (not Config.KEEP_BROWSER_ON_STOP)
 
                 # 앱 종료 또는 브라우저 미유지 설정일 때는 워커 대기 전에 드라이버를 먼저 정리
-                if force_driver_quit and self.driver:
-                    driver = self.driver
-                    self.driver = None
+                if force_driver_quit:
+                    driver = self._take_current_driver()
+                else:
+                    driver = None
+                if driver:
                     self._force_quit_driver_with_timeout(
                         driver, timeout=2.0, source="stop_initial"
                     )
@@ -444,17 +541,21 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 )
 
                 # 수동 중지 + 브라우저 유지 모드에서 종료가 지연되면 1회 에스컬레이션
-                if not worker_stopped and not force_driver_quit and self.driver:
+                if not worker_stopped and not force_driver_quit:
                     logger.warning("워커 스레드 종료 지연 감지 - 드라이버 강제 종료 후 재대기")
-                    driver = self.driver
-                    self.driver = None
+                    driver = self._take_current_driver()
+                else:
+                    driver = None
+                if driver:
                     self._force_quit_driver_with_timeout(
                         driver, timeout=2.0, source="stop_escalation"
                     )
                     worker_stopped = self._wait_worker_shutdown(timeout=1.0)
 
+                retire_after_finalize = False
                 if not worker_stopped:
                     logger.warning("워커 스레드가 시간 내에 종료되지 않음(종료 계속 진행)")
+                    retire_after_finalize = True
 
                 # 종료 후에도 남아있던 preview 처리
                 self._drain_pending_previews(requeue_others=True)
@@ -479,7 +580,11 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 # 중지 이후 남아있을 수 있는 detached WebDriver 정리
                 self._cleanup_detached_drivers_with_timeout(timeout=2.0)
 
+                if retire_after_finalize:
+                    self._retire_capture_run()
                 self._clear_message_queue()
+                self.worker = None
+                self._retire_capture_run()
                 self._reset_ui()
                 self._set_status("중지됨", "warning")
                 self._update_tray_status("⚪ 대기 중")
@@ -606,7 +711,12 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 worker_thread = threading.Thread(target=runner, daemon=False, name=name)
                 self._active_background_threads.add(worker_thread)
 
-            worker_thread.start()
+            try:
+                worker_thread.start()
+            except Exception as e:
+                self._unregister_background_thread(worker_thread)
+                logger.error("백그라운드 작업 시작 실패 (%s): %s", name, e)
+                return False
             return True
 
 
@@ -674,8 +784,8 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                     return
                 self._stop(for_app_exit=True)
 
-            with self.subtitle_lock:
-                subtitle_count = len(self.subtitles)
+            subtitles_snapshot = self._build_prepared_entries_snapshot()
+            subtitle_count = len(subtitles_snapshot)
 
             # 저장하지 않은 자막이 있으면 확인
             if subtitle_count:
@@ -702,8 +812,6 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                         return
                     # 파일 저장 (스레드 안전하게 자막 복사)
                     try:
-                        with self.subtitle_lock:
-                            subtitles_snapshot = list(self.subtitles)
                         lines = [
                             f"[{entry.timestamp.strftime('%H:%M:%S')}] {entry.text}\n"
                             for entry in subtitles_snapshot
@@ -735,9 +843,8 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 self.realtime_file = None
 
             # closeEvent 시에는 실행 여부와 무관하게 드라이버 정리를 시도한다.
-            if self.driver:
-                driver = self.driver
-                self.driver = None
+            driver = self._take_current_driver()
+            if driver:
                 self._force_quit_driver_with_timeout(
                     driver, timeout=2.0, source="close_event_idle"
                 )

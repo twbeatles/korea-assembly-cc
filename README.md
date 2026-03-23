@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.14.2
+# 🏛️ 국회 의사중계 자막 추출기 v16.14.3
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 데스크톱 프로그램입니다.
 
@@ -10,6 +10,7 @@
 ---
 
 ## 📋 목차
+- [운영 정합성 동기화 (v16.14.3)](#-v16143-운영-정합성-동기화-2026-03-23)
 - [성능 최적화 중심 리팩토링 (v16.14.2)](#-v16142-성능-최적화-중심-리팩토링-2026-03-18)
 - [자동 줄넘김 정리 기본 활성화 (v16.14.1)](#-v16141-자동-줄넘김-정리-기본-활성화-2026-03-17)
 - [크롬 파이프라인 정리 + SOLID 분할 리팩토링 (v16.14.0)](#-v16140-크롬-파이프라인-정리--solid-분할-리팩토링-2026-03-16)
@@ -26,6 +27,31 @@
 - [빌드 방법](#️-빌드-방법)
 - [변경 이력](#-변경-이력)
 - [파이프라인 고정 문서](#-파이프라인-고정-문서)
+
+---
+
+## ✨ v16.14.3 운영 정합성 동기화 (2026-03-23)
+
+### 🔒 Worker lifecycle / queue 정리
+- `self.driver` 접근을 `_driver_lock`과 identity helper로 일원화해 시작/중지/재연결/worker finally 간 handoff race를 줄였습니다.
+- Worker 메시지는 `MainWindowMessageQueue(maxsize=500)`를 통해 내부 `run_id` envelope로 감싸고, `preview`/`keepalive`/`status`/`resolved_url`는 latest-value coalescing으로 처리합니다.
+- stop timeout 뒤에는 해당 run을 즉시 inactive 처리해 늦게 도착한 stale worker 메시지가 새 세션 상태를 오염시키지 못하게 했습니다.
+- `xcgcd`가 없는 URL은 시작 시 1회만 자동 감지하고, 재연결에서는 이미 확정한 live URL을 우선 재사용합니다.
+
+### 🧾 자막 경로 / 렌더 정합성
+- `_finalize_subtitle`는 호환용 진입점으로 유지하되, 실제 append/update는 파이프라인과 동일한 shared helper를 사용해 중복 append를 막습니다.
+- `subtitle_lock` 범위는 상태 계산과 append/update까지만 유지하고, realtime 파일 쓰기/flush, 토스트, UI refresh는 락 밖으로 이동했습니다.
+- 렌더링은 live `SubtitleEntry` 객체 대신 immutable snapshot clone을 사용하며, `SubtitleEntry(entry_id=None)`는 런타임에서 항상 ID를 생성합니다.
+
+### ⚙️ 설정 / 저장 / 회귀 테스트
+- 확인되지 않은 `정보위원회`, `NA`, `PP` 기본 프리셋/매핑은 제거하고, 현재 기본 특별 코드 목록은 검증된 `IO`만 유지합니다.
+- 통계/내보내기/UI의 단어 수 표기는 모두 `공백 기준 단어 수`로 명시해 형태소 통계처럼 오해되지 않도록 정리했습니다.
+- 회귀 테스트 범위를 stale run drop, `alert_keywords` 저장/토스트, SRT/VTT `end_time=None`, HWP mock smoke, auto-backup start rollback까지 확장했습니다.
+
+### ✅ 현재 검증 상태
+- `pytest -q`: `72 passed`
+- `pyright`: `0 errors`
+- `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`를 `v16.14.3` 기준으로 동기화했습니다.
 
 ---
 
@@ -207,6 +233,7 @@ TXT, SRT, VTT, DOCX, HWP, RTF, JSON 세션 저장
 - 상임위원회/특별위원회 URL 빠른 선택
 - 사용자 정의 프리셋 추가/관리
 - **생중계 목록 선택** - 현재 방송을 목록에서 직접 선택 (📡 생중계 목록)
+- 기본 제공 특별 코드 프리셋은 현재 검증된 `IO` 계열만 유지하며, 미확인 코드는 직접 URL/사용자 프리셋으로 입력
 
 ### ⚙️ 편의 기능
 - 헤드리스 모드 (브라우저 창 숨김)
@@ -266,6 +293,8 @@ python "국회의사중계 자막.py"
 2. 목록에서 현재 방송 선택
 3. URL이 자동으로 입력됨
 
+- 기본 프리셋은 검증된 상임위와 `IO` 기반 특위만 포함합니다. 확인되지 않은 특수 코드는 직접 URL 또는 사용자 프리셋을 사용하세요.
+
 #### 3단계: 옵션 설정
 - ✅ **자동 스크롤**: 새 자막이 추가될 때 자동으로 아래로 스크롤 (사용자 스크롤 시 일시 중지)
 - ✅ **자동 줄넘김 정리**: 수집 중 줄바꿈/빈 줄을 자동 정리, 기본 활성화
@@ -282,7 +311,7 @@ python "국회의사중계 자막.py"
 
 #### 5단계: 자막 확인
 - 왼쪽 패널에 자막이 실시간으로 표시됨
-- 오른쪽 통계 패널에서 글자수, 단어수, 실행 시간 확인
+- 오른쪽 통계 패널에서 글자 수, 공백 기준 단어 수, 실행 시간 확인
 - `⏳` 표시는 아직 확정되지 않은 진행 중 자막
 
 #### 6단계: 저장
@@ -352,34 +381,41 @@ python "국회의사중계 자막.py"
 현재 자막 수집 파이프라인은 아래 구조로 **고정**되어 있습니다.
 
 1. **Worker (하이브리드)**:
-   - 선택자 후보를 우선순위로 구성: `#viewSubtit .smi_word:last-child` → `#viewSubtit .smi_word` → 컨테이너 계열
-   - 기본 문서 + 중첩 iframe/frame 경로를 순회해 자막 요소 탐색
-   - 시작/재연결 시 `_detect_live_broadcast`로 `xcgcd` 보완 URL을 우선 확정
-   - `MutationObserver` 주입 우선, 실패 시 JS 폴링 브리지(약 180ms) 활성화
-   - 메인 루프(0.2초)에서 Observer 버퍼 우선 수집, 없으면 폴링 fallback
-   - URL에 `xcgcd`가 없으면 시작 시 1회 자동 감지해 보완 URL로 재접속
-   - 동일 raw 유지 구간은 `keepalive`를 주기 발행해 `end_time` 연장
-   - **자막 영역 클리어 감지** 시 `subtitle_reset` 신호 전송
+    - 선택자 후보를 우선순위로 구성: `#viewSubtit .smi_word:last-child` → `#viewSubtit .smi_word` → 컨테이너 계열
+    - 기본 문서 + 중첩 iframe/frame 경로를 순회해 자막 요소 탐색
+    - `self.driver` 접근은 `_driver_lock` + identity helper로 serialize
+    - 시작/재연결 시 `_detect_live_broadcast`로 `xcgcd` 보완 URL을 우선 확정
+    - `MutationObserver` 주입 우선, 실패 시 JS 폴링 브리지(약 180ms) 활성화
+    - 메인 루프(0.2초)에서 Observer 버퍼 우선 수집, 없으면 폴링 fallback
+    - URL에 `xcgcd`가 없으면 시작 시 1회만 자동 감지하고, 재연결에서는 직전 확정 URL을 우선 재사용
+    - 동일 raw 유지 구간은 `keepalive`를 주기 발행해 `end_time` 연장
+    - **자막 영역 클리어 감지** 시 `subtitle_reset` 신호 전송
 2. **UI Queue**:
-   - `subtitle_reset` 수신 시 **즉시 완전 리셋** 및 이전 버퍼 확정
-   - `preview` 메시지를 `_prepare_preview_raw`로 정규화/게이팅
-   - `keepalive` 메시지를 수신해 마지막 자막 엔트리 종료 시각 갱신
+    - `MainWindowMessageQueue(maxsize=500)`가 worker 메시지를 내부 `run_id` envelope로 감싸고 고빈도 메시지를 coalescing
+    - inactive/stale run의 메시지는 UI에서 즉시 폐기
+    - `subtitle_reset` 수신 시 **즉시 완전 리셋** 및 이전 버퍼 확정
+    - `preview` 메시지를 `_prepare_preview_raw`로 정규화/게이팅
+    - `keepalive` 메시지를 수신해 마지막 자막 엔트리 종료 시각 갱신
 3. **Core Algorithm**:
-   - 통과된 입력만 `_process_raw_text`(글로벌 히스토리 + Suffix)로 전달
-   - `rfind`를 사용하여 반복 문구 과잉 추출 방지
+    - 통과된 입력만 `_process_raw_text`(글로벌 히스토리 + Suffix)로 전달
+    - `rfind`를 사용하여 반복 문구 과잉 추출 방지
 4. **후단 정제**:
-   - `get_word_diff`로 미세 중복 제거
-   - recent compact tail 체크로 대량 반복 블록 재누적 차단
-   - 한글/영문 포함 짧은 발화(1~2글자) 허용 + 기호/숫자-only 노이즈 차단
-   - `_join_stream_text`로 문장부호 기준 공백 결합(웹 표시 형태 최대 보존)
+    - `get_word_diff`로 미세 중복 제거
+    - recent compact tail 체크로 대량 반복 블록 재누적 차단
+    - 한글/영문 포함 짧은 발화(1~2글자) 허용 + 기호/숫자-only 노이즈 차단
+    - `_join_stream_text`로 문장부호 기준 공백 결합(웹 표시 형태 최대 보존)
+    - `_add_text_to_subtitles`와 `_finalize_subtitle`는 동일 shared append/merge 경로를 사용
+    - `_render_subtitles()`는 immutable snapshot clone 기준으로 tail patch를 반영
 5. **종료 처리**:
-   - `_drain_pending_previews`에서 남은 큐 소진
-   - 마지막 항목 보정 및 저장
-   - 백그라운드 작업(파일/세션/DB) 종료 대기 후 종료(`SAVE_THREAD_SHUTDOWN_TIMEOUT`)
+    - `_drain_pending_previews`에서 남은 큐 소진
+    - 마지막 항목 보정 및 저장
+    - 백그라운드 작업(파일/세션/DB) 종료 대기 후 종료(`SAVE_THREAD_SHUTDOWN_TIMEOUT`)
 
 운영 원칙:
 - 코어 알고리즘(`_process_raw_text`, `_extract_new_part`)은 직접 수정하지 않음
 - 반복/누락 이슈는 우선 게이트 임계값과 fallback 경로에서 조정
+- Worker → UI 통신은 `MainWindowMessageQueue`를 우회하지 않음
+- 통계의 `단어 수`는 항상 공백 분리 기준으로 해석
 - 로그 키워드: `subtitle_reset 감지`, `preview suffix desync reset`, `MutationObserver 주입 성공`, `MutationObserver 폴링 브리지 활성화`
 
 ---
@@ -455,16 +491,25 @@ pip install pyinstaller
 pyinstaller subtitle_extractor.spec
 
 # 결과물
-dist/국회의사중계자막추출기 v16.14.2.exe
+dist/국회의사중계자막추출기 v16.14.3.exe
 ```
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
-- `python-docx`와 분할된 `ui.main_window_*` 모듈(`ui.main_window_types` 포함)은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에도 함께 반영합니다.
+- `python-docx`, `pywin32`, `core.subtitle_processor`, 분할된 `ui.main_window_*` 모듈(`ui.main_window_types` 포함)은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
+- 빌드 산출물은 기존 `.gitignore`의 `build/`, `dist/` 규칙으로 계속 관리됩니다.
 
 ---
 
 ## 📝 변경 이력
+
+### v16.14.3 (2026-03-23)
+- `self.driver` 접근을 `_driver_lock`과 identity helper로 통일하고, stop timeout 이후 stale worker run을 `run_id`로 격리
+- `MainWindowMessageQueue(maxsize=500)`와 고빈도 메시지 coalescing으로 preview/keepalive/status/resolved_url backlog를 제한
+- `_finalize_subtitle`를 shared append 경로에 연결하고, 렌더는 immutable snapshot clone 기준으로 정리
+- `SubtitleEntry(entry_id=None)` 자동 ID 생성, `공백 기준 단어 수` 문구 정리, `정보위원회`/`NA`/`PP` 기본 코드 제거
+- `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`를 `v16.14.3` 기준으로 동기화
+- 회귀 테스트 확장 후 `pytest -q` 72개 전체 통과, `pyright` 0 errors 확인
 
 ### v16.14.2 (2026-03-18)
 - 자막 수집 경로는 회귀 대응을 위해 이전 안정 structured probe 루프로 복귀

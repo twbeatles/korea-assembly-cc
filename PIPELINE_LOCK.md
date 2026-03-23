@@ -14,20 +14,26 @@
 
 아래 코어 알고리즘의 **글로벌 히스토리 + suffix 의미론**은 유지하되, 매칭 전략과 리셋 정책은 개선되었습니다.
 
-- `ui/main_window.py`의 `_process_raw_text`
-- `ui/main_window.py`의 `_extract_new_part` — `rfind()` 사용 (v16.12)
-- `ui/main_window.py`의 `_build_subtitle_selector_candidates` — `.smi_word` 우선순위 유지
-- `ui/main_window.py`의 `_read_subtitle_text_by_selectors` — default + iframe/frame 순회 + `.smi_word` 창 수집 유지
-- `ui/main_window.py`의 `_inject_mutation_observer` — 타겟 기반 주입 후 폴링 브리지 fallback 유지
-- `ui/main_window.py`의 `_collect_observer_changes` — Observer 버퍼 우선 수집 유지
-- `ui/main_window.py`의 `_join_stream_text` — 공백/문장부호 보존 결합 유지
-- `ui/main_window.py`의 `_handle_keepalive` — 동일 자막 구간 end_time 연장 유지
+- `ui/main_window_pipeline.py`의 `_process_raw_text`
+- `ui/main_window_pipeline.py`의 `_extract_new_part` — `rfind()` 사용 (v16.12)
+- `ui/main_window_capture.py`의 `_build_subtitle_selector_candidates` — `.smi_word` 우선순위 유지
+- `ui/main_window_capture.py`의 `_read_subtitle_text_by_selectors` — default + iframe/frame 순회 + `.smi_word` 창 수집 유지
+- `ui/main_window_capture.py`의 `_inject_mutation_observer` — 타겟 기반 주입 후 폴링 브리지 fallback 유지
+- `ui/main_window_capture.py`의 `_collect_observer_changes` — Observer 버퍼 우선 수집 유지
+- `ui/main_window_pipeline.py`의 `_join_stream_text` — 공백/문장부호 보존 결합 유지
+- `ui/main_window_pipeline.py`의 `_handle_keepalive` — 동일 자막 구간 end_time 연장 유지
+- `ui/main_window_view.py`의 `_finalize_subtitle` — 호환용 entry point이지만 shared append/merge 규칙 유지
 - `core/utils.py`의 `is_meaningful_subtitle_text` — 짧은 발화 허용 + 노이즈 차단 규칙 유지
 
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.14.2)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.14.3)
+- `ui/main_window.py`/`ui/main_window_capture.py`: `self.driver` 접근을 `_driver_lock` + identity helper로 일원화하고, 시작 시 1회 live URL 감지 + 재연결 URL 재사용으로 handoff race를 줄임
+- `ui/main_window_common.py`/`ui/main_window_pipeline.py`: `MainWindowMessageQueue(maxsize=500)`와 `run_id` envelope, 고빈도 메시지 coalescing, stale run drop 도입
+- `ui/main_window_pipeline.py`/`ui/main_window_view.py`: `_add_text_to_subtitles`와 `_finalize_subtitle`를 shared append helper로 통합하고 realtime write/flush를 락 밖으로 이동
+- `ui/main_window_view.py`: `_render_subtitles()`가 immutable snapshot clone 기준으로 tail patch를 반영
+- `core/models.py`/`core/config.py`: `SubtitleEntry(entry_id=None)` 자동 ID 생성, `snapshot_clone()` 문서화, 기본 특별 코드 목록을 `IO`만 남기고 미검증 `정보위원회`/`NA`/`PP` 제거
 - `ui/main_window_capture.py`: v16.14.2 수집 회귀 대응으로 자막 수집 경로를 이전 안정 structured probe 루프로 복귀
 - `core/subtitle_pipeline.py`: `confirmed_segments` 기반 증분 confirmed-history 갱신으로 append/keepalive/last-row update hot path에서 전체 rebuild를 회피
 - `core/models.py`: `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()` 도입으로 prepared snapshot 메모리 복제를 완화
@@ -70,19 +76,20 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
   -> selector 후보 우선순위 정렬 (.smi_word:last-child 우선)
   -> .smi_word 목록 기반 창(window) 텍스트 조합
   -> 기본 문서 + 중첩 iframe/frame 순회
+  -> driver lifecycle은 _driver_lock + identity helper로 serialize
   -> MutationObserver 버퍼 우선 수집, 미수집 시 structured probe 수행
   -> auto_clean_newlines 옵션(기본 ON)에 따라 줄바꿈/빈 줄 평탄화
   -> clean/compact 기준 중복 전송 억제
   -> 동일 raw 유지 구간 keepalive 메시지 발행
   -> 자막 영역 클리어 감지 → subtitle_reset (완전 리셋)
-  -> Queue(preview: dict payload)
+  -> MainWindowMessageQueue(preview: dict payload, internal run_id envelope)
   -> _prepare_preview_raw(정규화, 게이트, 재동기화, fallback)
      (desync/ambiguous 반복 시 _soft_resync 소프트 리셋)
   -> _process_raw_text(GlobalHistory+Suffix core, rfind 기반)
   -> 후단 정제(get_word_diff, recent compact tail)
-  -> _add_text_to_subtitles (is_meaningful_subtitle_text 필터)
-  -> Queue(keepalive) -> _handle_keepalive(end_time 연장)
-  -> UI delta 반영 (append/tail update 증분 갱신, tail patch render)
+  -> _add_text_to_subtitles / _finalize_subtitle(shared append helper, is_meaningful_subtitle_text 필터)
+  -> MainWindowMessageQueue(keepalive/status/resolved_url coalesced) -> _handle_keepalive(end_time 연장)
+  -> UI delta 반영 (append/tail update 증분 갱신, immutable snapshot + tail patch render)
   -> 종료 시 _drain_pending_previews 강제 플러시
 ```
 
@@ -92,6 +99,8 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 
 ### 4.1 Worker 입력 안정화 (하이브리드)
 - 시작/재연결 시 `_detect_live_broadcast`로 최종 URL(`xcgcd`) 우선 확정
+- 감지는 `xcgcd`가 없을 때 시작 시 1회만 수행하고, 재연결에서는 직전 확정 URL을 우선 재사용
+- `self.driver` 읽기/쓰기/clear는 `_driver_lock`, `_set_current_driver`, `_take_current_driver`, `_clear_current_driver_if` 경로로만 수행
 - MutationObserver 우선 → structured probe fallback — `_inject_mutation_observer`, `_collect_observer_changes`
 - 고정 선택자 우선순위
   - `#viewSubtit .smi_word:last-child`
@@ -160,14 +169,16 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 - 종료 직전 preview와 segments 소진
 - 게이트 통과 실패 시에도 강제 처리 (`forced = clean_text_display(data)`)
 - 누락 감소를 위한 2회 drain + `_finalize_pending_subtitle`
+- stop timeout 뒤 inactive run으로 전환된 worker 메시지는 더 이상 세션 상태에 반영되지 않음
 
 ### 4.7 저장/렌더링 경로 고정
 - `capture_state.entries`가 런타임 단일 source of truth이며, `self.subtitles`는 alias/view로만 유지한다
+- `_finalize_subtitle()`는 호환용 API지만 `_add_text_to_subtitles()`와 같은 shared append/merge helper를 사용한다
 - prepared snapshot은 `CaptureSessionState.snapshot_clone()`을 사용한다
   - pending preview 없음: shallow list snapshot
   - pending preview 있음: 마지막 엔트리만 clone 허용
 - 세션 저장/자동 백업은 streaming JSON writer를 사용하고, DB 저장은 `SubtitleEntry` 직접 입력을 허용한다
-- UI는 `PipelineResult` delta 기준으로 append/tail update를 증분 반영하며, 마지막 visible entry 수정은 full clear 대신 tail patch를 우선 사용한다
+- UI는 `PipelineResult` delta 기준으로 append/tail update를 증분 반영하며, 렌더 입력은 immutable snapshot clone을 사용하고 마지막 visible entry 수정은 full clear 대신 tail patch를 우선 사용한다
 
 ---
 
@@ -219,6 +230,8 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 - 세션 병합 dedupe 버킷: `Config.MERGE_DEDUP_TIME_BUCKET_SECONDS = 30`
 - Observer 재시도 간격: `3.0초`
 - 폴링 브리지 간격: `180ms`
+- Worker queue 최대 크기: `500`
+- coalesced worker message types: `preview`, `keepalive`, `status`, `resolved_url`
 - UI queue drain budget: `약 8ms`, 최대 `50`건
 
 ---

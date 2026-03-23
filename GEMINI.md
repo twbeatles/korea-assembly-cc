@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.2
+- **버전**: v16.14.3
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ## 2. 기술 스택
@@ -13,9 +13,9 @@
 - **언어**: Python 3.10+
 - **GUI**: PyQt6 (Qt)
 - **웹 자동화**: Selenium + Chrome WebDriver
-- **동시성**: threading, queue.Queue
+- **동시성**: threading, bounded `queue.Queue` wrapper (`MainWindowMessageQueue`)
 - **설정**: QSettings, JSON
-- **데이터베이스**: SQLite3 (database.py)
+- **데이터베이스**: SQLite3 (`core/database_manager.py`, `database.py` shim)
 - **문서 출력**: python-docx (DOCX), pywin32 (HWP), 내장 (TXT/SRT/VTT/RTF)
 - **로깅**: logging (파일 + 콘솔)
 
@@ -27,7 +27,7 @@
 │  - 사용자 입력, 자막 렌더링, 통계 업데이트      │
 │  - 연결 상태 모니터링 (🟢/🔴/🟡)              │
 └───────────────────────┬──────────────────────┘
-                        │ message_queue (Queue)
+                        │ message_queue (bounded queue)
 ┌───────────────────────▼──────────────────────┐
 │         Worker Thread (Background)           │
 │  - Selenium 구동                              │
@@ -46,24 +46,26 @@
 ## 4. 핵심 규칙
 
 ### 4.1 UI/Logic 분리
-- UI 스레드와 Worker 스레드 간 통신은 `queue.Queue` 사용
+- UI 스레드와 Worker 스레드 간 통신은 `MainWindowMessageQueue(maxsize=500)` 사용
 - 직접 UI 객체 수정 금지 (스레드 안전하지 않음)
-- **subtitle_lock**: 자막 리스트 접근 시 `threading.Lock()` 필수
+- `self.driver` 접근은 `_driver_lock` + identity helper 경로만 사용
+- **subtitle_lock**: 자막 리스트 접근 시 `threading.Lock()` 필수, 단 파일 I/O/토스트/UI refresh는 락 밖에서 수행
 - 스마트 스크롤: 사용자가 스크롤하면 자동 스크롤 일시 중지 및 위치 유지
 
 ### 4.2 자막 처리 흐름
 1. Worker: MutationObserver 버퍼를 우선 수집하고, 미수집 시 structured probe fallback으로 `preview` 전송
-2. Worker: 시작/재연결 시 URL에 `xcgcd`가 없으면 `xcode` 기준 자동 감지를 1회 수행해 보완 URL로 재접속
+2. Worker: 시작/재연결 시 URL에 `xcgcd`가 없으면 `xcode` 기준 자동 감지를 1회 수행하고, 재연결에서는 직전 확정 URL을 우선 재사용
 3. Worker: 선택자 우선순위(`.smi_word:last-child` 우선) + 기본 문서/iframe 순회로 자막 요소 탐색
 4. Worker: `.smi_word`는 단일 노드 대신 목록 전체를 수집해 최근 창(window) 텍스트로 조합
 5. Worker: 타겟 미탐색 시 `allow_poll_fallback` 기반 JS 폴링 브리지 활성화
-6. Worker: preview 기본 계약은 dict payload 유지
+6. Worker: preview 기본 계약은 dict payload 유지, 내부 큐에서는 `run_id` envelope로 stale run 구분
 7. UI: `_prepare_preview_raw`에서 정규화/게이팅/재동기화 처리 (desync 시 `_soft_resync`)
 8. Core: `_process_raw_text`(GlobalHistory + Suffix, `rfind` 기반)로 새 부분 추출
 9. 후단 정제: `get_word_diff` + recent compact tail 체크 + 유의미 텍스트 게이트(짧은 발화 허용/노이즈 차단)
-10. UI/Persistence: `capture_state.entries` 단일화, delta render/tail patch, `snapshot_clone()` + streaming JSON 저장
-11. 중지 시: `_drain_pending_previews`로 큐를 소진하고 강제 플러시로 누락 방지
-12. 동일 자막 유지 시: 마지막 엔트리 `end_time` 주기 갱신
+10. UI/Persistence: `capture_state.entries` 단일화, delta render/tail patch, immutable render snapshot, `snapshot_clone()` + streaming JSON 저장
+11. finalize 호환 경로도 shared append/merge helper를 사용해 duplicate append를 방지
+12. 중지 시: `_drain_pending_previews`로 큐를 소진하고 강제 플러시로 누락 방지
+13. 동일 자막 유지 시: 마지막 엔트리 `end_time` 주기 갱신
 
 ### 4.3 예외 처리
 - 파일 I/O: `try-except` 필수
@@ -96,7 +98,7 @@
 | `_build_subtitle_selector_candidates()` | 선택자 후보 생성 및 우선순위 정렬 |
 | `_read_subtitle_text_by_selectors()` | 선택자 + 프레임 경로 순회 기반 자막 읽기 (`.smi_word` 창 수집 포함) |
 | `_activate_subtitle()` | AI 자막 레이어 활성화 |
-| `_process_message_queue()` | Queue 폴링 (100ms) |
+| `_process_message_queue()` | bounded queue + stale run filtering (100ms) |
 | `_prepare_preview_raw()` | preview 입력 정규화/게이트/재동기화 |
 | `_soft_resync()` | 소프트 리셋 (최근 자막 기반 히스토리 복원) |
 | `_extract_stream_delta()` | 직전 raw 대비 증분 추출 fallback |
@@ -130,6 +132,7 @@ korea-assembly-cc/
     models.py
     reflow.py
     subtitle_pipeline.py
+    subtitle_processor.py
     text_utils.py
     utils.py                    # 호환용 re-export shim
   ui/                           # UI 구성요소
@@ -151,6 +154,7 @@ korea-assembly-cc/
     test_core_algorithm.py      # 코어 알고리즘 단위 테스트
     test_encoding_hygiene.py    # UTF-8/BOM/U+FFFD/한글 round-trip 검증
     test_pyright_regression.py  # pyright 0 error 회귀 테스트
+    test_review_20260323_regressions.py  # run_id/alert/HWP/SRT-VTT 회귀 테스트
     test_reflow.py              # Reflow 테스트
   README.md                 # 문서
   CLAUDE.md                 # AI 컨텍스트
@@ -227,7 +231,7 @@ pip install -r requirements-dev.txt
 
 ### 특별위원회 프리셋 추가
 - `Config.DEFAULT_COMMITTEE_PRESETS`: 국정감사, 국정조사, 국회정보나침반 URL
-- `Config.SPECIAL_COMMITTEE_XCODES`: 문자열 xcode 매핑 (IO, NA, PP)
+- `Config.SPECIAL_COMMITTEE_XCODES`: 현재 검증된 문자열 xcode는 `IO`만 유지
 
 ### 사용자 안내 개선
 - `subtitle_not_found` 메시지 상세화: 가능한 원인, 해결 방법, URL 예시 포함
@@ -346,6 +350,19 @@ pip install -r requirements-dev.txt
 ### ✅ 검증 상태
 - `commit_live_row` 1,500회 benchmark 약 `10.3초 -> 3.8초`
 - `pytest -q` 59 pass, `pyright` 0 errors
+
+## 9.9.1 v16.14.3 운영 정합성 동기화 (2026-03-23)
+### 🔒 Worker lifecycle / queue
+- `self.driver` 접근을 `_driver_lock` + identity helper로 통일하고, stop timeout 뒤 stale run을 즉시 inactive 처리
+- `MainWindowMessageQueue(maxsize=500)`가 Worker 메시지를 `run_id` envelope로 감싸고 `preview`/`keepalive`/`status`/`resolved_url`를 coalescing
+- `xcgcd` 자동 감지는 시작 시 1회만 수행하고, 재연결에서는 이미 해석된 live URL을 우선 재사용
+### 🧾 Subtitle path / render
+- `_finalize_subtitle()`는 shared append/merge helper를 사용해 파이프라인과 동일한 반영 규칙을 따름
+- realtime write/flush는 `subtitle_lock` 밖으로 이동하고, 렌더는 immutable snapshot clone을 사용
+- `SubtitleEntry(entry_id=None)`는 런타임에서 항상 ID를 생성
+### ⚙️ 설정 / 검증
+- 미검증 `정보위원회`/`NA`/`PP` 기본 코드 제거, `공백 기준 단어 수` 문구 정리
+- `pytest -q` 72 pass, `pyright` 0 errors
 
 ## 9.10 v16.14.1 자동 줄넘김 정리 기본 활성화 (2026-03-17)
 ### 🧹 자동 줄넘김 정리 옵션

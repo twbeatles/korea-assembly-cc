@@ -13,7 +13,7 @@ from pathlib import Path
 block_cipher = None
 
 
-def _load_version_from_readme(default: str = "16.14.2") -> str:
+def _load_version_from_readme(default: str = "16.14.3") -> str:
     spec_path = Path(globals().get("__file__", "subtitle_extractor.spec")).resolve()
     readme_path = spec_path.parent / "README.md"
     try:
@@ -65,8 +65,11 @@ HIDDEN_IMPORTS = [
     'core.models',
     'core.reflow',
     'core.subtitle_pipeline',
+    'core.subtitle_processor',
     'core.text_utils',
     'core.utils',
+    'selenium.common.exceptions',
+    'selenium.webdriver.chrome.options',
     'selenium.webdriver.chrome.service',
     'selenium.webdriver.common.by',
     'selenium.webdriver.support.ui',
@@ -86,10 +89,6 @@ HIDDEN_IMPORTS = [
     'win32com',
     'win32com.client',
     'pythoncom',
-    'queue',
-    'threading',
-    'json',
-    'logging',
     'queue',
     'threading',
     'json',

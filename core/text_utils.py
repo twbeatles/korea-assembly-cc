@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
 from core.config import Config
-from core.models import SubtitleEntry
 
 def clean_text(text: str) -> str:
     """자막 텍스트 정리 (성능 최적화: 사전 컴파일된 정규식 사용)"""
