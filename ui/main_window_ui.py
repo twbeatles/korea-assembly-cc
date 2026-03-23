@@ -1580,6 +1580,7 @@ class MainWindowUIMixin(MainWindowHost):
     <li><b>SRT</b> - 자막 파일 형식</li>
     <li><b>VTT</b> - WebVTT 자막 형식</li>
     <li><b>DOCX</b> - Word 문서</li>
+    <li><b>HWPX</b> - 한글 문서 (기본 포맷)</li>
     </ul>
 
     <h3>🔍 검색 및 하이라이트</h3>

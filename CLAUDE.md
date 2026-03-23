@@ -23,7 +23,7 @@
 | **동시성** | threading, bounded `queue.Queue` wrapper (`MainWindowMessageQueue`) |
 | **설정 저장** | QSettings, JSON |
 | **데이터베이스** | SQLite3 (세션/자막 히스토리) |
-| **문서 출력** | python-docx (DOCX), pywin32 (HWP), 내장 (TXT/SRT/VTT/RTF) |
+| **문서 출력** | python-docx (DOCX), 내장 HWPX, pywin32 (HWP), 내장 (TXT/SRT/VTT/RTF) |
 | **로깅** | logging (파일 + 콘솔) |
 
 ## 3. 아키텍처 구조
@@ -124,6 +124,7 @@ korea-assembly-cc/
     subtitle_pipeline.py
     subtitle_processor.py
     text_utils.py
+    hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim
   ui/                           # UI 구성요소
     dialogs.py
@@ -188,7 +189,7 @@ korea-assembly-cc/
 | `_finalize_subtitle()` | 중지 시 마지막 버퍼 확정 |
 | `_drain_pending_previews()` | 종료 직전 preview 큐 소진 |
 | `_render_subtitles()` | 자막 화면 렌더링 + 키워드 하이라이트 |
-| `_save_in_background()` | 파일 저장 백그라운드 처리 (TXT/SRT/VTT/DOCX/HWP/RTF/통계 내보내기, 스레드 추적/종료 대기 연동) |
+| `_save_in_background()` | 파일 저장 백그라운드 처리 (TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 내보내기, 스레드 추적/종료 대기 연동) |
 | `_start_background_thread()` | 공통 백그라운드 스레드 등록/시작 (종료 단계 차단 포함) |
 | `_wait_active_background_threads()` | 종료 시 백그라운드 작업(파일/세션/DB) 제한시간 대기 |
 | `_wait_active_save_threads()` | 종료 시 저장 스레드 제한시간 대기 |
@@ -199,6 +200,11 @@ korea-assembly-cc/
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
 ## 6. 최신 변경 요약 (v16.14.3 기준)
+
+### HWPX 기본 내보내기 추가 메모
+- **기본 HWPX export 추가**: `파일 → HWPX 저장` 메뉴와 `core/hwpx_export.py`를 추가해 한컴 미설치 환경에서도 기본 `.hwpx` 문서를 생성할 수 있게 함
+- **패키지 구조**: `assets/hwpx/header.xml` 템플릿과 `Contents/section0.xml`, `Preview/PrvText.txt`, `Contents/content.hpf`를 조합해 최소 유효 HWPX 패키지를 작성
+- **검증 보강**: HWPX 저장 회귀 테스트와 특수문자/XML escape, 줄바꿈 preview 검증을 추가해 `pytest -q` 76 pass, `pyright` 0 errors 확인
 
 ### v16.14.3 운영 정합성 동기화 메모
 - **driver lifecycle 정리**: `self.driver` 접근을 `_driver_lock` + identity helper로 통일해 start/stop/reconnect/finally handoff race를 줄임
@@ -293,6 +299,7 @@ korea-assembly-cc/
 | SRT | `.srt` | 영상 자막 표준 형식 |
 | VTT | `.vtt` | WebVTT 형식 |
 | DOCX | `.docx` | Word 문서 (python-docx 필요) |
+| HWPX | `.hwpx` | 한글 문서 기본 포맷 (추가 외부 프로그램 불필요) |
 | HWP | `.hwp` | 한글 문서 (pywin32/한컴오피스 필요) |
 | RTF | `.rtf` | 리치 텍스트 형식 |
 | JSON (세션) | `.json` | 전체 세션 복원용 |
@@ -306,6 +313,7 @@ pip install -r requirements-dev.txt
 ```
 
 - `requirements-dev.txt`에는 DOCX(`python-docx`)와 HWP(`pywin32`) 저장용 optional 패키지가 함께 정리되어 있음
+- HWPX 저장은 기본 내장 기능이며 별도 외부 프로그램이 필요하지 않음
 
 ### 8.2 Chrome WebDriver
 - Selenium 4.x는 자동으로 WebDriver를 관리합니다
@@ -338,6 +346,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
 - `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
 - `tests/test_encoding_hygiene.py`: UTF-8 without BOM, U+FFFD 금지, 핵심 한글 문자열 round-trip 검증
+- `tests/test_hwpx_export.py`: HWPX 패키지 구조, preview 텍스트, XML escape/줄바꿈 회귀 검증
 - `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
 
 ## 9. 성능 최적화 (v16.8)

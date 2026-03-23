@@ -60,6 +60,7 @@ HIDDEN_IMPORTS = [
     'docx.enum.text',
     'core.database_manager',
     'core.file_io',
+    'core.hwpx_export',
     'core.live_capture',
     'core.logging_utils',
     'core.models',
@@ -103,7 +104,8 @@ a = Analysis(
     pathex=[],
     binaries=[],
     # Config.VERSION이 README 첫 줄에서 버전을 읽으므로 빌드 산출물에도 함께 포함한다.
-    datas=[('README.md', '.'), ('assets/icon.ico', 'assets')],
+    # HWPX 기본 내보내기는 assets/hwpx/header.xml 템플릿을 사용한다.
+    datas=[('README.md', '.'), ('assets/icon.ico', 'assets'), ('assets/hwpx', 'assets/hwpx')],
     hiddenimports=HIDDEN_IMPORTS + ['sqlite3'],
     hookspath=[],
     hooksconfig={},

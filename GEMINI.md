@@ -16,7 +16,7 @@
 - **동시성**: threading, bounded `queue.Queue` wrapper (`MainWindowMessageQueue`)
 - **설정**: QSettings, JSON
 - **데이터베이스**: SQLite3 (`core/database_manager.py`, `database.py` shim)
-- **문서 출력**: python-docx (DOCX), pywin32 (HWP), 내장 (TXT/SRT/VTT/RTF)
+- **문서 출력**: python-docx (DOCX), 내장 HWPX, pywin32 (HWP), 내장 (TXT/SRT/VTT/RTF)
 - **로깅**: logging (파일 + 콘솔)
 
 ## 3. 아키텍처 요약
@@ -109,7 +109,7 @@
 | `_finalize_subtitle()` | 종료 시 마지막 버퍼 확정 |
 | `_drain_pending_previews()` | 종료 직전 preview 큐 소진 |
 | `_render_subtitles()` | 자막 렌더링 + 하이라이트 |
-| `_save_in_background()` | 비동기 파일 저장 헬퍼 (스레드 추적/종료 대기 연동) |
+| `_save_in_background()` | 비동기 파일 저장 헬퍼 (TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 내보내기, 스레드 추적/종료 대기 연동) |
 | `_start_background_thread()` | 공통 백그라운드 스레드 등록/시작 (종료 단계 차단 포함) |
 | `_wait_active_background_threads()` | 종료 시 백그라운드 작업(파일/세션/DB) 제한시간 대기 |
 | `_wait_active_save_threads()` | 종료 시 저장 스레드 제한시간 대기 |
@@ -134,6 +134,7 @@ korea-assembly-cc/
     subtitle_pipeline.py
     subtitle_processor.py
     text_utils.py
+    hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim
   ui/                           # UI 구성요소
     dialogs.py
@@ -178,6 +179,7 @@ pip install -r requirements-dev.txt
 ```
 
 - `requirements-dev.txt`에는 DOCX(`python-docx`)와 HWP(`pywin32`) 저장용 optional 패키지가 함께 정리되어 있음
+- HWPX 저장은 기본 내장 기능이며 별도 외부 프로그램이 필요하지 않음
 
 ### 8.1 개발 품질 게이트
 - 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors`
@@ -196,7 +198,14 @@ pip install -r requirements-dev.txt
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
 - `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
 - `tests/test_encoding_hygiene.py`: UTF-8 without BOM, U+FFFD 금지, 핵심 한글 문자열 round-trip 검증
+- `tests/test_hwpx_export.py`: HWPX 패키지 구조, preview 텍스트, XML escape/줄바꿈 회귀 검증
 - `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
+
+## 9. HWPX 기본 내보내기 추가 (2026-03-23)
+
+- **기본 HWPX export 추가**: `파일 → HWPX 저장` 메뉴와 `core/hwpx_export.py`를 추가해 한컴 미설치 환경에서도 기본 `.hwpx` 문서를 생성할 수 있게 함
+- **패키지 구조**: `assets/hwpx/header.xml` 템플릿과 `Contents/section0.xml`, `Preview/PrvText.txt`, `Contents/content.hpf`를 조합해 최소 유효 HWPX 패키지를 작성
+- **검증 보강**: HWPX 저장 회귀 테스트와 특수문자/XML escape, 줄바꿈 preview 검증을 추가해 `pytest -q` 76 pass, `pyright` 0 errors 확인
 
 ## 9. v16.6 신규 기능
 
