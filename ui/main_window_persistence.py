@@ -443,14 +443,14 @@ class MainWindowPersistenceMixin(MainWindowHost):
             try:
                 win32_client = _import_optional_module("win32com.client")
             except ImportError:
-                QMessageBox.warning(
+                QMessageBox.information(
                     self,
-                    "라이브러리 필요",
-                    "HWP 저장을 위해 pywin32 라이브러리가 필요합니다.\n\n"
-                    "설치: pip install pywin32\n\n"
-                    "RTF 형식으로 저장을 시도합니다.",
+                    "HWP 대체 저장",
+                    "한글(HWP) 저장은 Windows + pywin32 + 한컴오피스가 필요합니다.\n\n"
+                    "HWPX 형식으로 저장합니다.\n"
+                    "(.hwpx 파일은 한컴오피스 2018 이상에서 열 수 있습니다)",
                 )
-                self._save_rtf()
+                self._save_hwpx()
                 return
 
             # 저장 대화상자
@@ -604,17 +604,46 @@ class MainWindowPersistenceMixin(MainWindowHost):
             )
 
             if reply == QMessageBox.StandardButton.Yes:
-                items = ["RTF (한글 호환)", "DOCX (Word)", "TXT (텍스트)"]
+                items = ["HWPX (한글 호환, 권장)", "RTF (한글 호환)", "DOCX (Word)", "TXT (텍스트)"]
                 item, ok = QInputDialog.getItem(
                     self, "형식 선택", "저장 형식:", items, 0, False
                 )
                 if ok and item:
-                    if "RTF" in item:
+                    if "HWPX" in item:
+                        self._save_hwpx()
+                    elif "RTF" in item:
                         self._save_rtf()
                     elif "DOCX" in item:
                         self._save_docx()
                     else:
                         self._save_txt()
+
+
+    def _save_hwpx(self):
+            """HWPX 파일로 저장 (순수 Python, Hancom Office 불필요)"""
+            prepared_entries = self._build_prepared_entries_snapshot()
+            if not prepared_entries:
+                QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
+                return
+
+            filename = self._generate_smart_filename("hwpx")
+            path, _ = QFileDialog.getSaveFileName(
+                self, "HWPX 저장", filename, "HWPX 문서 (*.hwpx)"
+            )
+
+            if not path:
+                return
+
+            generated_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
+
+            def do_save(filepath: str) -> None:
+                utils.save_hwpx(
+                    filepath,
+                    list(prepared_entries),
+                    generated_at=generated_at,
+                )
+
+            self._save_in_background(do_save, path, "HWPX 저장 완료!", "HWPX 저장 실패")
 
 
     def _rtf_encode(self, text: str) -> str:
