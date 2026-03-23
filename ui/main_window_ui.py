@@ -108,13 +108,13 @@ class MainWindowUIMixin(MainWindowHost):
             save_docx.triggered.connect(self._save_docx)
             file_menu.addAction(save_docx)
 
-            save_hwpx = QAction("HWPX 저장", self)
-            save_hwpx.triggered.connect(self._save_hwpx)
-            file_menu.addAction(save_hwpx)
-
-            save_hwp = QAction("HWP 저장 (한글)", self)
+            save_hwp = QAction("HWP 저장 (한글, COM)", self)
             save_hwp.triggered.connect(self._save_hwp)
             file_menu.addAction(save_hwp)
+
+            save_hwpx = QAction("HWPX 저장 (한글 호환)", self)
+            save_hwpx.triggered.connect(self._save_hwpx)
+            file_menu.addAction(save_hwpx)
 
             save_rtf = QAction("RTF 저장", self)
             save_rtf.triggered.connect(self._save_rtf)
