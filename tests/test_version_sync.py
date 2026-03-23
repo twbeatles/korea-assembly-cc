@@ -25,3 +25,16 @@ def test_spec_default_version_matches_readme():
     assert spec_match is not None
     assert readme_match is not None
     assert spec_match.group(1) == readme_match.group(1)
+
+
+def test_spec_includes_runtime_selenium_webdriver_modules():
+    spec_text = Path("subtitle_extractor.spec").read_text(encoding="utf-8")
+
+    required_hidden_imports = [
+        "selenium.webdriver.chrome.webdriver",
+        "selenium.webdriver.chromium.webdriver",
+        "selenium.webdriver.common.driver_finder",
+    ]
+
+    for module_name in required_hidden_imports:
+        assert f"'{module_name}'" in spec_text or f'"{module_name}"' in spec_text
