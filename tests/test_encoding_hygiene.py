@@ -12,6 +12,7 @@ TEXT_SUFFIXES = {
     ".json",
     ".md",
     ".py",
+    ".pyi",
     ".spec",
     ".toml",
     ".txt",
@@ -40,6 +41,7 @@ ROUND_TRIP_EXPECTATIONS = {
     PROJECT_ROOT / ".gitattributes": "working-tree-encoding=UTF-8",
     PROJECT_ROOT / ".vscode" / "settings.json": '"files.encoding": "utf8"',
     PROJECT_ROOT / "pyrightconfig.json": "국회의사중계 자막.py",
+    PROJECT_ROOT / "typings" / "PyQt6" / "QtCore.pyi": "class QSettings(_QtObject): ...",
     PROJECT_ROOT / "ui" / "main_window_ui.py": "국회 의사중계 자막 추출기",
 }
 

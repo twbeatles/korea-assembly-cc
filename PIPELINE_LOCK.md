@@ -39,6 +39,8 @@
 - `core/models.py`: `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()` 도입으로 prepared snapshot 메모리 복제를 완화
 - `ui/main_window_pipeline.py`/`ui/main_window_view.py`: `capture_state.entries`를 단일 source of truth로 고정하고, append/tail update는 delta 기반 갱신 + tail patch render 사용
 - `ui/main_window_persistence.py`/`core/file_io.py`/`core/database_manager.py`: streaming JSON 저장, `SubtitleEntry` 직접 DB 저장, stale thread connection cleanup cadence 완화
+- `typings/`/`pytest.ini`/`.gitignore`: 로컬 PyQt6·selenium·pytest stub, workspace basetemp(`.pytest_tmp`), 루트 `.hwpx` ignore 규칙으로 저장소 검증 경로를 고정
+- `ui/main_window_persistence.py`/`tests/test_review_20260323_regressions.py`: `pywin32` 미설치 시 HWP 저장은 즉시 HWPX로 대체되고, 저장 실패 후 사용자 선택 다이얼로그는 별도 경로로 유지
 - `core/subtitle_pipeline.py`: `auto_clean_newlines` 런타임 옵션 도입, preview/live-row/flush 정규화 경로 통일
 - `ui/main_window.py`/`ui/main_window_ui.py`: `✨ 자동 줄넘김 정리` 체크박스 추가, 기본 활성화 + `QSettings` 영속화
 - `_extract_new_part`: `find()` → `rfind()` 전환 — suffix 충돌 시 과잉 추출 방지
@@ -59,7 +61,7 @@
 - `ui/main_window.py`는 파사드로 축소되고, 실제 책임은 `ui/main_window_capture.py`, `ui/main_window_pipeline.py`, `ui/main_window_view.py`, `ui/main_window_persistence.py`, `ui/main_window_database.py`, `ui/main_window_ui.py`로 분리되었다.
 - `core/live_capture.py`와 `core/subtitle_pipeline.py`는 더 이상 `MainWindow` 내부 임시 로직이 아니라 운영 기준 코어 모듈이다.
 - `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py`를 추가하고, `core/utils.py`와 `database.py`는 호환 shim으로 유지한다.
-- `ui/main_window_types.py`는 분할된 mixin이 공유하는 `MainWindowHost` 타입 계약을 제공해 Pylance/Pyright 기준의 공통 `self` 표면을 고정한다.
+- `ui/main_window_types.py`는 분할된 mixin이 공유하는 `MainWindowHost` 타입 계약을 제공해 Pylance/Pyright 기준의 공통 `self` 표면을 고정하고, 로컬 `typings/`는 외부 GUI/selenium 패키지 해석 편차를 흡수한다.
 
 ### 2.2 안정화 이력 (v16.12.1, 2026-02-25)
 - `_extraction_worker`: URL에 `xcgcd`가 없을 때만 `xcode` 기반 자동 감지를 연결

@@ -6,6 +6,7 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.pytest_tmp/
 .ruff_cache/
 .mypy_cache/
 .tox/
@@ -69,6 +70,7 @@ presets_*.json
 /*.srt
 /*.vtt
 /*.rtf
+/*.hwpx
 /*.hwp
 /*.docx
 국회자막_*.hwp

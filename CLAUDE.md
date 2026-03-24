@@ -212,7 +212,9 @@ korea-assembly-cc/
 - **subtitle write path 단일화**: `_finalize_subtitle()`가 shared append/merge helper를 사용하도록 정리되고 realtime write/flush는 락 밖으로 이동
 - **모델/설정 정합화**: `SubtitleEntry(entry_id=None)` 자동 ID 생성, `공백 기준 단어 수` 문구 고정, `정보위원회`/`NA`/`PP` 기본 코드 제거
 - **회귀 테스트 확장**: stale run drop, alert keyword persistence/toast, HWP smoke, SRT/VTT `end_time=None`, auto-backup start rollback 검증 추가
-- **검증 상태**: `pytest -q` 72 pass, `pyright` 0 errors
+- **도구 체인 고정**: 로컬 `typings/` stub과 `pytest.ini --basetemp=.pytest_tmp`로 글로벌 Python/Windows TEMP 권한 편차를 흡수하고, 루트 `.hwpx` 산출물도 `.gitignore`에 반영
+- **HWP 대체 저장 정렬**: `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
+- **검증 상태**: `pytest -q` 76 pass, `pyright` 0 errors
 ### v16.14.2 성능 최적화 중심 리팩토링 메모
 - **수집 경로 안정화**: 자막 수집 회귀 대응으로 Worker 캡처 루프는 이전 안정 structured probe 경로로 복귀
 - **Pipeline hot path 최적화**: `confirmed_segments` 증분 갱신으로 append/tail update에서 전체 history rebuild를 피함

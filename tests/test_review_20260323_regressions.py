@@ -4,6 +4,7 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from zipfile import ZipFile
 
 import pytest
@@ -128,7 +129,7 @@ class _FakeDispatch:
         return self._hwp
 
 
-def _build_window() -> MainWindow:
+def _build_window() -> Any:
     win = MainWindow.__new__(MainWindow)
     win.subtitle_lock = threading.Lock()
     win.capture_state = create_empty_capture_state()
@@ -272,18 +273,20 @@ def test_save_hwpx_writes_basic_package_with_preview_text(tmp_path, monkeypatch)
     assert "둘째 문장" in section_xml
 
 
-def test_save_hwp_falls_back_to_rtf_when_pywin32_is_missing(monkeypatch):
+def test_save_hwp_falls_back_to_hwpx_when_pywin32_is_missing(monkeypatch):
     win = _build_window()
     win._build_prepared_entries_snapshot = lambda: [SubtitleEntry("첫 문장")]
     fallback_called: list[bool] = []
-    win._save_rtf = lambda: fallback_called.append(True)
+    win._save_hwpx = lambda: fallback_called.append(True)
 
     monkeypatch.setattr(
         persistence_mod,
         "_import_optional_module",
         lambda name: (_ for _ in ()).throw(ImportError(name)),
     )
-    monkeypatch.setattr(persistence_mod.QMessageBox, "warning", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        persistence_mod.QMessageBox, "information", lambda *args, **kwargs: None
+    )
 
     MainWindow._save_hwp(win)
 

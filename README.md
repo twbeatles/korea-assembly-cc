@@ -47,9 +47,11 @@
 - 확인되지 않은 `정보위원회`, `NA`, `PP` 기본 프리셋/매핑은 제거하고, 현재 기본 특별 코드 목록은 검증된 `IO`만 유지합니다.
 - 통계/내보내기/UI의 단어 수 표기는 모두 `공백 기준 단어 수`로 명시해 형태소 통계처럼 오해되지 않도록 정리했습니다.
 - 회귀 테스트 범위를 stale run drop, `alert_keywords` 저장/토스트, SRT/VTT `end_time=None`, HWP mock smoke, auto-backup start rollback까지 확장했습니다.
+- 로컬 `typings/`에 `PyQt6`/`selenium`/`pytest` 최소 stub을 추가하고 `pytest.ini`를 `--basetemp=.pytest_tmp`로 고정해 Windows 글로벌 Python 환경에서도 `pyright`와 전체 테스트 경로를 안정화했습니다.
+- `ui/main_window_types.py`의 `_save_hwpx` 중복 선언을 제거하고, `pywin32` 미설치 시 HWP 저장이 `HWPX`로 자동 대체되는 현재 동작에 맞춰 회귀 테스트와 `.gitignore`의 루트 `.hwpx` 무시 규칙을 정리했습니다.
 
 ### ✅ 현재 검증 상태
-- `pytest -q`: `72 passed`
+- `pytest -q`: `76 passed`
 - `pyright`: `0 errors`
 - `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`를 `v16.14.3` 기준으로 동기화했습니다.
 
@@ -448,6 +450,7 @@ python "국회의사중계 자막.py"
 
 ### HWP 저장 오류
 - **한글 오피스**가 설치되어 있어야 합니다
+- `pywin32` 또는 한컴오피스가 없으면 HWP 저장 요청은 즉시 `HWPX`로 자동 대체됩니다
 - 저장 실패 시 RTF/DOCX/TXT 대체 형식을 선택할 수 있습니다
 - RTF 파일은 한글에서 열 수 있습니다
 
@@ -470,12 +473,15 @@ python -c "import ui.main_window as m; print(m.MainWindow.__name__)"
 - 소스 코드, 문서(`.md`), 빌드 스펙(`subtitle_extractor.spec`)은 **UTF-8 without BOM**을 유지합니다.
 - 사용자 내보내기 텍스트 중 일부 경로(TXT 실시간 저장/일반 TXT 저장)는 Windows 메모장 호환을 위해 `utf-8-sig`를 사용합니다.
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 같은 진단 기준을 사용합니다.
+- `pytest.ini`는 `--basetemp=.pytest_tmp`를 사용해 Windows 사용자 TEMP 권한 이슈와 한글 사용자명 경로 영향을 줄입니다.
 - Windows PowerShell 5.x 기본 출력 인코딩에서는 UTF-8 without BOM 파일이 콘솔에 깨져 보일 수 있습니다. 저장소 기준 파일 자체는 UTF-8입니다.
 
 ### 저장소 기준 파일
 - `pyrightconfig.json`: Pylance/Pyright의 저장소 공통 타입 체크 기준(`standard`, Python 3.10)
 - `.vscode/settings.json`: 워크스페이스 단위 Pylance/UTF-8 설정
 - `.editorconfig`, `.gitattributes`: UTF-8 without BOM + CRLF 기준 유지
+- `typings/`: 글로벌 인터프리터 환경에서도 `pyright` errorCount를 0으로 유지하기 위한 로컬 PyQt6/selenium/pytest 최소 stub
+- `pytest.ini`: 워크스페이스 내부 basetemp 경로(`.pytest_tmp`)를 강제해 테스트 임시 디렉터리 권한 문제를 우회
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
 - `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
 - `tests/test_encoding_hygiene.py`: repo tracked 텍스트 파일의 UTF-8/BOM/U+FFFD 위생 및 핵심 한글 문자열 round-trip 검증
@@ -500,6 +506,7 @@ dist/국회의사중계자막추출기 v16.14.3.exe
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
 - `python-docx`, `pywin32`, `core.subtitle_processor`, 분할된 `ui.main_window_*` 모듈(`ui.main_window_types` 포함)은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
+- `typings/`는 정적 분석 전용 로컬 stub이므로 frozen 번들에는 포함하지 않습니다.
 - 빌드 산출물은 기존 `.gitignore`의 `build/`, `dist/` 규칙으로 계속 관리됩니다.
 
 ---
@@ -512,7 +519,8 @@ dist/국회의사중계자막추출기 v16.14.3.exe
 - `_finalize_subtitle`를 shared append 경로에 연결하고, 렌더는 immutable snapshot clone 기준으로 정리
 - `SubtitleEntry(entry_id=None)` 자동 ID 생성, `공백 기준 단어 수` 문구 정리, `정보위원회`/`NA`/`PP` 기본 코드 제거
 - `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`를 `v16.14.3` 기준으로 동기화
-- 회귀 테스트 확장 후 `pytest -q` 72개 전체 통과, `pyright` 0 errors 확인
+- 로컬 `typings/`, `pytest.ini --basetemp=.pytest_tmp`, 루트 `.hwpx`/`.pytest_tmp` ignore 규칙을 추가해 저장소 검증 경로를 고정
+- 회귀 테스트 확장 후 `pytest -q` 76개 전체 통과, `pyright` 0 errors 확인
 
 ### v16.14.2 (2026-03-18)
 - 자막 수집 경로는 회귀 대응을 위해 이전 안정 structured probe 루프로 복귀

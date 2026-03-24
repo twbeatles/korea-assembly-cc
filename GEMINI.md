@@ -371,7 +371,9 @@ pip install -r requirements-dev.txt
 - `SubtitleEntry(entry_id=None)`는 런타임에서 항상 ID를 생성
 ### ⚙️ 설정 / 검증
 - 미검증 `정보위원회`/`NA`/`PP` 기본 코드 제거, `공백 기준 단어 수` 문구 정리
-- `pytest -q` 72 pass, `pyright` 0 errors
+- 로컬 `typings/` stub과 `pytest.ini --basetemp=.pytest_tmp`로 글로벌 Python/Windows TEMP 권한 편차를 흡수하고, 루트 `.hwpx` 산출물도 `.gitignore`에 반영
+- `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
+- `pytest -q` 76 pass, `pyright` 0 errors
 
 ## 9.10 v16.14.1 자동 줄넘김 정리 기본 활성화 (2026-03-17)
 ### 🧹 자동 줄넘김 정리 옵션
