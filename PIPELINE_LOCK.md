@@ -28,7 +28,9 @@
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.14.3)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.14.4)
+- `ui/main_window_view.py`/`ui/main_window_pipeline.py`/`ui/main_window_database.py`: v16.14.4에서 검색 기준이 전체 `self.subtitles` 스냅샷으로 바뀌고, 검색/DB 결과 focus 시 해당 entry가 보이도록 렌더 offset을 동적으로 조정했다. 이는 UI 탐색 경로 보강이며 코어의 글로벌 히스토리 + suffix 의미론은 변경하지 않는다.
+- `ui/main_window.py`/`ui/main_window_ui.py`/`ui/main_window_persistence.py`/`ui/main_window_database.py`: v16.14.4에서 세션 로드/병합/리플로우/삭제 계열을 공통 runtime mutation guard로 묶고, 파일/DB 세션 로드 payload와 완료 핸들러를 통합했다. 이는 상태 전이 안전성 정리이며 코어 추출 알고리즘 자체는 바꾸지 않는다.
 - `ui/main_window.py`/`ui/main_window_capture.py`: `self.driver` 접근을 `_driver_lock` + identity helper로 일원화하고, 시작 시 1회 live URL 감지 + 재연결 URL 재사용으로 handoff race를 줄임
 - `ui/main_window_common.py`/`ui/main_window_pipeline.py`: `MainWindowMessageQueue(maxsize=500)`와 `run_id` envelope, 고빈도 메시지 coalescing, stale run drop 도입
 - `ui/main_window_pipeline.py`/`ui/main_window_view.py`: `_add_text_to_subtitles`와 `_finalize_subtitle`를 shared append helper로 통합하고 realtime write/flush를 락 밖으로 이동

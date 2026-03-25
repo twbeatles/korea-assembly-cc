@@ -131,23 +131,26 @@ class MainWindowDatabaseMixin(MainWindowHost):
             if task_name == "db_history_load_selected":
                 self._set_db_history_dialog_busy(False)
                 payload = result if isinstance(result, dict) else {}
-                if not payload.get("ok"):
-                    self._set_status("세션 불러오기 실패", "error")
-                    self._show_toast("세션을 불러오지 못했습니다.", "error")
+                if not self._complete_loaded_session(payload):
+                    if not payload.get("_cancelled"):
+                        self._set_status("세션 불러오기 실패", "error")
+                        self._show_toast("세션을 불러오지 못했습니다.", "error")
                     return
-
-                new_subtitles = payload.get("subtitles", [])
-                skipped = int(payload.get("skipped", 0) or 0)
-                self._replace_subtitles_and_refresh(new_subtitles)
-
-                message = f"세션 불러오기 완료! {len(new_subtitles)}개 문장"
-                if skipped > 0:
-                    message += f" (손상 항목 {skipped}개 제외)"
-                self._show_toast(message, "success")
-                self._set_status(message, "success")
 
                 state = self._db_history_dialog_state or {}
                 dialog = state.get("dialog")
+                if dialog is not None:
+                    dialog.accept()
+                return
+
+            if task_name == "db_search_load_selected":
+                payload = result if isinstance(result, dict) else {}
+                if not self._complete_loaded_session(payload):
+                    if not payload.get("_cancelled"):
+                        self._set_status("검색 결과 세션 불러오기 실패", "error")
+                        self._show_toast("검색 결과 세션을 불러오지 못했습니다.", "error")
+                    return
+                dialog = context.get("dialog")
                 if dialog is not None:
                     dialog.accept()
                 return
@@ -189,7 +192,11 @@ class MainWindowDatabaseMixin(MainWindowHost):
         ) -> None:
             """DB 비동기 작업 실패 처리 (UI 스레드)."""
             context = context or {}
-            if task_name in ("db_history_load_selected", "db_history_delete_selected"):
+            if task_name in (
+                "db_history_load_selected",
+                "db_history_delete_selected",
+                "db_search_load_selected",
+            ):
                 self._set_db_history_dialog_busy(False)
             query_hint = str(context.get("query", "")).strip()
             message = f"DB 작업 실패 ({task_name}): {error}"
@@ -242,6 +249,8 @@ class MainWindowDatabaseMixin(MainWindowHost):
             load_btn = QPushButton("불러오기")
 
             def load_selected():
+                if self._is_runtime_mutation_blocked("세션 불러오기"):
+                    return
                 idx = list_widget.currentRow()
                 if idx < 0 or idx >= len(sessions):
                     return
@@ -258,12 +267,19 @@ class MainWindowDatabaseMixin(MainWindowHost):
                 def worker(sid=session_id):
                     session_data = db.load_session(sid)
                     if not session_data:
-                        return {"ok": False, "subtitles": [], "skipped": 0}
+                        return {}
                     new_subtitles, skipped = self._deserialize_subtitles(
                         session_data.get("subtitles", []),
                         source=f"db_session:{sid}",
                     )
-                    return {"ok": True, "subtitles": new_subtitles, "skipped": skipped}
+                    return {
+                        "version": session_data.get("version", "unknown"),
+                        "created_at": session_data.get("created_at", ""),
+                        "url": session_data.get("url", ""),
+                        "committee_name": session_data.get("committee_name", ""),
+                        "subtitles": new_subtitles,
+                        "skipped": skipped,
+                    }
 
                 started = self._run_db_task(
                     "db_history_load_selected",
@@ -278,6 +294,7 @@ class MainWindowDatabaseMixin(MainWindowHost):
 
             load_btn.clicked.connect(load_selected)
             btn_layout.addWidget(load_btn)
+            load_btn.setEnabled(not self.is_running)
 
             delete_btn = QPushButton("삭제")
 
@@ -321,6 +338,9 @@ class MainWindowDatabaseMixin(MainWindowHost):
             btn_layout.addWidget(close_btn)
 
             layout.addLayout(btn_layout)
+            if self.is_running:
+                status_label.setText("추출 중에는 세션 불러오기를 사용할 수 없습니다.")
+                status_label.show()
 
             self._db_history_dialog_state = {
                 "dialog": dialog,
@@ -372,9 +392,77 @@ class MainWindowDatabaseMixin(MainWindowHost):
 
             layout.addWidget(list_widget)
 
+            if list_widget.count() > 0:
+                list_widget.setCurrentRow(0)
+
+            button_layout = QHBoxLayout()
+            load_btn = QPushButton("세션 불러오기")
+            focus_btn = QPushButton("결과로 이동")
+
+            def load_selected(highlight: bool) -> None:
+                if self._is_runtime_mutation_blocked(
+                    "세션 불러오기" if not highlight else "검색 결과 이동"
+                ):
+                    return
+                idx = list_widget.currentRow()
+                if idx < 0 or idx >= len(results):
+                    return
+
+                selected = results[idx]
+                session_id = selected.get("session_id")
+                if not session_id:
+                    self._show_toast("유효한 세션 ID가 없습니다.", "warning")
+                    return
+
+                db = self.db
+                if db is None:
+                    self._show_toast("데이터베이스가 초기화되지 않았습니다.", "error")
+                    return
+
+                def worker(sid=session_id, row=selected):
+                    session_data = db.load_session(sid)
+                    if not session_data:
+                        return {}
+                    new_subtitles, skipped = self._deserialize_subtitles(
+                        session_data.get("subtitles", []),
+                        source=f"db_search_session:{sid}",
+                    )
+                    payload = {
+                        "version": session_data.get("version", "unknown"),
+                        "created_at": session_data.get("created_at", ""),
+                        "url": session_data.get("url", ""),
+                        "committee_name": session_data.get("committee_name", ""),
+                        "subtitles": new_subtitles,
+                        "skipped": skipped,
+                    }
+                    if highlight:
+                        payload["highlight_sequence"] = int(row.get("sequence", -1) or -1)
+                        payload["highlight_query"] = query
+                    return payload
+
+                self._run_db_task(
+                    "db_search_load_selected",
+                    worker=worker,
+                    context={
+                        "dialog": dialog,
+                        "session_id": session_id,
+                        "highlight": highlight,
+                        "query": query,
+                    },
+                    loading_text="DB 검색 결과 세션 불러오는 중...",
+                )
+
+            load_btn.clicked.connect(lambda: load_selected(False))
+            focus_btn.clicked.connect(lambda: load_selected(True))
+            load_btn.setEnabled(not self.is_running)
+            focus_btn.setEnabled(not self.is_running)
+            button_layout.addWidget(load_btn)
+            button_layout.addWidget(focus_btn)
+
             close_btn = QPushButton("닫기")
             close_btn.clicked.connect(dialog.reject)
-            layout.addWidget(close_btn)
+            button_layout.addWidget(close_btn)
+            layout.addLayout(button_layout)
 
             dialog.exec()
 
@@ -407,6 +495,8 @@ class MainWindowDatabaseMixin(MainWindowHost):
 
     def _show_merge_dialog(self):
             """자막 병합 다이얼로그"""
+            if self._is_runtime_mutation_blocked("세션 병합"):
+                return
             dialog = QDialog(self)
             dialog.setWindowTitle("📎 자막 병합")
             dialog.setMinimumSize(600, 500)
@@ -458,8 +548,13 @@ class MainWindowDatabaseMixin(MainWindowHost):
             remove_dup_check.setChecked(True)
             sort_check = QCheckBox("시간순 정렬")
             sort_check.setChecked(True)
+            dedupe_mode_combo = QComboBox()
+            dedupe_mode_combo.addItem("보수적 (같은 초 동일 문장)", "conservative_same_second")
+            dedupe_mode_combo.addItem("기존 (30초 버킷)", "legacy_bucket")
             options_layout.addWidget(remove_dup_check)
             options_layout.addWidget(sort_check)
+            options_layout.addWidget(QLabel("중복 기준:"))
+            options_layout.addWidget(dedupe_mode_combo)
             options_layout.addStretch()
             layout.addLayout(options_layout)
 
@@ -498,6 +593,9 @@ class MainWindowDatabaseMixin(MainWindowHost):
                     remove_duplicates=remove_dup_check.isChecked(),
                     sort_by_time=sort_check.isChecked(),
                     existing_subtitles=existing_subtitles,
+                    dedupe_mode=str(
+                        dedupe_mode_combo.currentData() or "legacy_bucket"
+                    ),
                 )
 
                 if merged:

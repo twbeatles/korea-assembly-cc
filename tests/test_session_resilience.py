@@ -104,3 +104,45 @@ def test_merge_sessions_dedup_uses_time_bucket(tmp_path):
         datetime.fromisoformat("2026-02-12T11:00:05"),
         datetime.fromisoformat("2026-02-12T11:00:40"),
     ]
+
+
+def test_merge_sessions_conservative_dedup_uses_same_second(tmp_path):
+    win = MainWindow.__new__(MainWindow)
+
+    path = tmp_path / "conservative.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subtitles": [
+                    {
+                        "text": "같은 초 반복 발화",
+                        "timestamp": "2026-02-12T11:00:05.100000",
+                    },
+                    {
+                        "text": "같은 초 반복 발화",
+                        "timestamp": "2026-02-12T11:00:05.900000",
+                    },
+                    {
+                        "text": "같은 초 반복 발화",
+                        "timestamp": "2026-02-12T11:00:06.100000",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    merged = MainWindow._merge_sessions(
+        win,
+        [str(path)],
+        remove_duplicates=True,
+        sort_by_time=True,
+        dedupe_mode="conservative_same_second",
+    )
+
+    assert len(merged) == 2
+    assert [e.timestamp for e in merged] == [
+        datetime.fromisoformat("2026-02-12T11:00:05.100000"),
+        datetime.fromisoformat("2026-02-12T11:00:06.100000"),
+    ]

@@ -97,6 +97,27 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 )
             )
 
+    def _is_runtime_mutation_blocked(self, action_name: str) -> bool:
+            if not self.is_running:
+                return False
+            self._show_toast(
+                f"추출 중에는 {action_name}을 할 수 없습니다. 먼저 중지하세요.",
+                "warning",
+                3000,
+            )
+            return True
+
+    def _sync_runtime_action_state(self) -> None:
+            controls = self.__dict__.get("_runtime_sensitive_controls", [])
+            should_enable = not self.is_running
+            for control in controls:
+                if control is None:
+                    continue
+                try:
+                    control.setEnabled(should_enable)
+                except Exception:
+                    continue
+
     def _normalize_subtitle_text_for_option(self, text: object) -> str:
             raw = "" if text is None else str(text)
             if self._is_auto_clean_newlines_enabled():
@@ -293,6 +314,10 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             self._last_render_offset = 0
             self._last_render_show_ts = None
             self._last_render_chunk_specs: list[tuple[str, str, str]] = []
+            self._rendered_entry_text_spans: dict[int, tuple[int, int]] = {}
+            self._runtime_sensitive_controls: list[Any] = []
+            self._search_focus_entry_index: int | None = None
+            self._pending_search_focus_query = ""
 
             # 토스트 스택 관리
             self.active_toasts: list[ToastWidget] = []
@@ -350,6 +375,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             self._create_ui()
             self._apply_theme()
             self._setup_shortcuts()
+            self._sync_runtime_action_state()
 
             # 타이머
             self.queue_timer = QTimer(self)
@@ -424,6 +450,14 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 self._last_render_show_ts = None
                 self._last_render_chunk_specs = []
                 self._last_printed_ts = None
+                self._rendered_entry_text_spans = {}
+                self.search_matches = []
+                self.search_idx = 0
+                search_count = self.__dict__.get("search_count")
+                if search_count is not None:
+                    search_count.setText("")
+                self._search_focus_entry_index = None
+                self._pending_search_focus_query = ""
                 self._update_count_label()
 
                 self.last_subtitle = ""
@@ -465,6 +499,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 self.url_combo.setEnabled(False)
                 self.selector_combo.setEnabled(False)
                 self.progress.show()
+                self._sync_runtime_action_state()
 
                 self._set_status("Chrome 브라우저 시작 중...", "running")
                 self._update_tray_status("🟢 추출 중")

@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.3
+- **버전**: v16.14.4
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -143,8 +143,10 @@ korea-assembly-cc/
   subtitle_extractor.spec   # PyInstaller 빌드 설정
   tests/
     test_encoding_hygiene.py
+    test_feature_plan_20260325.py
     test_pyright_regression.py
     test_review_20260323_regressions.py
+    test_session_resilience.py
   README.md                 # 문서
   CLAUDE.md                 # AI 컨텍스트
   GEMINI.md                 # AI 컨텍스트
@@ -195,16 +197,27 @@ korea-assembly-cc/
 | `_wait_active_save_threads()` | 종료 시 저장 스레드 제한시간 대기 |
 | `_update_connection_status()` | **연결 상태 UI 업데이트 (#30)** |
 | `_generate_smart_filename()` | **자동 파일명 생성 (#28)** |
-| `_show_merge_dialog()` | **자막 병합 다이얼로그 (#20)** |
+| `_show_merge_dialog()` | **자막 병합 다이얼로그 (#20, dedupe 모드 포함)** |
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.3 기준)
+## 6. 최신 변경 요약 (v16.14.4 기준)
+
+### v16.14.4 기능 안정화 및 UX 정합성 보강 메모
+- **전체 자막 검색 전환**: 검색은 이제 `QTextEdit.toPlainText()`가 아니라 `self.subtitles` 전체 스냅샷을 기준으로 동작하고, `SearchMatch(entry_index, char_start, char_length)`와 `_rendered_entry_text_spans`로 실제 선택 구간을 추적
+- **검색 렌더 앵커링**: 최근 500개 tail 렌더 기본값은 유지하되, 검색 중이거나 DB 검색 결과 focus 시 해당 entry가 보이도록 렌더 offset을 동적으로 조정
+- **실행 중 상태 변경 차단**: 세션 불러오기/DB 세션 로드/병합/줄넘김 정리/내용 지우기/전체 삭제/편집/삭제를 `_is_runtime_mutation_blocked()`와 `_sync_runtime_action_state()`로 통일
+- **세션 로드 payload 통합**: 파일 세션 로드와 DB 세션 로드가 `version`, `url`, `committee_name`, `created_at`, `subtitles`, `skipped`, optional `highlight_sequence`/`highlight_query`를 공유하고 `_complete_loaded_session()`으로 완료 처리
+- **DB 검색 결과 액션 강화**: 검색 결과 다이얼로그에서 세션 자체를 로드하거나, 로드 후 `sequence` 기준 해당 자막 위치로 즉시 이동 가능
+- **프리셋/저장 정합성**: 프리셋 export/import가 `committee` + `custom` round-trip을 지원하고, 통계/프리셋 export는 각각 `atomic_write_text`/`atomic_write_json`으로 통일
+- **병합 dedupe 모드 노출**: `보수적(같은 초)`과 `기존(30초 버킷)`을 UI에서 선택 가능하게 정리
+- **저장소 hygiene 점검**: `.gitignore`를 재검토해 루트에 실수로 저장된 `세션_*.json` export가 추적되지 않도록 보강
+- **검증 상태**: `pytest -q` 85 pass, `pyright` 0 errors
 
 ### HWPX 기본 내보내기 추가 메모
 - **기본 HWPX export 추가**: `파일 → HWPX 저장` 메뉴와 `core/hwpx_export.py`를 추가해 한컴 미설치 환경에서도 기본 `.hwpx` 문서를 생성할 수 있게 함
 - **패키지 구조**: `assets/hwpx/header.xml` 템플릿과 `Contents/section0.xml`, `Preview/PrvText.txt`, `Contents/content.hpf`를 조합해 최소 유효 HWPX 패키지를 작성
-- **검증 보강**: HWPX 저장 회귀 테스트와 특수문자/XML escape, 줄바꿈 preview 검증을 추가해 `pytest -q` 76 pass, `pyright` 0 errors 확인
+- **검증 보강**: HWPX 저장 회귀 테스트와 특수문자/XML escape, 줄바꿈 preview 검증을 추가해 `pytest -q` 85 pass, `pyright` 0 errors 확인
 
 ### v16.14.3 운영 정합성 동기화 메모
 - **driver lifecycle 정리**: `self.driver` 접근을 `_driver_lock` + identity helper로 통일해 start/stop/reconnect/finally handoff race를 줄임
@@ -214,7 +227,7 @@ korea-assembly-cc/
 - **회귀 테스트 확장**: stale run drop, alert keyword persistence/toast, HWP smoke, SRT/VTT `end_time=None`, auto-backup start rollback 검증 추가
 - **도구 체인 고정**: 로컬 `typings/` stub과 `pytest.ini --basetemp=.pytest_tmp`로 글로벌 Python/Windows TEMP 권한 편차를 흡수하고, 루트 `.hwpx` 산출물도 `.gitignore`에 반영
 - **HWP 대체 저장 정렬**: `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
-- **검증 상태**: `pytest -q` 76 pass, `pyright` 0 errors
+- **검증 상태**: `pytest -q` 85 pass, `pyright` 0 errors
 ### v16.14.2 성능 최적화 중심 리팩토링 메모
 - **수집 경로 안정화**: 자막 수집 회귀 대응으로 Worker 캡처 루프는 이전 안정 structured probe 경로로 복귀
 - **Pipeline hot path 최적화**: `confirmed_segments` 증분 갱신으로 append/tail update에서 전체 history rebuild를 피함
@@ -283,11 +296,12 @@ korea-assembly-cc/
 - `database.py` 모듈의 `DatabaseManager` 클래스
 - 세션 저장 시 자동으로 DB에도 저장
 - 메뉴: 데이터베이스 → 세션 히스토리 / 자막 검색 / 전체 통계
+- DB 검색 결과에서 `세션 불러오기`와 `결과로 이동(sequence focus)`를 지원
 
 ### 6.5 자막 병합 (#20)
 - 메뉴: 도구 → 자막 병합 (Ctrl+Shift+M)
 - 여러 세션 파일을 하나로 병합
-- 옵션: 중복 제거, 시간순 정렬
+- 옵션: 중복 제거, 시간순 정렬, dedupe 기준(`보수적 같은 초` / `기존 30초 버킷`)
 
 ### 6.6 상임위원회 xcode 최신화 (v16.8)
 - 재정경제기획위원회(65), 성평등가족위원회(63) 등 최신화

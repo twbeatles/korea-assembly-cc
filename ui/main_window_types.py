@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 from core.live_capture import LiveCaptureLedger
 from core.models import CaptureSessionState, SubtitleEntry
 from core.subtitle_processor import SubtitleProcessor
-from ui.main_window_common import WorkerQueueMessage
+from ui.main_window_common import SearchMatch, WorkerQueueMessage
 from ui.widgets import CollapsibleGroupBox, ToastWidget
 
 if TYPE_CHECKING:
@@ -70,6 +70,7 @@ if TYPE_CHECKING:
         _last_render_offset: int
         _last_render_show_ts: bool | None
         _last_render_chunk_specs: list[tuple[str, str, str]]
+        _rendered_entry_text_spans: dict[int, tuple[int, int]]
         active_toasts: list[ToastWidget]
         realtime_file: TextIO | None
         capture_state: CaptureSessionState
@@ -112,6 +113,9 @@ if TYPE_CHECKING:
         url_history: dict[str, str]
         committee_presets: dict[str, str]
         custom_presets: dict[str, str]
+        _runtime_sensitive_controls: list[QAction | QPushButton]
+        _search_focus_entry_index: int | None
+        _pending_search_focus_query: str
         url_combo: QComboBox
         selector_combo: QComboBox
         keyword_input: QLineEdit
@@ -144,10 +148,18 @@ if TYPE_CHECKING:
         toggle_stats_btn: QPushButton
         toggle_header_btn: QPushButton
         scroll_to_bottom_btn: QPushButton
+        clean_btn: QPushButton
+        clear_btn: QPushButton
         timestamp_action: QAction
         theme_action: QAction
         tray_action: QAction
         tray_status_action: QAction
+        load_session_action: QAction
+        edit_subtitle_action: QAction
+        delete_subtitle_action: QAction
+        clear_action: QAction
+        merge_action: QAction
+        clean_newlines_action: QAction
         tray_icon: QSystemTrayIcon
         preset_menu: QMenu
         top_header_container: Any
@@ -156,7 +168,7 @@ if TYPE_CHECKING:
         backup_timer: QTimer
         stats_timer: QTimer
         queue_timer: QTimer
-        search_matches: list[int]
+        search_matches: list[SearchMatch]
         search_idx: int
 
         def _show_toast(
@@ -202,6 +214,7 @@ if TYPE_CHECKING:
             serialized_items: object,
             source: str = "",
         ) -> tuple[list[SubtitleEntry], int]: ...
+        def _complete_loaded_session(self, payload: dict[str, Any]) -> bool: ...
         def _do_search(self) -> None: ...
         def _edit_subtitle(self) -> None: ...
         def _ensure_active_capture_run(self) -> int: ...
@@ -220,6 +233,7 @@ if TYPE_CHECKING:
         def _join_stream_text(self, base: str, addition: str) -> str: ...
         def _is_active_capture_run(self, run_id: int | None) -> bool: ...
         def _is_auto_clean_newlines_enabled(self) -> bool: ...
+        def _is_runtime_mutation_blocked(self, action_name: str) -> bool: ...
         def _load_session(self) -> None: ...
         def _merge_sessions(
             self,
@@ -227,6 +241,7 @@ if TYPE_CHECKING:
             remove_duplicates: bool = True,
             sort_by_time: bool = True,
             existing_subtitles: list[SubtitleEntry] | None = None,
+            dedupe_mode: str = "legacy_bucket",
         ) -> list[SubtitleEntry]: ...
         def _nav_search(self, delta: int) -> None: ...
         def _on_scroll_changed(self) -> None: ...
@@ -269,6 +284,7 @@ if TYPE_CHECKING:
         def _toggle_stats_panel(self) -> None: ...
         def _toggle_theme(self) -> None: ...
         def _toggle_theme_from_button(self) -> None: ...
+        def _sync_runtime_action_state(self) -> None: ...
         def _update_keyword_cache(self) -> None: ...
 
 else:

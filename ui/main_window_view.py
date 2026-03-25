@@ -81,22 +81,24 @@ class MainWindowViewMixin(MainWindowHost):
             separator: str,
             prefix: str,
             text: str,
-        ) -> None:
+        ) -> tuple[int, int]:
             if separator:
                 cursor.insertText(separator, self._normal_fmt)
             if prefix:
                 cursor.insertText(prefix, self._timestamp_fmt)
+            text_start = cursor.position()
             self._insert_highlighted_text(cursor, text)
+            return text_start, cursor.position()
 
 
-    def _patch_last_render_chunk(self, text: str) -> bool:
+    def _patch_last_render_chunk(self, text: str) -> tuple[bool, tuple[int, int] | None]:
             specs = getattr(self, "_last_render_chunk_specs", [])
             if not specs:
-                return False
+                return False, None
 
             document = self.subtitle_text.document()
             if document is None:
-                return False
+                return False, None
 
             start_pos = sum(len(sep) + len(prefix) + len(chunk_text) for sep, prefix, chunk_text in specs[:-1])
             cursor = self.subtitle_text.textCursor()
@@ -108,17 +110,74 @@ class MainWindowViewMixin(MainWindowHost):
             cursor.removeSelectedText()
 
             separator, prefix, _old_text = specs[-1]
-            self._insert_render_chunk(cursor, separator, prefix, text)
+            span = self._insert_render_chunk(cursor, separator, prefix, text)
             specs[-1] = (separator, prefix, text)
             self._last_render_chunk_specs = specs
+            return True, span
+
+
+    def _select_rendered_entry_span(
+            self,
+            entry_index: int,
+            char_start: int | None = None,
+            char_length: int | None = None,
+        ) -> bool:
+            spans = getattr(self, "_rendered_entry_text_spans", {})
+            if entry_index not in spans:
+                return False
+
+            entry_start, entry_end = spans[entry_index]
+            start = entry_start
+            end = entry_end
+            if char_start is not None and char_length is not None:
+                start = min(max(entry_start, entry_start + int(char_start)), entry_end)
+                end = min(max(start, start + int(char_length)), entry_end)
+
+            cursor = self.subtitle_text.textCursor()
+            cursor.setPosition(start)
+            cursor.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+            self.subtitle_text.setTextCursor(cursor)
+            self.subtitle_text.ensureCursorVisible()
             return True
+
+
+    def _focus_loaded_session_result(self, entry_index: int, query: str = "") -> None:
+            if entry_index < 0:
+                return
+
+            self._search_focus_entry_index = entry_index
+            self._pending_search_focus_query = query
+            self._refresh_text(force_full=True)
+
+            char_start = None
+            char_length = None
+            normalized_query = str(query or "").strip()
+            with self.subtitle_lock:
+                if 0 <= entry_index < len(self.subtitles):
+                    entry_text = self._normalize_subtitle_text_for_option(
+                        self.subtitles[entry_index].text
+                    )
+                else:
+                    entry_text = ""
+
+            if normalized_query and entry_text:
+                lowered_text = entry_text.lower()
+                lowered_query = normalized_query.lower()
+                found_at = lowered_text.find(lowered_query)
+                if found_at >= 0:
+                    char_start = found_at
+                    char_length = len(normalized_query)
+
+            self._select_rendered_entry_span(entry_index, char_start, char_length)
+            self._search_focus_entry_index = None
+            self._pending_search_focus_query = ""
 
 
     def _render_subtitles(self, force_full: bool = False) -> None:
             """Render subtitles with incremental updates when possible."""
             scrollbar = self.subtitle_text.verticalScrollBar()
             assert scrollbar is not None
-            preserve_scroll = self._user_scrolled_up
+            preserve_scroll = bool(getattr(self, "_user_scrolled_up", False))
             saved_scroll = 0
             if preserve_scroll:
                 saved_scroll = scrollbar.value()
@@ -133,14 +192,37 @@ class MainWindowViewMixin(MainWindowHost):
 
             # 성능 최적화: 대량 자막 시 최근 항목만 렌더링 (#4)
             render_offset = 0
+            anchor_index = None
+            search_matches = list(getattr(self, "search_matches", []))
+            search_idx = int(getattr(self, "search_idx", 0))
+            search_frame = getattr(self, "search_frame", None)
+            if (
+                search_frame is not None
+                and search_frame.isVisible()
+                and search_matches
+                and 0 <= search_idx < len(search_matches)
+            ):
+                anchor_index = search_matches[search_idx].entry_index
+            else:
+                focus_entry_index = getattr(self, "_search_focus_entry_index", None)
+                if focus_entry_index is not None:
+                    anchor_index = int(focus_entry_index)
             if total_count > Config.MAX_RENDER_ENTRIES:
-                render_offset = total_count - Config.MAX_RENDER_ENTRIES
+                if anchor_index is None:
+                    render_offset = total_count - Config.MAX_RENDER_ENTRIES
+                else:
+                    max_offset = max(0, total_count - Config.MAX_RENDER_ENTRIES)
+                    render_offset = min(
+                        max(0, anchor_index - (Config.MAX_RENDER_ENTRIES // 2)),
+                        max_offset,
+                    )
                 subtitles_copy = subtitles_copy[render_offset:]
 
             visible_count = len(subtitles_copy)
             last_text = subtitles_copy[-1].text if subtitles_copy else ""
 
-            show_ts = self.timestamp_action.isChecked()
+            timestamp_action = getattr(self, "timestamp_action", None)
+            show_ts = bool(timestamp_action.isChecked()) if timestamp_action else False
 
             # 마지막 출력된 타임스탬프 (희소 타임스탬프용)
             # 렌더링 시작 시 초기화
@@ -172,6 +254,7 @@ class MainWindowViewMixin(MainWindowHost):
                 self._last_printed_ts = None  # 풀 렌더링 시 초기화
                 cursor = self.subtitle_text.textCursor()
                 chunk_specs: list[tuple[str, str, str]] = []
+                text_spans: dict[int, tuple[int, int]] = {}
                 last_printed_ts = None
 
                 for i, entry in enumerate(subtitles_copy):
@@ -182,21 +265,29 @@ class MainWindowViewMixin(MainWindowHost):
                         show_ts,
                         last_printed_ts,
                     )
-                    self._insert_render_chunk(cursor, separator, prefix, entry.text)
+                    span = self._insert_render_chunk(cursor, separator, prefix, entry.text)
                     chunk_specs.append((separator, prefix, entry.text))
+                    text_spans[render_offset + i] = span
 
                 self._last_printed_ts = last_printed_ts
                 self._last_render_chunk_specs = chunk_specs
+                self._rendered_entry_text_spans = text_spans
 
             elif tail_text_changed and visible_count == previous_visible_count and visible_count > 0:
-                if not self._patch_last_render_chunk(last_text):
+                patched, span = self._patch_last_render_chunk(last_text)
+                if not patched:
                     self._render_subtitles(force_full=True)
                     return
+                if span is not None:
+                    spans = dict(getattr(self, "_rendered_entry_text_spans", {}))
+                    spans[render_offset + visible_count - 1] = span
+                    self._rendered_entry_text_spans = spans
 
             else:
                 cursor = self.subtitle_text.textCursor()
                 cursor.movePosition(QTextCursor.MoveOperation.End)
                 chunk_specs = list(getattr(self, "_last_render_chunk_specs", []))
+                text_spans = dict(getattr(self, "_rendered_entry_text_spans", {}))
                 last_printed_ts = self._last_printed_ts
 
                 start_local_idx = min(previous_visible_count, visible_count)
@@ -209,18 +300,29 @@ class MainWindowViewMixin(MainWindowHost):
                         show_ts,
                         last_printed_ts,
                     )
-                    self._insert_render_chunk(cursor, separator, prefix, entry.text)
+                    span = self._insert_render_chunk(cursor, separator, prefix, entry.text)
                     chunk_specs.append((separator, prefix, entry.text))
+                    text_spans[render_offset + local_idx] = span
 
                 self._last_printed_ts = last_printed_ts
                 self._last_render_chunk_specs = chunk_specs
+                self._rendered_entry_text_spans = {
+                    idx: span
+                    for idx, span in text_spans.items()
+                    if render_offset <= idx < render_offset + visible_count
+                }
 
             self._last_rendered_count = total_count
             self._last_rendered_last_text = last_text
             self._last_render_offset = render_offset
             self._last_render_show_ts = show_ts
 
-            if self.auto_scroll_check.isChecked() and not self._user_scrolled_up:
+            auto_scroll_check = getattr(self, "auto_scroll_check", None)
+            if (
+                auto_scroll_check is not None
+                and auto_scroll_check.isChecked()
+                and not preserve_scroll
+            ):
                 self.subtitle_text.moveCursor(QTextCursor.MoveOperation.End)
 
             if preserve_scroll:
@@ -434,6 +536,8 @@ class MainWindowViewMixin(MainWindowHost):
 
     def _clear_subtitles(self) -> None:
             """자막 목록 초기화"""
+            if self._is_runtime_mutation_blocked("전체 자막 삭제"):
+                return
             with self.subtitle_lock:
                 count = len(self.subtitles)
             if not count:
@@ -495,29 +599,53 @@ class MainWindowViewMixin(MainWindowHost):
 
 
     def _hide_search(self):
+            self.search_matches = []
+            self.search_idx = 0
+            search_count = self.__dict__.get("search_count")
+            if search_count is not None:
+                search_count.setText("")
+            self._search_focus_entry_index = None
+            self._pending_search_focus_query = ""
             self.search_frame.hide()
             self._refresh_text(force_full=True)
 
 
     def _do_search(self):
-            query = self.search_input.text()
+            query = self.search_input.text().strip()
             if not query:
+                self.search_matches = []
+                self.search_idx = 0
+                search_count = self.__dict__.get("search_count")
+                if search_count is not None:
+                    search_count.setText("")
+                self._refresh_text(force_full=True)
                 return
 
             query_l = query.lower()
-            text_l = self.subtitle_text.toPlainText().lower()
             self.search_matches = []
 
-            start = 0
-            while True:
-                idx = text_l.find(query_l, start)
-                if idx == -1:
-                    break
-                self.search_matches.append(idx)
-                start = idx + 1
+            with self.subtitle_lock:
+                entry_texts = [
+                    self._normalize_subtitle_text_for_option(entry.text)
+                    for entry in self.subtitles
+                ]
+
+            for entry_index, entry_text in enumerate(entry_texts):
+                lowered_text = entry_text.lower()
+                start = 0
+                while True:
+                    idx = lowered_text.find(query_l, start)
+                    if idx == -1:
+                        break
+                    self.search_matches.append(
+                        SearchMatch(entry_index, idx, len(query))
+                    )
+                    start = idx + 1
 
             self.search_idx = 0
-            self.search_count.setText(f"{len(self.search_matches)}개")
+            search_count = self.__dict__.get("search_count")
+            if search_count is not None:
+                search_count.setText(f"{len(self.search_matches)}개")
 
             if self.search_matches:
                 self._highlight_search(0)
@@ -535,17 +663,19 @@ class MainWindowViewMixin(MainWindowHost):
             if not self.search_matches:
                 return
 
-            pos = self.search_matches[idx]
-            query = self.search_input.text()
+            match = self.search_matches[idx]
+            self._search_focus_entry_index = match.entry_index
+            self._refresh_text(force_full=True)
+            self._search_focus_entry_index = None
+            self._select_rendered_entry_span(
+                match.entry_index,
+                match.char_start,
+                match.char_length,
+            )
 
-            cursor = self.subtitle_text.textCursor()
-            cursor.setPosition(pos)
-            cursor.setPosition(pos + len(query), QTextCursor.MoveMode.KeepAnchor)
-
-            self.subtitle_text.setTextCursor(cursor)
-            self.subtitle_text.ensureCursorVisible()
-
-            self.search_count.setText(f"{idx + 1}/{len(self.search_matches)}")
+            search_count = self.__dict__.get("search_count")
+            if search_count is not None:
+                search_count.setText(f"{idx + 1}/{len(self.search_matches)}")
 
 
     def _set_keywords(self):
@@ -612,6 +742,8 @@ class MainWindowViewMixin(MainWindowHost):
 
 
     def _clear_text(self):
+            if self._is_runtime_mutation_blocked("내용 지우기"):
+                return
             if not self.subtitles:
                 return
 
@@ -631,13 +763,10 @@ class MainWindowViewMixin(MainWindowHost):
 
     def _edit_subtitle(self):
             """선택한 자막 편집"""
+            if self._is_runtime_mutation_blocked("자막 편집"):
+                return
             if not self.subtitles:
                 self._show_toast("편집할 자막이 없습니다.", "warning")
-                return
-            if self.is_running:
-                self._show_toast(
-                    "추출 중에는 편집이 불안정할 수 있습니다. 먼저 중지하세요.", "warning"
-                )
                 return
 
             # 자막 목록 다이얼로그
@@ -717,13 +846,10 @@ class MainWindowViewMixin(MainWindowHost):
 
     def _delete_subtitle(self):
             """선택한 자막 삭제"""
+            if self._is_runtime_mutation_blocked("자막 삭제"):
+                return
             if not self.subtitles:
                 self._show_toast("삭제할 자막이 없습니다.", "warning")
-                return
-            if self.is_running:
-                self._show_toast(
-                    "추출 중에는 삭제가 불안정할 수 있습니다. 먼저 중지하세요.", "warning"
-                )
                 return
 
             # 자막 목록 다이얼로그

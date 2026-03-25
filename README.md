@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.14.3
+# 🏛️ 국회 의사중계 자막 추출기 v16.14.4
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 데스크톱 프로그램입니다.
 
@@ -10,6 +10,7 @@
 ---
 
 ## 📋 목차
+- [기능 안정화 및 UX 정합성 보강 (v16.14.4)](#-v16144-기능-안정화-및-ux-정합성-보강-2026-03-25)
 - [운영 정합성 동기화 (v16.14.3)](#-v16143-운영-정합성-동기화-2026-03-23)
 - [성능 최적화 중심 리팩토링 (v16.14.2)](#-v16142-성능-최적화-중심-리팩토링-2026-03-18)
 - [자동 줄넘김 정리 기본 활성화 (v16.14.1)](#-v16141-자동-줄넘김-정리-기본-활성화-2026-03-17)
@@ -27,6 +28,36 @@
 - [빌드 방법](#️-빌드-방법)
 - [변경 이력](#-변경-이력)
 - [파이프라인 고정 문서](#-파이프라인-고정-문서)
+
+---
+
+## ✨ v16.14.4 기능 안정화 및 UX 정합성 보강 (2026-03-25)
+
+### 🔍 검색 / 렌더 정합성
+- 검색은 더 이상 현재 `QTextEdit`에 렌더된 최근 500개만 보지 않고, `self.subtitles` 전체 스냅샷을 기준으로 동작합니다.
+- 검색 결과 이동 시 해당 자막이 포함되도록 렌더 윈도우를 동적으로 재배치하고, 문서상 텍스트 span을 기준으로 실제 매치 구간을 선택합니다.
+- 검색을 닫으면 렌더링은 다시 기본 tail 모드(`MAX_RENDER_ENTRIES=500`)로 복귀합니다.
+
+### 🛡️ 실행 중 상태 변경 차단
+- 추출 중에는 세션 불러오기, DB 세션 불러오기, 병합, 줄넘김 정리, 내용 지우기, 전체 삭제, 편집, 삭제를 공통 가드로 차단합니다.
+- 메뉴/툴바의 관련 액션은 `_sync_runtime_action_state()`로 일괄 disable 되어, "동작은 눌리지만 나중에 꼬이는" 상태를 줄였습니다.
+
+### 🗄️ 세션 / DB / 프리셋 정합성
+- 파일 세션 로드와 DB 세션 로드가 동일 payload(`version`, `url`, `committee_name`, `created_at`, `subtitles`, `skipped`)와 동일 완료 핸들러를 사용합니다.
+- DB 자막 검색 결과는 이제 "세션 불러오기"와 "결과로 이동"을 지원하며, `sequence` 기준으로 원문 위치를 복원합니다.
+- 프리셋 export/import는 `committee`와 `custom`을 모두 round-trip하고, import 시 동일 키는 가져온 값으로 overwrite 합니다.
+
+### 💾 저장 / 병합 정책
+- 통계 export는 `atomic_write_text`, 프리셋 export는 `atomic_write_json`으로 통일했습니다.
+- 자막 병합은 dedupe 모드를 노출합니다.
+  - `보수적`: 같은 초 + 동일 정규화 문장
+  - `기존`: 30초 버킷 + 동일 정규화 문장
+- `.gitignore`는 검토 후 루트에 실수로 저장된 `세션_*.json` export가 추적되지 않도록 보강했습니다.
+
+### ✅ 현재 검증 상태
+- `pytest -q`: `85 passed`
+- `pyright --outputjson`: `0 errors`
+- `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `FEATURE_IMPLEMENTATION_REVIEW_20260325.md`를 `v16.14.4` 기준으로 동기화했습니다.
 
 ---
 
@@ -227,7 +258,8 @@
 TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션 저장
 
 ### 🔍 검색 및 하이라이트
-- **실시간 검색** (Ctrl+F)
+- **실시간 검색** (Ctrl+F, 전체 자막 기준)
+- 검색 결과 이동 시 오래된 자막도 자동으로 렌더 범위를 재조정해 표시
 - **키워드 하이라이트** - 특정 단어 강조
 - **알림 키워드** - 감지 시 토스트 알림
 
@@ -240,6 +272,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션 저장
 ### ⚙️ 편의 기능
 - 헤드리스 모드 (브라우저 창 숨김)
 - 실시간 저장, 세션 저장/불러오기
+- DB 검색 결과에서 세션 불러오기 / 해당 문장 위치 이동
 - 자동 줄넘김 정리 옵션 (기본 활성화)
 - 자동 백업 (5분마다)
 - 다크/라이트 테마
@@ -500,7 +533,7 @@ pip install pyinstaller
 pyinstaller subtitle_extractor.spec
 
 # 결과물
-dist/국회의사중계자막추출기 v16.14.3.exe
+dist/국회의사중계자막추출기 v16.14.4.exe
 ```
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
@@ -512,6 +545,15 @@ dist/국회의사중계자막추출기 v16.14.3.exe
 ---
 
 ## 📝 변경 이력
+
+### v16.14.4 (2026-03-25)
+- 검색을 `QTextEdit` 렌더 텍스트가 아닌 전체 `self.subtitles` 스냅샷 기준으로 전환하고, 검색 이동 시 렌더 윈도우를 동적으로 재배치
+- 추출 중 세션 불러오기/DB 세션 로드/병합/줄넘김 정리/지우기/편집/삭제를 공통 가드와 action disable로 차단
+- 파일/DB 세션 로드 payload를 통합하고, DB 검색 결과에서 세션 로드 후 `sequence` 위치로 즉시 이동 가능하게 개선
+- 프리셋 export/import round-trip(`committee` + `custom`) 및 overwrite 정책 정렬, 통계/프리셋 export의 원자적 저장 경로 통일
+- 병합 dedupe 모드에 `보수적(같은 초)` / `기존(30초 버킷)` 옵션 추가
+- `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`, `FEATURE_IMPLEMENTATION_REVIEW_20260325.md`를 `v16.14.4` 기준으로 동기화
+- 회귀 테스트 확장 후 `pytest -q` 85개 전체 통과, `pyright` 0 errors 확인
 
 ### v16.14.3 (2026-03-23)
 - `self.driver` 접근을 `_driver_lock`과 identity helper로 통일하고, stop timeout 이후 stale worker run을 `run_id`로 격리

@@ -127,10 +127,10 @@ class MainWindowUIMixin(MainWindowHost):
             save_session.triggered.connect(self._save_session)
             file_menu.addAction(save_session)
 
-            load_session = QAction("세션 불러오기", self)
-            load_session.setShortcut("Ctrl+O")
-            load_session.triggered.connect(self._load_session)
-            file_menu.addAction(load_session)
+            self.load_session_action = QAction("세션 불러오기", self)
+            self.load_session_action.setShortcut("Ctrl+O")
+            self.load_session_action.triggered.connect(self._load_session)
+            file_menu.addAction(self.load_session_action)
 
             file_menu.addSeparator()
 
@@ -165,17 +165,17 @@ class MainWindowUIMixin(MainWindowHost):
 
             edit_menu.addSeparator()
 
-            edit_subtitle_action = QAction("✏️ 자막 편집", self)
-            edit_subtitle_action.setShortcut("Ctrl+E")
-            edit_subtitle_action.setToolTip("선택한 자막을 편집합니다")
-            edit_subtitle_action.triggered.connect(self._edit_subtitle)
-            edit_menu.addAction(edit_subtitle_action)
+            self.edit_subtitle_action = QAction("✏️ 자막 편집", self)
+            self.edit_subtitle_action.setShortcut("Ctrl+E")
+            self.edit_subtitle_action.setToolTip("선택한 자막을 편집합니다")
+            self.edit_subtitle_action.triggered.connect(self._edit_subtitle)
+            edit_menu.addAction(self.edit_subtitle_action)
 
-            delete_subtitle_action = QAction("🗑️ 자막 삭제", self)
-            delete_subtitle_action.setShortcut("Delete")
-            delete_subtitle_action.setToolTip("선택한 자막을 삭제합니다")
-            delete_subtitle_action.triggered.connect(self._delete_subtitle)
-            edit_menu.addAction(delete_subtitle_action)
+            self.delete_subtitle_action = QAction("🗑️ 자막 삭제", self)
+            self.delete_subtitle_action.setShortcut("Delete")
+            self.delete_subtitle_action.setToolTip("선택한 자막을 삭제합니다")
+            self.delete_subtitle_action.triggered.connect(self._delete_subtitle)
+            edit_menu.addAction(self.delete_subtitle_action)
 
             edit_menu.addSeparator()
 
@@ -185,10 +185,10 @@ class MainWindowUIMixin(MainWindowHost):
             copy_action.triggered.connect(self._copy_to_clipboard)
             edit_menu.addAction(copy_action)
 
-            clear_action = QAction("내용 지우기", self)
-            clear_action.setToolTip("모든 자막 내용을 삭제합니다")
-            clear_action.triggered.connect(self._clear_text)
-            edit_menu.addAction(clear_action)
+            self.clear_action = QAction("내용 지우기", self)
+            self.clear_action.setToolTip("모든 자막 내용을 삭제합니다")
+            self.clear_action.triggered.connect(self._clear_text)
+            edit_menu.addAction(self.clear_action)
 
             # 보기 메뉴
             view_menu = menubar.addMenu("보기")
@@ -242,20 +242,20 @@ class MainWindowUIMixin(MainWindowHost):
             tools_menu = menubar.addMenu("도구")
             assert tools_menu is not None
 
-            merge_action = QAction("📎 자막 병합...", self)
-            merge_action.setShortcut("Ctrl+Shift+M")
-            merge_action.setToolTip("여러 세션 파일을 하나로 병합합니다")
-            merge_action.triggered.connect(self._show_merge_dialog)
-            tools_menu.addAction(merge_action)
+            self.merge_action = QAction("📎 자막 병합...", self)
+            self.merge_action.setShortcut("Ctrl+Shift+M")
+            self.merge_action.setToolTip("여러 세션 파일을 하나로 병합합니다")
+            self.merge_action.triggered.connect(self._show_merge_dialog)
+            tools_menu.addAction(self.merge_action)
 
             # 줄넘김 정리
-            clean_newlines_action = QAction("줄넘김 정리", self)
-            clean_newlines_action.setShortcut("Ctrl+Shift+L")
-            clean_newlines_action.setToolTip(
+            self.clean_newlines_action = QAction("줄넘김 정리", self)
+            self.clean_newlines_action.setShortcut("Ctrl+Shift+L")
+            self.clean_newlines_action.setToolTip(
                 "문장 부호로 끝나지 않는 줄을 병합하여 문장을 정리합니다"
             )
-            clean_newlines_action.triggered.connect(self._clean_newlines)
-            tools_menu.addAction(clean_newlines_action)
+            self.clean_newlines_action.triggered.connect(self._clean_newlines)
+            tools_menu.addAction(self.clean_newlines_action)
 
             # 데이터베이스 메뉴 (#26)
             db_menu = menubar.addMenu("데이터베이스")
@@ -378,24 +378,24 @@ class MainWindowUIMixin(MainWindowHost):
             copy_btn.clicked.connect(self._copy_to_clipboard)
 
             # 자막 줄넘김 정리 버튼 (New)
-            clean_btn = QPushButton("✨ 줄넘김 정리")
-            clean_btn.setStyleSheet(toolbar_btn_style)
-            clean_btn.setToolTip(
+            self.clean_btn = QPushButton("✨ 줄넘김 정리")
+            self.clean_btn.setStyleSheet(toolbar_btn_style)
+            self.clean_btn.setToolTip(
                 "문장 부호로 끊어지지 않은 줄을 자동으로 병합 (Ctrl+Shift+L)"
             )
-            clean_btn.clicked.connect(self._clean_newlines)
+            self.clean_btn.clicked.connect(self._clean_newlines)
 
             # 자막 지우기 버튼
-            clear_btn = QPushButton("🗑️ 지우기")
-            clear_btn.setStyleSheet(toolbar_btn_style)
-            clear_btn.setToolTip("현재 자막 목록 초기화")
-            clear_btn.clicked.connect(self._clear_subtitles)
+            self.clear_btn = QPushButton("🗑️ 지우기")
+            self.clear_btn.setStyleSheet(toolbar_btn_style)
+            self.clear_btn.setToolTip("현재 자막 목록 초기화")
+            self.clear_btn.clicked.connect(self._clear_subtitles)
 
             toolbar_layout.addWidget(quick_save_btn)
             toolbar_layout.addWidget(search_btn)
             toolbar_layout.addWidget(copy_btn)
-            toolbar_layout.addWidget(clean_btn)
-            toolbar_layout.addWidget(clear_btn)
+            toolbar_layout.addWidget(self.clean_btn)
+            toolbar_layout.addWidget(self.clear_btn)
             toolbar_layout.addStretch()
 
             # 테마 토글 버튼
@@ -870,6 +870,18 @@ class MainWindowUIMixin(MainWindowHost):
             # 검색 상태
             self.search_matches = []
             self.search_idx = 0
+            self._runtime_sensitive_controls.extend(
+                [
+                    self.load_session_action,
+                    self.edit_subtitle_action,
+                    self.delete_subtitle_action,
+                    self.clear_action,
+                    self.merge_action,
+                    self.clean_newlines_action,
+                    self.clean_btn,
+                    self.clear_btn,
+                ]
+            )
 
             # 저장된 폰트 크기 적용
             self._set_font_size(self.font_size)
@@ -1421,8 +1433,12 @@ class MainWindowUIMixin(MainWindowHost):
                         "committee": self.committee_presets,
                         "custom": self.custom_presets,
                     }
-                    with open(path, "w", encoding="utf-8") as f:
-                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    utils.atomic_write_json(
+                        path,
+                        data,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
 
                     total = len(self.committee_presets) + len(self.custom_presets)
                     self._show_toast(f"프리셋 {total}개 내보내기 완료!", "success")
@@ -1444,10 +1460,16 @@ class MainWindowUIMixin(MainWindowHost):
 
                     imported_count = 0
 
+                    if "committee" in data and isinstance(data["committee"], dict):
+                        for name, url in data["committee"].items():
+                            if self.committee_presets.get(name) != url:
+                                self.committee_presets[name] = url
+                                imported_count += 1
+
                     # 사용자 정의 프리셋 가져오기 (기존 것에 추가)
                     if "custom" in data and isinstance(data["custom"], dict):
                         for name, url in data["custom"].items():
-                            if name not in self.custom_presets:
+                            if self.custom_presets.get(name) != url:
                                 self.custom_presets[name] = url
                                 imported_count += 1
 
@@ -1476,6 +1498,7 @@ class MainWindowUIMixin(MainWindowHost):
             self.progress.hide()
             self.stats_timer.stop()
             self.backup_timer.stop()
+            self._sync_runtime_action_state()
 
 
     def _show_guide(self):

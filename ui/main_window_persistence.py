@@ -179,54 +179,48 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
                     generated_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
 
-                    with open(filepath, "w", encoding="utf-8") as f:
-                        f.write("=" * 50 + "\n")
-                        f.write("        🏛️ 국회 자막 통계 보고서\n")
-                        f.write("=" * 50 + "\n\n")
+                    lines = [
+                        "=" * 50,
+                        "        🏛️ 국회 자막 통계 보고서",
+                        "=" * 50,
+                        "",
+                        f"생성 일시: {generated_at}",
+                        "",
+                        "📊 기본 통계",
+                        "-" * 30,
+                        f"  총 문장 수: {len(subtitles_snapshot):,}개",
+                        f"  총 글자 수: {total_chars:,}자",
+                        f"  총 공백 기준 단어 수: {total_words:,}개",
+                        f"  평균 문장 길이: {total_chars / len(subtitles_snapshot):.1f}자",
+                        f"  평균 공백 기준 단어 수: {total_words / len(subtitles_snapshot):.1f}개",
+                        "",
+                        "📏 문장 분석",
+                        "-" * 30,
+                        f"  가장 긴 문장: {len(longest.text)}자",
+                        f'    "{longest.text[:50]}{"..." if len(longest.text) > 50 else ""}"',
+                        f"  가장 짧은 문장: {len(shortest.text)}자",
+                        f'    "{shortest.text}"',
+                        "",
+                    ]
 
-                        f.write(f"생성 일시: {generated_at}\n\n")
+                    if hour_counts:
+                        lines.extend(["⏰ 시간대별 분포", "-" * 30])
+                        for h in sorted(hour_counts.keys()):
+                            bar = "█" * min(hour_counts[h] // 2, 20)
+                            lines.append(f"  {h:02d}시: {bar} {hour_counts[h]}개")
+                        lines.append("")
 
-                        f.write("📊 기본 통계\n")
-                        f.write("-" * 30 + "\n")
-                        f.write(f"  총 문장 수: {len(subtitles_snapshot):,}개\n")
-                        f.write(f"  총 글자 수: {total_chars:,}자\n")
-                        f.write(f"  총 공백 기준 단어 수: {total_words:,}개\n")
-                        f.write(
-                            f"  평균 문장 길이: {total_chars / len(subtitles_snapshot):.1f}자\n"
-                        )
-                        f.write(
-                            f"  평균 공백 기준 단어 수: {total_words / len(subtitles_snapshot):.1f}개\n\n"
-                        )
+                    if keywords_snapshot:
+                        lines.extend(["🔍 키워드 빈도", "-" * 30])
+                        all_text = " ".join(s.text for s in subtitles_snapshot).lower()
+                        for kw in keywords_snapshot:
+                            count = all_text.count(kw.lower())
+                            if count > 0:
+                                lines.append(f"  {kw}: {count}회")
+                        lines.append("")
 
-                        f.write("📏 문장 분석\n")
-                        f.write("-" * 30 + "\n")
-                        f.write(f"  가장 긴 문장: {len(longest.text)}자\n")
-                        f.write(
-                            f'    "{longest.text[:50]}{"..." if len(longest.text) > 50 else ""}"\n'
-                        )
-                        f.write(f"  가장 짧은 문장: {len(shortest.text)}자\n")
-                        f.write(f'    "{shortest.text}"\n\n')
-
-                        if hour_counts:
-                            f.write("⏰ 시간대별 분포\n")
-                            f.write("-" * 30 + "\n")
-                            for h in sorted(hour_counts.keys()):
-                                bar = "█" * min(hour_counts[h] // 2, 20)
-                                f.write(f"  {h:02d}시: {bar} {hour_counts[h]}개\n")
-                            f.write("\n")
-
-                        # 하이라이트 키워드 통계
-                        if keywords_snapshot:
-                            f.write("🔍 키워드 빈도\n")
-                            f.write("-" * 30 + "\n")
-                            all_text = " ".join(s.text for s in subtitles_snapshot).lower()
-                            for kw in keywords_snapshot:
-                                count = all_text.count(kw.lower())
-                                if count > 0:
-                                    f.write(f"  {kw}: {count}회\n")
-                            f.write("\n")
-
-                        f.write("=" * 50 + "\n")
+                    lines.append("=" * 50)
+                    utils.atomic_write_text(filepath, "\n".join(lines) + "\n", encoding="utf-8")
 
                 self._save_in_background(
                     do_save,
@@ -830,6 +824,8 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
 
     def _load_session(self):
+            if self._is_runtime_mutation_blocked("세션 불러오기"):
+                return
             if self._is_background_shutdown_active():
                 self._show_toast("종료 중이라 세션 불러오기를 시작할 수 없습니다.", "warning")
                 return
@@ -874,7 +870,9 @@ class MainWindowPersistenceMixin(MainWindowHost):
                             {
                                 "path": path,
                                 "version": session_version,
+                                "created_at": data.get("created", ""),
                                 "url": data.get("url", ""),
+                                "committee_name": data.get("committee_name", ""),
                                 "subtitles": new_subtitles,
                                 "skipped": skipped,
                             },
@@ -921,6 +919,8 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
     def _clean_newlines(self):
             """줄넘김 정리: 문장 부호 분리 및 병합 (스마트 리플로우)"""
+            if self._is_runtime_mutation_blocked("줄넘김 정리"):
+                return
             # 자막이 없는 경우 처리
             if not self.subtitles:
                 self._show_toast("정리할 자막이 없습니다.", "warning")
@@ -974,6 +974,7 @@ class MainWindowPersistenceMixin(MainWindowHost):
             remove_duplicates: bool = True,
             sort_by_time: bool = True,
             existing_subtitles: list[SubtitleEntry] | None = None,
+            dedupe_mode: str = "legacy_bucket",
         ) -> list[SubtitleEntry]:
             """여러 세션 파일을 병합
 
@@ -1016,14 +1017,22 @@ class MainWindowPersistenceMixin(MainWindowHost):
             if remove_duplicates:
                 seen = set()
                 unique_entries = []
-                bucket_seconds = max(1, int(Config.MERGE_DEDUP_TIME_BUCKET_SECONDS))
                 for entry in all_entries:
                     text_normalized = utils.normalize_subtitle_text(entry.text).lower()
                     timestamp = entry.timestamp if entry and entry.timestamp else datetime.min
-                    if timestamp == datetime.min:
-                        time_bucket = 0
+                    if dedupe_mode == "conservative_same_second":
+                        if timestamp == datetime.min:
+                            time_bucket = 0
+                        else:
+                            time_bucket = int(timestamp.timestamp())
                     else:
-                        time_bucket = int(timestamp.timestamp() // bucket_seconds)
+                        bucket_seconds = max(
+                            1, int(Config.MERGE_DEDUP_TIME_BUCKET_SECONDS)
+                        )
+                        if timestamp == datetime.min:
+                            time_bucket = 0
+                        else:
+                            time_bucket = int(timestamp.timestamp() // bucket_seconds)
                     dedupe_key = (text_normalized, time_bucket)
                     if dedupe_key not in seen:
                         seen.add(dedupe_key)

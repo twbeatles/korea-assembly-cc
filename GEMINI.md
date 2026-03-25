@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.3
+- **버전**: v16.14.4
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ## 2. 기술 스택
@@ -115,7 +115,7 @@
 | `_wait_active_save_threads()` | 종료 시 저장 스레드 제한시간 대기 |
 | `_update_connection_status()` | 연결 상태 UI 업데이트 (#30) |
 | `_generate_smart_filename()` | 자동 파일명 생성 (#28) |
-| `_show_merge_dialog()` | 자막 병합 다이얼로그 (#20) |
+| `_show_merge_dialog()` | 자막 병합 다이얼로그 (#20, dedupe 모드 포함) |
 | `_show_db_history()` | DB 세션 히스토리 (#26) |
 
 ## 7. 파일 구조
@@ -154,9 +154,11 @@ korea-assembly-cc/
   tests/
     test_core_algorithm.py      # 코어 알고리즘 단위 테스트
     test_encoding_hygiene.py    # UTF-8/BOM/U+FFFD/한글 round-trip 검증
+    test_feature_plan_20260325.py  # 검색/세션/프리셋/저장 정합성 회귀 테스트
     test_pyright_regression.py  # pyright 0 error 회귀 테스트
     test_review_20260323_regressions.py  # run_id/alert/HWP/SRT-VTT 회귀 테스트
     test_reflow.py              # Reflow 테스트
+    test_session_resilience.py  # 세션 병합/손상 항목/ dedupe 정책 회귀 테스트
   README.md                 # 문서
   CLAUDE.md                 # AI 컨텍스트
   GEMINI.md                 # AI 컨텍스트
@@ -205,7 +207,7 @@ pip install -r requirements-dev.txt
 
 - **기본 HWPX export 추가**: `파일 → HWPX 저장` 메뉴와 `core/hwpx_export.py`를 추가해 한컴 미설치 환경에서도 기본 `.hwpx` 문서를 생성할 수 있게 함
 - **패키지 구조**: `assets/hwpx/header.xml` 템플릿과 `Contents/section0.xml`, `Preview/PrvText.txt`, `Contents/content.hpf`를 조합해 최소 유효 HWPX 패키지를 작성
-- **검증 보강**: HWPX 저장 회귀 테스트와 특수문자/XML escape, 줄바꿈 preview 검증을 추가해 `pytest -q` 76 pass, `pyright` 0 errors 확인
+- **검증 보강**: HWPX 저장 회귀 테스트와 특수문자/XML escape, 줄바꿈 preview 검증을 추가해 `pytest -q` 85 pass, `pyright` 0 errors 확인
 
 ## 9. v16.6 신규 기능
 
@@ -360,7 +362,18 @@ pip install -r requirements-dev.txt
 - `commit_live_row` 1,500회 benchmark 약 `10.3초 -> 3.8초`
 - `pytest -q` 59 pass, `pyright` 0 errors
 
-## 9.9.1 v16.14.3 운영 정합성 동기화 (2026-03-23)
+## 9.9.1 v16.14.4 기능 안정화 및 UX 정합성 보강 (2026-03-25)
+
+- 검색 기준을 전체 `self.subtitles` 스냅샷으로 전환하고, 검색 이동 시 해당 entry가 보이도록 렌더 offset을 동적으로 조정
+- 추출 중 세션 불러오기/DB 세션 로드/병합/줄넘김 정리/지우기/편집/삭제를 공통 가드와 action disable로 차단
+- 파일/DB 세션 로드 payload를 `version`, `url`, `committee_name`, `created_at`, `subtitles`, `skipped`, optional highlight 정보로 통합
+- DB 검색 결과에서 `세션 불러오기`와 `결과로 이동(sequence focus)`를 지원
+- 프리셋 export/import가 `committee` + `custom` round-trip을 지원하고, 통계/프리셋 export는 원자적 저장으로 통일
+- 자막 병합은 dedupe 기준을 `보수적(같은 초)` / `기존(30초 버킷)`으로 선택 가능
+- `.gitignore`를 재검토해 루트 `세션_*.json` export가 실수로 추적되지 않도록 보강
+- `pytest -q` 85 pass, `pyright` 0 errors
+
+## 9.9.2 v16.14.3 운영 정합성 동기화 (2026-03-23)
 ### 🔒 Worker lifecycle / queue
 - `self.driver` 접근을 `_driver_lock` + identity helper로 통일하고, stop timeout 뒤 stale run을 즉시 inactive 처리
 - `MainWindowMessageQueue(maxsize=500)`가 Worker 메시지를 `run_id` envelope로 감싸고 `preview`/`keepalive`/`status`/`resolved_url`를 coalescing
@@ -373,7 +386,7 @@ pip install -r requirements-dev.txt
 - 미검증 `정보위원회`/`NA`/`PP` 기본 코드 제거, `공백 기준 단어 수` 문구 정리
 - 로컬 `typings/` stub과 `pytest.ini --basetemp=.pytest_tmp`로 글로벌 Python/Windows TEMP 권한 편차를 흡수하고, 루트 `.hwpx` 산출물도 `.gitignore`에 반영
 - `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
-- `pytest -q` 76 pass, `pyright` 0 errors
+- `pytest -q` 85 pass, `pyright` 0 errors
 
 ## 9.10 v16.14.1 자동 줄넘김 정리 기본 활성화 (2026-03-17)
 ### 🧹 자동 줄넘김 정리 옵션

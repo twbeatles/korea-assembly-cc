@@ -168,6 +168,15 @@ class WorkerQueueMessage:
     payload: Any
 
 
+@dataclass(slots=True)
+class SearchMatch:
+    """Rendered-search match anchored to a subtitle entry."""
+
+    entry_index: int
+    char_start: int
+    char_length: int
+
+
 class MainWindowMessageQueue:
     """Queue wrapper that automatically envelopes worker-thread messages."""
 

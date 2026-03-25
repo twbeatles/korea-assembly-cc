@@ -861,9 +861,69 @@ class MainWindowPipelineMixin(MainWindowHost):
             self._reset_stream_state_after_subtitle_change(
                 keep_history_from_subtitles=keep_history_from_subtitles
             )
+            self.search_matches = []
+            self.search_idx = 0
+            search_count = self.__dict__.get("search_count")
+            if search_count is not None:
+                search_count.setText("")
+            self._search_focus_entry_index = None
+            self._pending_search_focus_query = ""
             self._rebuild_stats_cache()
             self._refresh_text(force_full=True)
             self._update_count_label()
+
+
+    def _complete_loaded_session(self, payload: dict[str, Any]) -> bool:
+            if not isinstance(payload, dict):
+                return False
+
+            session_version = str(payload.get("version", "unknown"))
+            source_path = str(payload.get("path", "") or "")
+            source_url = str(payload.get("url", "") or "")
+            committee_name = str(payload.get("committee_name", "") or "")
+            created_at = str(payload.get("created_at", "") or "")
+            loaded_subtitles = payload.get("subtitles", [])
+            skipped_items = int(payload.get("skipped", 0) or 0)
+            highlight_sequence = int(payload.get("highlight_sequence", -1) or -1)
+            highlight_query = str(payload.get("highlight_query", "") or "")
+
+            if not isinstance(loaded_subtitles, list):
+                return False
+
+            if session_version != Config.VERSION:
+                reply = QMessageBox.question(
+                    self,
+                    "버전 불일치",
+                    f"세션 버전({session_version})이 현재 버전({Config.VERSION})과 다릅니다.\n"
+                    "계속 불러오시겠습니까?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    payload["_cancelled"] = True
+                    self._set_status("세션 불러오기 취소됨 (버전 불일치)", "warning")
+                    return False
+
+            self._replace_subtitles_and_refresh(
+                loaded_subtitles, keep_history_from_subtitles=bool(loaded_subtitles)
+            )
+            if source_url:
+                self.url_combo.setCurrentText(source_url)
+                self._add_to_history(source_url, committee_name)
+
+            summary = f"세션 불러오기 완료! {len(self.subtitles)}개 문장"
+            if skipped_items > 0:
+                summary += f" (손상 항목 {skipped_items}개 제외)"
+            self._set_status(summary, "success")
+            self._show_toast(summary, "success")
+
+            if highlight_sequence >= 0:
+                self._focus_loaded_session_result(highlight_sequence, highlight_query)
+
+            if source_path:
+                logger.info("세션 불러오기 완료: %s", source_path)
+            elif created_at:
+                logger.info("세션 불러오기 완료: created_at=%s", created_at)
+            return True
 
 
     def _process_message_queue(self):
@@ -1045,37 +1105,9 @@ class MainWindowPipelineMixin(MainWindowHost):
                 elif msg_type == "session_load_done":
                     self._session_load_in_progress = False
                     payload = data if isinstance(data, dict) else {}
-                    session_version = str(payload.get("version", "unknown"))
-                    source_path = str(payload.get("path", ""))
-                    source_url = str(payload.get("url", "") or "")
-                    loaded_subtitles = payload.get("subtitles", [])
-                    skipped_items = int(payload.get("skipped", 0) or 0)
-
-                    if session_version != Config.VERSION:
-                        reply = QMessageBox.question(
-                            self,
-                            "버전 불일치",
-                            f"세션 버전({session_version})이 현재 버전({Config.VERSION})과 다릅니다.\n"
-                            "계속 불러오시겠습니까?",
-                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                        )
-                        if reply == QMessageBox.StandardButton.No:
-                            self._set_status("세션 불러오기 취소됨 (버전 불일치)", "warning")
-                            return
-
-                    self._replace_subtitles_and_refresh(
-                        loaded_subtitles, keep_history_from_subtitles=bool(loaded_subtitles)
-                    )
-                    if source_url:
-                        self.url_combo.setCurrentText(source_url)
-
-                    summary = f"세션 불러오기 완료! {len(self.subtitles)}개 문장"
-                    if skipped_items > 0:
-                        summary += f" (손상 항목 {skipped_items}개 제외)"
-                    self._set_status(summary, "success")
-                    self._show_toast(summary, "success")
-                    if source_path:
-                        logger.info("세션 불러오기 완료: %s", source_path)
+                    if not self._complete_loaded_session(payload):
+                        if not payload.get("_cancelled"):
+                            self._set_status("세션 불러오기 실패", "error")
 
                 elif msg_type == "session_load_json_error":
                     self._session_load_in_progress = False
