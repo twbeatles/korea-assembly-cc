@@ -13,7 +13,7 @@ from pathlib import Path
 block_cipher = None
 
 
-def _load_version_from_readme(default: str = "16.14.4") -> str:
+def _load_version_from_readme(default: str = "16.14.5") -> str:
     spec_path = Path(globals().get("__file__", "subtitle_extractor.spec")).resolve()
     readme_path = spec_path.parent / "README.md"
     try:

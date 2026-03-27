@@ -134,7 +134,9 @@ class DatabaseProtocol(Protocol):
     def save_session(self, session_data: object) -> int: ...
     def load_session(self, session_id: int) -> dict[str, Any] | None: ...
     def delete_session(self, session_id: int) -> bool: ...
-    def search_subtitles(self, query: str, limit: Any = ...) -> list[dict[str, Any]]: ...
+    def search_subtitles(
+        self, query: str, limit: Any = ..., offset: Any = ...
+    ) -> list[dict[str, Any]]: ...
     def get_statistics(self) -> dict[str, Any]: ...
     def list_sessions(
         self, limit: Any = ..., offset: Any = ...
@@ -175,6 +177,61 @@ class SearchMatch:
     entry_index: int
     char_start: int
     char_length: int
+
+
+@dataclass(slots=True)
+class SubtitleDialogItem:
+    """Searchable subtitle row model used by edit/delete dialogs."""
+
+    source_index: int
+    timestamp_text: str
+    text: str
+    normalized_text: str
+    display_text: str
+    search_blob: str
+
+
+def build_subtitle_dialog_items(
+    entries: list[SubtitleEntry],
+    normalize_text: Callable[[object], str],
+    preview_limit: int = 80,
+) -> list[SubtitleDialogItem]:
+    items: list[SubtitleDialogItem] = []
+    for index, entry in enumerate(entries):
+        timestamp = getattr(entry, "timestamp", None)
+        timestamp_text = (
+            timestamp.strftime("%H:%M:%S") if isinstance(timestamp, datetime) else ""
+        )
+        raw_text = str(getattr(entry, "text", "") or "")
+        normalized_text = str(normalize_text(raw_text) or "").strip()
+        preview_text = normalized_text.replace("\n", " ")
+        if len(preview_text) > preview_limit:
+            preview_text = preview_text[:preview_limit] + "..."
+        display_text = (
+            f"[{timestamp_text}] {preview_text}" if timestamp_text else preview_text
+        )
+        search_blob = f"{timestamp_text} {normalized_text}".strip().lower()
+        items.append(
+            SubtitleDialogItem(
+                source_index=index,
+                timestamp_text=timestamp_text,
+                text=raw_text,
+                normalized_text=normalized_text,
+                display_text=display_text,
+                search_blob=search_blob,
+            )
+        )
+    return items
+
+
+def filter_subtitle_dialog_items(
+    items: list[SubtitleDialogItem],
+    query: str,
+) -> list[SubtitleDialogItem]:
+    needle = str(query or "").strip().lower()
+    if not needle:
+        return list(items)
+    return [item for item in items if needle in item.search_blob]
 
 
 class MainWindowMessageQueue:

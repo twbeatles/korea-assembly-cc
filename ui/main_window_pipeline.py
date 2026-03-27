@@ -616,6 +616,7 @@ class MainWindowPipelineMixin(MainWindowHost):
 
             if check_alert:
                 self._check_keyword_alert(new_text)
+            self._mark_session_dirty()
             self._update_count_label()
             if refresh:
                 self._refresh_text(force_full=False)
@@ -906,15 +907,23 @@ class MainWindowPipelineMixin(MainWindowHost):
             self._replace_subtitles_and_refresh(
                 loaded_subtitles, keep_history_from_subtitles=bool(loaded_subtitles)
             )
+            self._set_capture_source_metadata(
+                source_url,
+                committee_name,
+                headless=bool(self.__dict__.get("_capture_source_headless", False)),
+                realtime=bool(self.__dict__.get("_capture_source_realtime", False)),
+            )
             if source_url:
                 self.url_combo.setCurrentText(source_url)
                 self._add_to_history(source_url, committee_name)
+                self.current_url = source_url
 
             summary = f"세션 불러오기 완료! {len(self.subtitles)}개 문장"
             if skipped_items > 0:
                 summary += f" (손상 항목 {skipped_items}개 제외)"
             self._set_status(summary, "success")
             self._show_toast(summary, "success")
+            self._clear_session_dirty()
 
             if highlight_sequence >= 0:
                 self._focus_loaded_session_result(highlight_sequence, highlight_query)
@@ -1081,6 +1090,7 @@ class MainWindowPipelineMixin(MainWindowHost):
                     saved_count = int(info.get("saved_count", 0) or 0)
                     db_saved = bool(info.get("db_saved", False))
                     db_error = str(info.get("db_error", "") or "").strip()
+                    self._clear_session_dirty()
                     if db_saved:
                         self._set_status(
                             f"세션 저장 완료 ({saved_count}개, DB 저장 포함)", "success"

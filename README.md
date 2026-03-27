@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.14.4
+# 🏛️ 국회 의사중계 자막 추출기 v16.14.5
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 데스크톱 프로그램입니다.
 
@@ -10,6 +10,7 @@
 ---
 
 ## 📋 목차
+- [UI/UX 운영 정합성 보강 (v16.14.5)](#-v16145-uiux-운영-정합성-보강-2026-03-27)
 - [기능 안정화 및 UX 정합성 보강 (v16.14.4)](#-v16144-기능-안정화-및-ux-정합성-보강-2026-03-25)
 - [운영 정합성 동기화 (v16.14.3)](#-v16143-운영-정합성-동기화-2026-03-23)
 - [성능 최적화 중심 리팩토링 (v16.14.2)](#-v16142-성능-최적화-중심-리팩토링-2026-03-18)
@@ -28,6 +29,36 @@
 - [빌드 방법](#️-빌드-방법)
 - [변경 이력](#-변경-이력)
 - [파이프라인 고정 문서](#-파이프라인-고정-문서)
+
+---
+
+## ✨ v16.14.5 UI/UX 운영 정합성 보강 (2026-03-27)
+
+### 🎛️ 실행 중 상태 고정
+- 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 `run-source` 스냅샷으로 고정합니다.
+- 추출 중에는 URL, 프리셋, 생중계 목록, 태그 편집, 실시간 저장, 헤드리스 모드를 모두 잠그고, 저장/자동백업/세션 JSON 메타데이터도 현재 UI가 아니라 시작 시점 스냅샷을 기준으로 기록합니다.
+- URL 히스토리는 MRU 순서로 갱신되어, 이미 쓴 URL을 다시 선택하면 목록 맨 뒤 최신 항목으로 재배치됩니다.
+
+### 📡 생중계 선택 정책 정리
+- 생중계 목록은 `생중계`와 `종료/예정`을 함께 보여주되, live 항목을 항상 우선 정렬합니다.
+- `종료/예정` 항목은 즉시 실행하지 않고 확인 후 URL만 채웁니다.
+- 자동 감지 및 `live_list.asp` 기반 URL 보완은 `xstat == "1"`인 실제 live 항목만 사용합니다.
+- `LiveBroadcastDialog`는 persistent fetch thread를 제거하고, 요청당 1회성 백그라운드 fetch + request token으로 늦게 도착한 응답을 무시합니다.
+
+### 🗄️ 대용량 목록 / 세션 종료 UX
+- DB 세션 히스토리는 50건, 자막 검색은 100건, 자막 편집/삭제 다이얼로그는 200개 단위로 `더 보기` 점진 로드를 사용합니다.
+- 편집/삭제 다이얼로그는 원본 subtitle index를 유지하는 검색형 목록으로 바뀌어, 필터링 후에도 정확한 항목을 수정/삭제합니다.
+- 세션 dirty tracking을 추가해 종료 프롬프트는 단순 자막 개수가 아니라 실제 미저장 세션 변경 여부를 기준으로 판단합니다.
+- 세션 JSON 저장 성공만 clean으로 간주하고, TXT/SRT/VTT/DOCX/HWP/HWPX/RTF/통계 export는 dirty를 유지합니다.
+
+### ⌨️ 단축키 / 문서 / 빌드 정합성
+- `Escape`는 검색창이 열려 있으면 닫기, 아니면 실행 중일 때만 추출 중지로 동작합니다.
+- 전체 자막 복사는 `Ctrl+Shift+C`, `Ctrl+C`는 `QTextEdit`의 선택 복사로 문서와 실제 동작을 일치시켰습니다.
+- `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `FEATURE_IMPLEMENTATION_REVIEW_20260325.md`, `.gitignore`를 `v16.14.5` 기준으로 다시 점검했습니다.
+
+### ✅ 현재 검증 상태
+- `pytest -q`: `95 passed`
+- `pyright --outputjson`: `0 errors`
 
 ---
 
@@ -53,13 +84,6 @@
   - `보수적`: 같은 초 + 동일 정규화 문장
   - `기존`: 30초 버킷 + 동일 정규화 문장
 - `.gitignore`는 검토 후 루트에 실수로 저장된 `세션_*.json` export가 추적되지 않도록 보강했습니다.
-
-### ✅ 현재 검증 상태
-- `pytest -q`: `85 passed`
-- `pyright --outputjson`: `0 errors`
-- `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `FEATURE_IMPLEMENTATION_REVIEW_20260325.md`를 `v16.14.4` 기준으로 동기화했습니다.
-
----
 
 ## ✨ v16.14.3 운영 정합성 동기화 (2026-03-23)
 
@@ -326,16 +350,18 @@ python "국회의사중계 자막.py"
 
 **방법 C: 생중계 목록 선택**
 1. `📡 생중계 목록` 버튼 클릭
-2. 목록에서 현재 방송 선택
-3. URL이 자동으로 입력됨
+2. 목록에서 방송 선택
+3. `종료/예정` 항목은 확인 후 URL만 입력됨
+4. URL이 자동으로 입력됨
 
 - 기본 프리셋은 검증된 상임위와 `IO` 기반 특위만 포함합니다. 확인되지 않은 특수 코드는 직접 URL 또는 사용자 프리셋을 사용하세요.
 
 #### 3단계: 옵션 설정
 - ✅ **자동 스크롤**: 새 자막이 추가될 때 자동으로 아래로 스크롤 (사용자 스크롤 시 일시 중지)
 - ✅ **자동 줄넘김 정리**: 수집 중 줄바꿈/빈 줄을 자동 정리, 기본 활성화
-- ✅ **실시간 저장**: 자막을 파일에 실시간으로 저장 (앱 기준 `realtime_output` 폴더)
-- ✅ **헤드리스 모드**: 브라우저 창을 숨기고 백그라운드에서 실행
+- ✅ **실시간 저장**: 자막을 파일에 실시간으로 저장 (앱 기준 `realtime_output` 폴더, 시작 전 설정)
+- ✅ **헤드리스 모드**: 브라우저 창을 숨기고 백그라운드에서 실행 (시작 전 설정)
+- 추출 중에는 URL, 프리셋, 생중계 선택, 실시간 저장, 헤드리스 모드를 변경할 수 없습니다.
 
 #### 4단계: 추출 시작
 - `▶ 시작` 버튼 클릭 또는 **F5** 키
@@ -366,7 +392,7 @@ python "국회의사중계 자막.py"
 | 단축키 | 기능 |
 |--------|------|
 | **F5** | 추출 시작 |
-| **Escape** | 추출 중지 |
+| **Escape** | 검색창 닫기 / 추출 중지 |
 | **Ctrl+Q** | 프로그램 종료 |
 
 ### 검색 및 편집
@@ -377,7 +403,8 @@ python "국회의사중계 자막.py"
 | **Shift+F3** | 이전 검색 결과 |
 | **Ctrl+E** | 자막 편집 |
 | **Delete** | 자막 삭제 |
-| **Ctrl+C** | 전체 자막 복사 |
+| **Ctrl+Shift+C** | 전체 자막 복사 |
+| **Ctrl+C** | 선택한 텍스트 복사 |
 
 ### 저장
 | 단축키 | 기능 |
@@ -533,7 +560,7 @@ pip install pyinstaller
 pyinstaller subtitle_extractor.spec
 
 # 결과물
-dist/국회의사중계자막추출기 v16.14.4.exe
+dist/국회의사중계자막추출기 v16.14.5.exe
 ```
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
@@ -554,6 +581,15 @@ dist/국회의사중계자막추출기 v16.14.4.exe
 - 병합 dedupe 모드에 `보수적(같은 초)` / `기존(30초 버킷)` 옵션 추가
 - `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`, `FEATURE_IMPLEMENTATION_REVIEW_20260325.md`를 `v16.14.4` 기준으로 동기화
 - 회귀 테스트 확장 후 `pytest -q` 85개 전체 통과, `pyright` 0 errors 확인
+
+### v16.14.5 (2026-03-27)
+- 캡처 시작 시 URL/위원회/헤드리스/실시간 저장을 `run-source` 스냅샷으로 고정하고, 추출 중 관련 UI 변경을 공통 잠금 정책으로 정리
+- 생중계 목록은 `생중계`와 `종료/예정`을 함께 보여주되, 자동 감지는 live-only로 제한하고 종료/예정 선택은 확인 후 URL만 적용
+- DB 히스토리(50), DB 검색(100), 자막 편집/삭제(200)를 `더 보기` 기반 점진 로드로 개편
+- 세션 dirty tracking과 `Save / Discard / Cancel` 종료 프롬프트를 도입하고, clean 판정은 세션 JSON 저장 성공 기준으로 통일
+- 단축키 문서와 실제 동작을 `Escape`, `Ctrl+Shift+C`, `Ctrl+C` 기준으로 동기화
+- `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`, `FEATURE_IMPLEMENTATION_REVIEW_20260325.md`, `.gitignore`를 `v16.14.5` 기준으로 재점검
+- 회귀 테스트 추가 후 `pytest -q` 95개 전체 통과, `pyright` 0 errors 확인
 
 ### v16.14.3 (2026-03-23)
 - `self.driver` 접근을 `_driver_lock`과 identity helper로 통일하고, stop timeout 이후 stale worker run을 `run_id`로 격리

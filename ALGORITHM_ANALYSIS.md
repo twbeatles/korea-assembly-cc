@@ -14,6 +14,7 @@
 > **v16.14.2(2026-03-18) 성능 정합성 반영**: `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()`, streaming JSON 저장, delta render/tail patch가 추가되었고, `commit_live_row` 1,500회 benchmark는 약 `10.3초 -> 3.8초`로 단축되었습니다. 이후 자막 수집 회귀 대응으로 Worker 캡처 루프는 이전 안정 structured probe 경로로 복귀했습니다.
 > **v16.14.3(2026-03-23) 운영 정합성 반영**: 코어 알고리즘 자체는 유지하면서, `self.driver` lifecycle이 `_driver_lock`으로 정리되고, Worker 메시지는 bounded `MainWindowMessageQueue(maxsize=500)` + internal `run_id` envelope + coalescing으로 격리되었습니다. `_finalize_subtitle()`는 shared append helper를 사용하고, 렌더는 immutable snapshot clone 기준으로 동작합니다.
 > **v16.14.4(2026-03-25) UI/운영 정합성 반영**: 검색 기준이 전체 `self.subtitles` 스냅샷으로 확장되고 검색/DB 결과 focus 시 렌더 offset이 동적으로 조정되지만, 이 문서가 분석하는 글로벌 히스토리 + suffix 코어 의미론은 바뀌지 않습니다. 또한 실행 중 상태 변경 가드, 파일/DB 세션 로드 payload 통합, 프리셋/통계 export 원자성 보강은 운영 레이어 변경입니다.
+> **v16.14.5(2026-03-27) UI/UX 정합성 반영**: run-source 스냅샷 고정, live 목록의 수동/자동 경로 분리, DB/편집 목록의 점진 로드, dirty-session 종료 프롬프트, 단축키/문서 정렬이 추가되었지만, 이 역시 코어 추출 알고리즘이 아닌 UI/상태 관리 레이어 변경입니다.
 > 후속 Pylance/인코딩 위생 보강(`ui/main_window_types.py`, 로컬 `typings/`, `pytest.ini --basetemp=.pytest_tmp`, 확장된 `tests/test_encoding_hygiene.py`)과 HWP 저장의 missing-dependency fallback 정렬은 이 문서가 분석하는 자막 추출 알고리즘 자체를 바꾸지 않습니다.
 
 ---

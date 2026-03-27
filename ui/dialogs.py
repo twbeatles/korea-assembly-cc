@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 
 import json
+import threading
 import time
 from urllib.request import Request, urlopen
 
-from PyQt6.QtCore import Qt, QTimer, QObject, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QCloseEvent
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QTreeWidget, QTreeWidgetItem,
@@ -13,43 +14,40 @@ from PyQt6.QtWidgets import (
 
 from core.config import Config
 
-class _LiveListFetchWorker(QObject):
-    """live_list.asp API 호출을 UI와 분리하기 위한 워커."""
-
-    finished = pyqtSignal(object)  # {"ok": bool, "result": list} 또는 {"ok": False, "error": str}
-
-    @pyqtSlot()
-    def fetch(self):
-        """API 호출을 수행하는 슬롯"""
-        try:
-            api_url = f"https://assembly.webcast.go.kr/main/service/live_list.asp?vv={int(time.time())}"
-            req = Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urlopen(req, timeout=Config.API_TIMEOUT) as response:
-                payload = response.read().decode("utf-8", errors="replace")
-            data = json.loads(payload)
-            self.finished.emit({"ok": True, "result": data.get("xlist", [])})
-        except Exception as e:
-            self.finished.emit({"ok": False, "error": str(e)})
+def _fetch_live_list_payload() -> dict[str, object]:
+    """live_list.asp API를 조회해 payload dict로 반환한다."""
+    try:
+        api_url = (
+            f"https://assembly.webcast.go.kr/main/service/live_list.asp?vv={int(time.time())}"
+        )
+        req = Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(req, timeout=Config.API_TIMEOUT) as response:
+            payload = response.read().decode("utf-8", errors="replace")
+        data = json.loads(payload)
+        return {"ok": True, "result": data.get("xlist", [])}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 class LiveBroadcastDialog(QDialog):
     """현재 생중계 중인 방송 목록을 보여주고 선택하는 다이얼로그"""
 
-    sig_fetch_request = pyqtSignal() # 워커에게 요청을 보내는 시그널
+    sig_fetch_done = pyqtSignal(int, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("실시간 국회 생중계 목록")
+        self.setWindowTitle("국회 생중계 목록")
         self.resize(700, 450)
         self.selected_broadcast = None
         self._is_closing = False
-        
+        self._fetch_request_token = 0
+
         # UI 구성
         layout = QVBoxLayout(self)
         
         # 헤더
         header_layout = QHBoxLayout()
-        title_label = QLabel("📡 현재 진행 중인 생중계")
+        title_label = QLabel("📡 현재 / 종료 생중계 목록")
         font = title_label.font()
         font.setPointSize(12)
         font.setBold(True)
@@ -88,18 +86,7 @@ class LiveBroadcastDialog(QDialog):
             QTreeWidget::item { padding: 5px; }
             QTreeWidget::item:selected { background-color: #3b82f6; color: white; }
         """)
-
-        # --- 스레드 초기화 (Persistent) ---
-        self._fetch_thread = QThread(self)
-        self._fetch_worker = _LiveListFetchWorker()
-        self._fetch_worker.moveToThread(self._fetch_thread)
-        
-        # 시그널 연결
-        self.sig_fetch_request.connect(self._fetch_worker.fetch)
-        self._fetch_worker.finished.connect(self._on_fetch_done)
-        
-        # 스레드 시작
-        self._fetch_thread.start()
+        self.sig_fetch_done.connect(self._on_fetch_done)
         
         # 초기 로딩
         QTimer.singleShot(100, self.load_broadcasts)
@@ -116,13 +103,28 @@ class LiveBroadcastDialog(QDialog):
         self.msg_label.setText("데이터 조회 중...")
         self.msg_label.show()
         self.refresh_btn.setEnabled(False)
+        self._fetch_request_token += 1
+        request_token = self._fetch_request_token
 
-        # 워커에게 작업 요청
-        self.sig_fetch_request.emit()
+        def worker(token: int) -> None:
+            payload = _fetch_live_list_payload()
+            if self._is_closing:
+                return
+            try:
+                self.sig_fetch_done.emit(token, payload)
+            except RuntimeError:
+                return
 
-    def _on_fetch_done(self, payload):
+        threading.Thread(
+            target=worker,
+            args=(request_token,),
+            daemon=True,
+            name=f"LiveListFetch-{request_token}",
+        ).start()
+
+    def _on_fetch_done(self, request_token: int, payload):
         """live_list fetch 완료 콜백 (UI 스레드)."""
-        if self._is_closing:
+        if self._is_closing or request_token != self._fetch_request_token:
             return
         self.refresh_btn.setEnabled(True)
 
@@ -133,7 +135,7 @@ class LiveBroadcastDialog(QDialog):
 
         result = payload.get("result") or []
         if not result:
-            self.msg_label.setText("현재 진행 중인 생중계가 없습니다.")
+            self.msg_label.setText("표시할 생중계 항목이 없습니다.")
             return
 
         self.msg_label.hide()
@@ -193,38 +195,19 @@ class LiveBroadcastDialog(QDialog):
 
     def done(self, a0: int) -> None:
         """다이얼로그 종료 시 호출 (accept, reject 모두 포함)"""
-        self._shutdown_fetch_thread()
+        self._mark_closing()
         super().done(a0)
 
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         """창 닫기 이벤트"""
-        self._shutdown_fetch_thread()
+        self._mark_closing()
         if a0 is None:
             return
         super().closeEvent(a0)
 
-    def _shutdown_fetch_thread(self):
-        """live list 워커 스레드를 안전하게 종료한다."""
+    def _mark_closing(self):
+        """종료 이후 도착하는 응답이 무시되도록 상태만 바꾼다."""
         if self._is_closing:
             return
         self._is_closing = True
-
-        try:
-            if hasattr(self, "sig_fetch_request") and hasattr(self, "_fetch_worker"):
-                try:
-                    self.sig_fetch_request.disconnect(self._fetch_worker.fetch)
-                except Exception:
-                    pass
-            if hasattr(self, "_fetch_worker"):
-                try:
-                    self._fetch_worker.finished.disconnect(self._on_fetch_done)
-                except Exception:
-                    pass
-            if hasattr(self, "_fetch_thread") and self._fetch_thread.isRunning():
-                self._fetch_thread.quit()
-                wait_ms = int((Config.API_TIMEOUT + 1) * 1000)
-                self._fetch_thread.wait(wait_ms)
-            if hasattr(self, "_fetch_worker"):
-                self._fetch_worker.deleteLater()
-        except Exception:
-            pass
+        self._fetch_request_token += 1

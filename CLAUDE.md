@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.4
+- **버전**: v16.14.5
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -201,7 +201,17 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.4 기준)
+## 6. 최신 변경 요약 (v16.14.5 기준)
+
+### v16.14.5 UI/UX 운영 정합성 보강 메모
+- **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
+- **실행 중 옵션 잠금 확대**: URL, 프리셋, 생중계 목록, 태그 편집, 실시간 저장, 헤드리스 모드를 `_sync_runtime_action_state()`로 함께 disable
+- **생중계 목록 정책 분리**: 수동 목록은 `생중계`와 `종료/예정`을 모두 보여주되, 자동 감지/URL 보완은 `xstat == "1"` live-only로 제한
+- **LiveBroadcastDialog 비차단 종료**: persistent `QThread`를 제거하고 요청당 1회성 fetch + request token으로 다이얼로그 종료 후 늦은 응답을 무시
+- **DB/자막 목록 점진 로드**: 세션 히스토리 50건, 자막 검색 100건, 편집/삭제 200개 단위 `더 보기` 로딩과 원본 index 매핑 helper 도입
+- **dirty session 종료 기준 정리**: 세션 JSON 저장 성공만 clean으로 간주하고, 종료 프롬프트는 `_session_dirty` + 자막 수 기준으로 `Save / Discard / Cancel` 또는 `Discard / Cancel`을 선택
+- **단축키/문서 정렬**: `Escape` 우선순위와 `Ctrl+Shift+C` / `Ctrl+C` 문구를 실제 구현과 맞춤
+- **검증 상태**: `pytest -q` 95 pass, `pyright` 0 errors
 
 ### v16.14.4 기능 안정화 및 UX 정합성 보강 메모
 - **전체 자막 검색 전환**: 검색은 이제 `QTextEdit.toPlainText()`가 아니라 `self.subtitles` 전체 스냅샷을 기준으로 동작하고, `SearchMatch(entry_index, char_start, char_length)`와 `_rendered_entry_text_spans`로 실제 선택 구간을 추적
@@ -263,7 +273,7 @@ korea-assembly-cc/
 - **로그 경로 정책 통일**: `core/logging_utils.py`가 `Config.LOG_DIR`를 사용하도록 고정
 
 ### 6.5 UI/노이즈 품질 보강
-- **LiveBroadcastDialog 종료 경로 단일화**: `done`/`closeEvent`가 `_shutdown_fetch_thread()` 공통 호출
+- **LiveBroadcastDialog 종료 비차단화**: persistent fetch thread를 제거하고, `done`/`closeEvent`에서는 closing flag + request token만 갱신해 늦은 응답을 무시
 - **짧은 발화 허용 + 노이즈 필터**: 한글/영문 1~2자 허용, 숫자/기호-only 문자열 차단
 
 ### 6.6 v16.13.2 운영 정합성 업데이트 (2026-03-05)
@@ -285,7 +295,7 @@ korea-assembly-cc/
 - **스마트 `xcgcd` 감지**: `xcode`만 입력해도 `live_list.asp` API 및 페이지 분석을 통해 생중계 주소 자동 확보
 - **연결 지점 명확화**: 감지는 `xcgcd`가 없는 URL에서만 시작/재연결 루프에 연결되며, 기존 `xcgcd`가 있으면 원 URL을 유지
 - **리다이렉트 대응**: 메인 페이지로 이동 시 해당 위원회의 '생중계' 버튼 자동 클릭
-- **생중계 목록 선택 UI**: '📡 생중계 목록' 버튼을 통해 실시간 방송 목록 확인 및 직접 선택 (`LiveBroadcastDialog`)
+- **생중계 목록 선택 UI**: '📡 생중계 목록' 버튼을 통해 현재/종료 방송을 함께 확인할 수 있고, `종료/예정` 항목은 확인 후 URL만 채움 (`LiveBroadcastDialog`)
 
 ### 6.3 자동 파일명 생성 (#28)
 - 형식: `{날짜}_{위원회명}_{시간}.확장자`

@@ -8,16 +8,51 @@ class MainWindowDatabaseMixin(MainWindowHost):
 
     def _set_db_history_dialog_busy(self, busy: bool, message: str = "") -> None:
             """DB 히스토리 다이얼로그의 버튼/목록 상태를 토글한다."""
-            state = self._db_history_dialog_state or {}
+            state = self.__dict__.get("_db_history_dialog_state") or {}
             load_btn = state.get("load_btn")
             delete_btn = state.get("delete_btn")
             close_btn = state.get("close_btn")
+            more_btn = state.get("more_btn")
             list_widget = state.get("list_widget")
             status_label = state.get("status_label")
 
-            for btn in (load_btn, delete_btn, close_btn):
+            if load_btn is not None:
+                load_btn.setEnabled((not busy) and (not self.is_running))
+            for btn in (delete_btn, close_btn):
                 if btn is not None:
                     btn.setEnabled(not busy)
+            if more_btn is not None:
+                more_btn.setEnabled((not busy) and bool(state.get("has_more", False)))
+            if list_widget is not None:
+                list_widget.setEnabled(not busy)
+
+            if status_label is not None:
+                if busy:
+                    status_label.setText(message or "처리 중입니다...")
+                    status_label.show()
+                elif message:
+                    status_label.setText(message)
+                    status_label.show()
+                else:
+                    status_label.hide()
+
+    def _set_db_search_dialog_busy(self, busy: bool, message: str = "") -> None:
+            """DB 검색 결과 다이얼로그의 버튼/목록 상태를 토글한다."""
+            state = self.__dict__.get("_db_search_dialog_state") or {}
+            load_btn = state.get("load_btn")
+            focus_btn = state.get("focus_btn")
+            close_btn = state.get("close_btn")
+            more_btn = state.get("more_btn")
+            list_widget = state.get("list_widget")
+            status_label = state.get("status_label")
+
+            for btn in (load_btn, focus_btn):
+                if btn is not None:
+                    btn.setEnabled((not busy) and (not self.is_running))
+            if close_btn is not None:
+                close_btn.setEnabled(not busy)
+            if more_btn is not None:
+                more_btn.setEnabled((not busy) and bool(state.get("has_more", False)))
             if list_widget is not None:
                 list_widget.setEnabled(not busy)
 
@@ -35,6 +70,83 @@ class MainWindowDatabaseMixin(MainWindowHost):
     def _clear_db_history_dialog_state(self) -> None:
             """활성 DB 히스토리 다이얼로그 상태를 정리한다."""
             self._db_history_dialog_state = None
+
+    def _clear_db_search_dialog_state(self) -> None:
+            """활성 DB 검색 다이얼로그 상태를 정리한다."""
+            self._db_search_dialog_state = None
+
+    def _format_db_history_item(self, session_row: dict[str, Any]) -> str:
+            created = session_row.get("created_at", "")[:19] if session_row.get("created_at") else ""
+            committee = session_row.get("committee_name") or "알 수 없음"
+            subtitles = session_row.get("total_subtitles", 0)
+            chars = session_row.get("total_characters", 0)
+            return f"[{created}] {committee} - {subtitles}문장, {chars:,}자"
+
+    def _update_db_history_loaded_label(self) -> None:
+            state = self.__dict__.get("_db_history_dialog_state") or {}
+            loaded_label = state.get("loaded_label")
+            sessions = state.get("sessions")
+            if loaded_label is None or not isinstance(sessions, list):
+                return
+            loaded_label.setText(f"현재 {len(sessions)}개 로드됨")
+
+    def _append_db_history_sessions(self, sessions: list[dict[str, Any]]) -> None:
+            state = self.__dict__.get("_db_history_dialog_state") or {}
+            current_sessions = state.get("sessions")
+            list_widget = state.get("list_widget")
+            if not isinstance(current_sessions, list) or list_widget is None:
+                return
+
+            for session_row in sessions:
+                current_sessions.append(session_row)
+                list_widget.addItem(self._format_db_history_item(session_row))
+
+            state["offset"] = len(current_sessions)
+            state["has_more"] = len(sessions) >= int(
+                state.get("page_size", Config.DB_HISTORY_PAGE_SIZE)
+                or Config.DB_HISTORY_PAGE_SIZE
+            )
+            state["loading"] = False
+            more_btn = state.get("more_btn")
+            if more_btn is not None:
+                more_btn.setEnabled(bool(state["has_more"]))
+            self._update_db_history_loaded_label()
+
+    def _format_db_search_item(self, row: dict[str, Any]) -> str:
+            created = row.get("created_at", "")[:10] if row.get("created_at") else ""
+            committee = row.get("committee_name") or ""
+            text = row.get("text", "")[:100]
+            return f"[{created}] {committee}: {text}"
+
+    def _update_db_search_loaded_label(self) -> None:
+            state = self.__dict__.get("_db_search_dialog_state") or {}
+            loaded_label = state.get("loaded_label")
+            results = state.get("results")
+            if loaded_label is None or not isinstance(results, list):
+                return
+            loaded_label.setText(f"현재 {len(results)}개 로드됨")
+
+    def _append_db_search_results(self, results: list[dict[str, Any]]) -> None:
+            state = self.__dict__.get("_db_search_dialog_state") or {}
+            current_results = state.get("results")
+            list_widget = state.get("list_widget")
+            if not isinstance(current_results, list) or list_widget is None:
+                return
+
+            for row in results:
+                current_results.append(row)
+                list_widget.addItem(self._format_db_search_item(row))
+
+            state["offset"] = len(current_results)
+            state["has_more"] = len(results) >= int(
+                state.get("page_size", Config.DB_SEARCH_PAGE_SIZE)
+                or Config.DB_SEARCH_PAGE_SIZE
+            )
+            state["loading"] = False
+            more_btn = state.get("more_btn")
+            if more_btn is not None:
+                more_btn.setEnabled(bool(state["has_more"]))
+            self._update_db_search_loaded_label()
 
 
     def _run_db_task(
@@ -105,8 +217,26 @@ class MainWindowDatabaseMixin(MainWindowHost):
                     QMessageBox.information(self, "세션 히스토리", "저장된 세션이 없습니다.")
                     self._set_status("세션 히스토리 없음", "info")
                     return
-                self._open_db_history_dialog(sessions)
-                self._set_status("세션 히스토리 조회 완료", "success")
+                self._open_db_history_dialog(
+                    sessions,
+                    page_size=int(context.get("limit", Config.DB_HISTORY_PAGE_SIZE) or Config.DB_HISTORY_PAGE_SIZE),
+                )
+                self._set_status(f"세션 히스토리 조회 완료 ({len(sessions)}건)", "success")
+                return
+
+            if task_name == "db_history_list_more":
+                self._set_db_history_dialog_busy(False)
+                sessions = result if isinstance(result, list) else []
+                self._append_db_history_sessions(sessions)
+                if not sessions:
+                    state = self.__dict__.get("_db_history_dialog_state") or {}
+                    state["has_more"] = False
+                    more_btn = state.get("more_btn")
+                    if more_btn is not None:
+                        more_btn.setEnabled(False)
+                    self._set_status("세션 히스토리 추가 결과 없음", "info")
+                else:
+                    self._set_status(f"세션 히스토리 추가 로드 ({len(sessions)}건)", "success")
                 return
 
             if task_name == "db_search":
@@ -118,8 +248,27 @@ class MainWindowDatabaseMixin(MainWindowHost):
                     )
                     self._set_status("자막 검색 결과 없음", "info")
                     return
-                self._show_db_search_results(query, results)
+                self._show_db_search_results(
+                    query,
+                    results,
+                    page_size=int(context.get("limit", Config.DB_SEARCH_PAGE_SIZE) or Config.DB_SEARCH_PAGE_SIZE),
+                )
                 self._set_status(f"자막 검색 완료 ({len(results)}건)", "success")
+                return
+
+            if task_name == "db_search_more":
+                self._set_db_search_dialog_busy(False)
+                results = result if isinstance(result, list) else []
+                self._append_db_search_results(results)
+                if not results:
+                    state = self.__dict__.get("_db_search_dialog_state") or {}
+                    state["has_more"] = False
+                    more_btn = state.get("more_btn")
+                    if more_btn is not None:
+                        more_btn.setEnabled(False)
+                    self._set_status("자막 검색 추가 결과 없음", "info")
+                else:
+                    self._set_status(f"자막 검색 추가 로드 ({len(results)}건)", "success")
                 return
 
             if task_name == "db_stats":
@@ -137,13 +286,14 @@ class MainWindowDatabaseMixin(MainWindowHost):
                         self._show_toast("세션을 불러오지 못했습니다.", "error")
                     return
 
-                state = self._db_history_dialog_state or {}
+                state = self.__dict__.get("_db_history_dialog_state") or {}
                 dialog = state.get("dialog")
                 if dialog is not None:
                     dialog.accept()
                 return
 
             if task_name == "db_search_load_selected":
+                self._set_db_search_dialog_busy(False)
                 payload = result if isinstance(result, dict) else {}
                 if not self._complete_loaded_session(payload):
                     if not payload.get("_cancelled"):
@@ -163,7 +313,7 @@ class MainWindowDatabaseMixin(MainWindowHost):
                     self._show_toast("세션 삭제 실패", "error")
                     return
 
-                state = self._db_history_dialog_state or {}
+                state = self.__dict__.get("_db_history_dialog_state") or {}
                 sessions = state.get("sessions")
                 list_widget = state.get("list_widget")
                 session_id = context.get("session_id")
@@ -181,6 +331,8 @@ class MainWindowDatabaseMixin(MainWindowHost):
                 ):
                     list_widget.takeItem(remove_idx)
                     sessions.pop(remove_idx)
+                    state["offset"] = len(sessions)
+                    self._update_db_history_loaded_label()
 
                 self._show_toast("세션 삭제됨", "info")
                 self._set_status("세션 삭제 완료", "success")
@@ -195,9 +347,16 @@ class MainWindowDatabaseMixin(MainWindowHost):
             if task_name in (
                 "db_history_load_selected",
                 "db_history_delete_selected",
+                "db_history_list_more",
                 "db_search_load_selected",
+                "db_search_more",
             ):
+                history_state = self.__dict__.get("_db_history_dialog_state") or {}
+                search_state = self.__dict__.get("_db_search_dialog_state") or {}
+                history_state["loading"] = False
+                search_state["loading"] = False
                 self._set_db_history_dialog_busy(False)
+                self._set_db_search_dialog_busy(False)
             query_hint = str(context.get("query", "")).strip()
             message = f"DB 작업 실패 ({task_name}): {error}"
             if task_name == "db_search" and query_hint:
@@ -214,29 +373,27 @@ class MainWindowDatabaseMixin(MainWindowHost):
                 return
             self._run_db_task(
                 "db_history_list",
-                worker=lambda: db.list_sessions(limit=50),
+                worker=lambda: db.list_sessions(limit=Config.DB_HISTORY_PAGE_SIZE, offset=0),
+                context={"offset": 0, "limit": Config.DB_HISTORY_PAGE_SIZE},
                 loading_text="DB 세션 히스토리 조회 중...",
             )
 
 
-    def _open_db_history_dialog(self, sessions: list[dict]) -> None:
+    def _open_db_history_dialog(
+            self,
+            sessions: list[dict],
+            page_size: int = Config.DB_HISTORY_PAGE_SIZE,
+        ) -> None:
             dialog = QDialog(self)
             dialog.setWindowTitle("📋 세션 히스토리")
             dialog.setMinimumSize(700, 500)
 
             layout = QVBoxLayout(dialog)
 
-            # 세션 목록
-            list_widget = QListWidget()
-            for s in sessions:
-                created = s.get("created_at", "")[:19] if s.get("created_at") else ""
-                committee = s.get("committee_name") or "알 수 없음"
-                subtitles = s.get("total_subtitles", 0)
-                chars = s.get("total_characters", 0)
-                list_widget.addItem(
-                    f"[{created}] {committee} - {subtitles}문장, {chars:,}자"
-                )
+            loaded_label = QLabel("")
+            layout.addWidget(loaded_label)
 
+            list_widget = QListWidget()
             layout.addWidget(list_widget)
 
             status_label = QLabel("")
@@ -333,6 +490,35 @@ class MainWindowDatabaseMixin(MainWindowHost):
             delete_btn.clicked.connect(delete_selected)
             btn_layout.addWidget(delete_btn)
 
+            more_btn = QPushButton("더 보기")
+
+            def load_more():
+                state = self.__dict__.get("_db_history_dialog_state") or {}
+                if state.get("loading"):
+                    return
+                if not state.get("has_more", False):
+                    return
+                db = self.db
+                if db is None:
+                    self._show_toast("데이터베이스가 초기화되지 않았습니다.", "error")
+                    return
+                offset = int(state.get("offset", len(state.get("sessions", []))) or 0)
+                started = self._run_db_task(
+                    "db_history_list_more",
+                    worker=lambda off=offset: db.list_sessions(
+                        limit=page_size,
+                        offset=off,
+                    ),
+                    context={"offset": offset, "limit": page_size},
+                    loading_text="DB 세션 히스토리 추가 조회 중...",
+                )
+                if started:
+                    state["loading"] = True
+                    self._set_db_history_dialog_busy(True, "세션 목록을 더 불러오는 중입니다...")
+
+            more_btn.clicked.connect(load_more)
+            btn_layout.addWidget(more_btn)
+
             close_btn = QPushButton("닫기")
             close_btn.clicked.connect(dialog.reject)
             btn_layout.addWidget(close_btn)
@@ -347,10 +533,22 @@ class MainWindowDatabaseMixin(MainWindowHost):
                 "sessions": sessions,
                 "list_widget": list_widget,
                 "status_label": status_label,
+                "loaded_label": loaded_label,
                 "load_btn": load_btn,
                 "delete_btn": delete_btn,
                 "close_btn": close_btn,
+                "more_btn": more_btn,
+                "offset": len(sessions),
+                "page_size": page_size,
+                "has_more": len(sessions) >= page_size,
+                "loading": False,
             }
+            for session_row in sessions:
+                list_widget.addItem(self._format_db_history_item(session_row))
+            self._update_db_history_loaded_label()
+            more_btn.setEnabled(len(sessions) >= page_size)
+            if list_widget.count() > 0:
+                list_widget.setCurrentRow(0)
             dialog.finished.connect(lambda *_: self._clear_db_history_dialog_state())
             dialog.exec()
 
@@ -369,31 +567,41 @@ class MainWindowDatabaseMixin(MainWindowHost):
 
             self._run_db_task(
                 "db_search",
-                worker=lambda q=query: db.search_subtitles(q),
-                context={"query": query},
+                worker=lambda q=query: db.search_subtitles(
+                    q,
+                    limit=Config.DB_SEARCH_PAGE_SIZE,
+                    offset=0,
+                ),
+                context={
+                    "query": query,
+                    "offset": 0,
+                    "limit": Config.DB_SEARCH_PAGE_SIZE,
+                },
                 loading_text=f"DB 자막 검색 중... ({query[:15]})",
             )
 
 
-    def _show_db_search_results(self, query: str, results: list[dict]) -> None:
+    def _show_db_search_results(
+            self,
+            query: str,
+            results: list[dict],
+            page_size: int = Config.DB_SEARCH_PAGE_SIZE,
+        ) -> None:
             dialog = QDialog(self)
             dialog.setWindowTitle(f"🔍 검색 결과 - '{query}'")
             dialog.setMinimumSize(700, 500)
 
             layout = QVBoxLayout(dialog)
-            layout.addWidget(QLabel(f"총 {len(results)}개 결과"))
+
+            loaded_label = QLabel("")
+            layout.addWidget(loaded_label)
 
             list_widget = QListWidget()
-            for r in results:
-                created = r.get("created_at", "")[:10] if r.get("created_at") else ""
-                committee = r.get("committee_name") or ""
-                text = r.get("text", "")[:100]
-                list_widget.addItem(f"[{created}] {committee}: {text}")
-
             layout.addWidget(list_widget)
 
-            if list_widget.count() > 0:
-                list_widget.setCurrentRow(0)
+            status_label = QLabel("")
+            status_label.hide()
+            layout.addWidget(status_label)
 
             button_layout = QHBoxLayout()
             load_btn = QPushButton("세션 불러오기")
@@ -440,7 +648,7 @@ class MainWindowDatabaseMixin(MainWindowHost):
                         payload["highlight_query"] = query
                     return payload
 
-                self._run_db_task(
+                started = self._run_db_task(
                     "db_search_load_selected",
                     worker=worker,
                     context={
@@ -451,6 +659,10 @@ class MainWindowDatabaseMixin(MainWindowHost):
                     },
                     loading_text="DB 검색 결과 세션 불러오는 중...",
                 )
+                if started:
+                    self._set_db_search_dialog_busy(
+                        True, "검색 결과 세션을 불러오는 중입니다..."
+                    )
 
             load_btn.clicked.connect(lambda: load_selected(False))
             focus_btn.clicked.connect(lambda: load_selected(True))
@@ -459,10 +671,65 @@ class MainWindowDatabaseMixin(MainWindowHost):
             button_layout.addWidget(load_btn)
             button_layout.addWidget(focus_btn)
 
+            more_btn = QPushButton("더 보기")
+
+            def load_more():
+                state = self.__dict__.get("_db_search_dialog_state") or {}
+                if state.get("loading"):
+                    return
+                if not state.get("has_more", False):
+                    return
+
+                db = self.db
+                if db is None:
+                    self._show_toast("데이터베이스가 초기화되지 않았습니다.", "error")
+                    return
+                offset = int(state.get("offset", len(state.get("results", []))) or 0)
+                started = self._run_db_task(
+                    "db_search_more",
+                    worker=lambda q=query, off=offset: db.search_subtitles(
+                        q,
+                        limit=page_size,
+                        offset=off,
+                    ),
+                    context={"query": query, "offset": offset, "limit": page_size},
+                    loading_text=f"DB 자막 검색 추가 조회 중... ({query[:15]})",
+                )
+                if started:
+                    state["loading"] = True
+                    self._set_db_search_dialog_busy(True, "검색 결과를 더 불러오는 중입니다...")
+
+            more_btn.clicked.connect(load_more)
+            button_layout.addWidget(more_btn)
+
             close_btn = QPushButton("닫기")
             close_btn.clicked.connect(dialog.reject)
             button_layout.addWidget(close_btn)
             layout.addLayout(button_layout)
+
+            self._db_search_dialog_state = {
+                "dialog": dialog,
+                "query": query,
+                "results": results,
+                "list_widget": list_widget,
+                "status_label": status_label,
+                "loaded_label": loaded_label,
+                "load_btn": load_btn,
+                "focus_btn": focus_btn,
+                "close_btn": close_btn,
+                "more_btn": more_btn,
+                "offset": len(results),
+                "page_size": page_size,
+                "has_more": len(results) >= page_size,
+                "loading": False,
+            }
+            for row in results:
+                list_widget.addItem(self._format_db_search_item(row))
+            self._update_db_search_loaded_label()
+            more_btn.setEnabled(len(results) >= page_size)
+            if list_widget.count() > 0:
+                list_widget.setCurrentRow(0)
+            dialog.finished.connect(lambda *_: self._clear_db_search_dialog_state())
 
             dialog.exec()
 
@@ -600,6 +867,8 @@ class MainWindowDatabaseMixin(MainWindowHost):
 
                 if merged:
                     self._replace_subtitles_and_refresh(merged)
+                    self._set_capture_source_metadata("", "")
+                    self._mark_session_dirty()
                     self._show_toast(f"병합 완료! {len(merged)}개 문장", "success")
                     dialog.accept()
 

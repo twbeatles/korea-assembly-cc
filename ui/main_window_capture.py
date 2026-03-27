@@ -45,11 +45,25 @@ class MainWindowCaptureMixin(MainWindowHost):
 
     def _show_live_dialog(self):
             """생중계 목록 다이얼로그 표시"""
+            if self._is_runtime_mutation_blocked("생중계 목록 변경"):
+                return
             dialog = LiveBroadcastDialog(self)
             dialog.finished.connect(dialog.deleteLater)
             if dialog.exec():
                 data = dialog.selected_broadcast
                 if data:
+                    xstat = str(data.get("xstat", "")).strip()
+                    if xstat != "1":
+                        reply = QMessageBox.question(
+                            self,
+                            "종료/예정 방송 선택",
+                            "선택한 항목은 현재 생중계 상태가 아닙니다.\n"
+                            "그래도 URL을 입력하시겠습니까?",
+                            QMessageBox.StandardButton.Yes
+                            | QMessageBox.StandardButton.No,
+                        )
+                        if reply != QMessageBox.StandardButton.Yes:
+                            return
                     # 선택된 방송 정보로 URL 생성
                     # player.asp?xcode={xcode}&xcgcd={xcgcd} 형식이 가장 안정적임
                     xcode = str(data.get("xcode", "")).strip()
@@ -88,14 +102,16 @@ class MainWindowCaptureMixin(MainWindowHost):
             current_xcgcd = self._get_query_param(original_url, "xcgcd").strip()
             target_norm = target_xcode.strip().upper() if target_xcode else ""
 
-            # xcgcd가 있으면 유효한 것으로 간주 (xstat 상태와 무관하게 시도)
-            def is_valid_broadcast(item):
-                return bool(str(item.get("xcgcd", "")).strip())
+            def is_live_broadcast(item) -> bool:
+                return (
+                    str(item.get("xstat", "")).strip() == "1"
+                    and bool(str(item.get("xcgcd", "")).strip())
+                )
 
             if current_xcgcd and not target_norm:
                 for bc in broadcasts:
                     bc_xcgcd = str(bc.get("xcgcd", "")).strip()
-                    if bc_xcgcd and bc_xcgcd == current_xcgcd:
+                    if bc_xcgcd and bc_xcgcd == current_xcgcd and is_live_broadcast(bc):
                         bc_xcode = str(bc.get("xcode", "")).strip()
                         if bc_xcode:
                             new_url = self._set_query_param(original_url, "xcode", bc_xcode)
@@ -105,8 +121,7 @@ class MainWindowCaptureMixin(MainWindowHost):
             if target_norm:
                 for bc in broadcasts:
                     bc_xcode = str(bc.get("xcode", "")).strip()
-                    # xcode가 일치하고 xcgcd가 있으면 사용 (xstat 조건 완화)
-                    if bc_xcode.upper() == target_norm and is_valid_broadcast(bc):
+                    if bc_xcode.upper() == target_norm and is_live_broadcast(bc):
                         xcgcd = str(bc.get("xcgcd", "")).strip()
                         new_url = self._set_query_param(original_url, "xcgcd", xcgcd)
                         if not self._get_query_param(new_url, "xcode"):
@@ -116,7 +131,7 @@ class MainWindowCaptureMixin(MainWindowHost):
                 logger.warning(f"live_list에서 xcode={target_norm} 생중계 미발견")
             else:
                 for bc in broadcasts:
-                    if is_valid_broadcast(bc):
+                    if is_live_broadcast(bc):
                         xcgcd = str(bc.get("xcgcd", "")).strip()
                         new_url = self._set_query_param(original_url, "xcgcd", xcgcd)
                         if not self._get_query_param(new_url, "xcode"):

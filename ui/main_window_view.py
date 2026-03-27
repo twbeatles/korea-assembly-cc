@@ -516,6 +516,72 @@ class MainWindowViewMixin(MainWindowHost):
             except Exception as e:
                 logger.error(f"키워드 캐시 업데이트 오류: {e}")
 
+    def _build_subtitle_dialog_items(self) -> list[SubtitleDialogItem]:
+            with self.subtitle_lock:
+                entries = list(self.subtitles)
+            return build_subtitle_dialog_items(
+                entries,
+                self._normalize_subtitle_text_for_option,
+            )
+
+    def _update_subtitle_dialog_count_label(self, state: dict[str, Any]) -> None:
+            count_label = state.get("count_label")
+            if count_label is None:
+                return
+
+            rendered_count = len(state.get("rendered_items", []))
+            filtered_count = len(state.get("filtered_items", []))
+            if filtered_count:
+                count_label.setText(f"현재 {rendered_count}/{filtered_count}개 로드됨")
+            else:
+                count_label.setText("표시할 자막이 없습니다.")
+
+    def _load_more_subtitle_dialog_items(
+            self,
+            list_widget,
+            state: dict[str, Any],
+            *,
+            reset: bool = False,
+        ) -> None:
+            filtered_items = list(state.get("filtered_items", []))
+            rendered_items = list(state.get("rendered_items", []))
+            page_size = int(
+                state.get("page_size", Config.SUBTITLE_DIALOG_PAGE_SIZE)
+                or Config.SUBTITLE_DIALOG_PAGE_SIZE
+            )
+
+            if reset:
+                list_widget.clear()
+                rendered_items = []
+
+            start = len(rendered_items)
+            next_items = filtered_items[start : start + page_size]
+            for item in next_items:
+                list_widget.addItem(item.display_text)
+            rendered_items.extend(next_items)
+            state["rendered_items"] = rendered_items
+
+            more_btn = state.get("more_btn")
+            if more_btn is not None:
+                more_btn.setEnabled(len(rendered_items) < len(filtered_items))
+
+            self._update_subtitle_dialog_count_label(state)
+            if list_widget.count() > 0 and list_widget.currentRow() < 0:
+                list_widget.setCurrentRow(0)
+
+    def _apply_subtitle_dialog_filter(
+            self,
+            list_widget,
+            state: dict[str, Any],
+            query: str,
+        ) -> None:
+            state["filtered_items"] = filter_subtitle_dialog_items(
+                list(state.get("all_items", [])),
+                query,
+            )
+            state["rendered_items"] = []
+            self._load_more_subtitle_dialog_items(list_widget, state, reset=True)
+
 
     def _copy_to_clipboard(self) -> None:
             """자막 전체를 클립보드에 복사"""
@@ -556,6 +622,7 @@ class MainWindowViewMixin(MainWindowHost):
                 return
 
             self._replace_subtitles_and_refresh([], keep_history_from_subtitles=False)
+            self._mark_session_dirty()
             self._show_toast(f"🗑️ {count}개 자막 삭제됨", "success")
 
 
@@ -758,6 +825,7 @@ class MainWindowViewMixin(MainWindowHost):
                 self._replace_subtitles_and_refresh(
                     [], keep_history_from_subtitles=False
                 )
+                self._mark_session_dirty()
                 self.status_label.setText("내용 삭제됨")
 
 
@@ -769,44 +837,68 @@ class MainWindowViewMixin(MainWindowHost):
                 self._show_toast("편집할 자막이 없습니다.", "warning")
                 return
 
-            # 자막 목록 다이얼로그
+            items = self._build_subtitle_dialog_items()
+            if not items:
+                self._show_toast("편집할 자막이 없습니다.", "warning")
+                return
+
             dialog = QDialog(self)
             dialog.setWindowTitle("자막 편집")
-            dialog.setMinimumSize(600, 400)
+            dialog.setMinimumSize(760, 520)
 
             layout = QVBoxLayout(dialog)
 
-            # 안내 라벨
             info_label = QLabel("편집할 자막을 선택하세요:")
             layout.addWidget(info_label)
 
-            # 자막 목록
+            search_input = QLineEdit()
+            search_input.setPlaceholderText("시간 또는 자막 내용을 검색하세요...")
+            layout.addWidget(search_input)
+
+            count_label = QLabel("")
+            layout.addWidget(count_label)
+
             list_widget = QListWidget()
-            for i, entry in enumerate(self.subtitles):
-                timestamp = entry.timestamp.strftime("%H:%M:%S")
-                text_preview = (
-                    entry.text[:50] + "..." if len(entry.text) > 50 else entry.text
-                )
-                list_widget.addItem(f"[{timestamp}] {text_preview}")
+            list_widget.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
             layout.addWidget(list_widget)
 
-            # 편집 영역
             edit_label = QLabel("자막 내용:")
             layout.addWidget(edit_label)
 
             edit_text = QTextEdit()
-            edit_text.setMaximumHeight(100)
+            edit_text.setMaximumHeight(160)
             layout.addWidget(edit_text)
 
-            # 선택 시 내용 로드
+            more_btn = QPushButton("더 보기")
+            layout.addWidget(more_btn)
+
+            state = {
+                "all_items": items,
+                "filtered_items": list(items),
+                "rendered_items": [],
+                "page_size": Config.SUBTITLE_DIALOG_PAGE_SIZE,
+                "count_label": count_label,
+                "more_btn": more_btn,
+            }
+
             def on_selection_changed():
                 idx = list_widget.currentRow()
-                if 0 <= idx < len(self.subtitles):
-                    edit_text.setText(self.subtitles[idx].text)
+                rendered_items = state.get("rendered_items", [])
+                if 0 <= idx < len(rendered_items):
+                    edit_text.setText(rendered_items[idx].text)
+                else:
+                    edit_text.clear()
+
+            def load_more():
+                self._load_more_subtitle_dialog_items(list_widget, state)
+
+            def on_filter_changed(text: str):
+                self._apply_subtitle_dialog_filter(list_widget, state, text)
 
             list_widget.currentRowChanged.connect(on_selection_changed)
+            more_btn.clicked.connect(load_more)
+            search_input.textChanged.connect(on_filter_changed)
 
-            # 버튼
             buttons = QDialogButtonBox(
                 QDialogButtonBox.StandardButton.Save
                 | QDialogButtonBox.StandardButton.Cancel
@@ -814,11 +906,18 @@ class MainWindowViewMixin(MainWindowHost):
 
             def save_edit():
                 idx = list_widget.currentRow()
-                if 0 <= idx < len(self.subtitles):
+                rendered_items = state.get("rendered_items", [])
+                if 0 <= idx < len(rendered_items):
+                    source_index = rendered_items[idx].source_index
                     new_text = edit_text.toPlainText().strip()
                     if new_text:
                         with self.subtitle_lock:
-                            entry = self.subtitles[idx]
+                            if not (0 <= source_index < len(self.subtitles)):
+                                QMessageBox.warning(
+                                    dialog, "알림", "선택한 자막을 찾을 수 없습니다."
+                                )
+                                return
+                            entry = self.subtitles[source_index]
                             old_chars = entry.char_count
                             old_words = entry.word_count
                             entry.update_text(new_text)
@@ -826,6 +925,7 @@ class MainWindowViewMixin(MainWindowHost):
                             self._cached_total_words += entry.word_count - old_words
                         self._refresh_text(force_full=True)
                         self._update_count_label()
+                        self._mark_session_dirty()
                         self._show_toast("자막이 수정되었습니다.", "success")
                         dialog.accept()
                     else:
@@ -837,9 +937,7 @@ class MainWindowViewMixin(MainWindowHost):
             buttons.rejected.connect(dialog.reject)
             layout.addWidget(buttons)
 
-            # 첫 번째 항목 선택
-            if list_widget.count() > 0:
-                list_widget.setCurrentRow(0)
+            self._load_more_subtitle_dialog_items(list_widget, state, reset=True)
 
             dialog.exec()
 
@@ -852,30 +950,52 @@ class MainWindowViewMixin(MainWindowHost):
                 self._show_toast("삭제할 자막이 없습니다.", "warning")
                 return
 
-            # 자막 목록 다이얼로그
+            items = self._build_subtitle_dialog_items()
+            if not items:
+                self._show_toast("삭제할 자막이 없습니다.", "warning")
+                return
+
             dialog = QDialog(self)
             dialog.setWindowTitle("자막 삭제")
-            dialog.setMinimumSize(600, 400)
+            dialog.setMinimumSize(760, 520)
 
             layout = QVBoxLayout(dialog)
 
-            # 안내 라벨
             info_label = QLabel("삭제할 자막을 선택하세요 (다중 선택 가능):")
             layout.addWidget(info_label)
 
-            # 자막 목록 (다중 선택 가능)
+            search_input = QLineEdit()
+            search_input.setPlaceholderText("시간 또는 자막 내용을 검색하세요...")
+            layout.addWidget(search_input)
+
+            count_label = QLabel("")
+            layout.addWidget(count_label)
+
             list_widget = QListWidget()
             list_widget.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-
-            for i, entry in enumerate(self.subtitles):
-                timestamp = entry.timestamp.strftime("%H:%M:%S")
-                text_preview = (
-                    entry.text[:50] + "..." if len(entry.text) > 50 else entry.text
-                )
-                list_widget.addItem(f"[{timestamp}] {text_preview}")
             layout.addWidget(list_widget)
 
-            # 버튼
+            more_btn = QPushButton("더 보기")
+            layout.addWidget(more_btn)
+
+            state = {
+                "all_items": items,
+                "filtered_items": list(items),
+                "rendered_items": [],
+                "page_size": Config.SUBTITLE_DIALOG_PAGE_SIZE,
+                "count_label": count_label,
+                "more_btn": more_btn,
+            }
+
+            def load_more():
+                self._load_more_subtitle_dialog_items(list_widget, state)
+
+            def on_filter_changed(text: str):
+                self._apply_subtitle_dialog_filter(list_widget, state, text)
+
+            more_btn.clicked.connect(load_more)
+            search_input.textChanged.connect(on_filter_changed)
+
             buttons = QDialogButtonBox(
                 QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
             )
@@ -884,36 +1004,52 @@ class MainWindowViewMixin(MainWindowHost):
                 ok_button.setText("삭제")
 
             def delete_selected():
-                selected_rows = sorted(
-                    [i.row() for i in list_widget.selectedIndexes()], reverse=True
+                rendered_items = state.get("rendered_items", [])
+                selected_rows = sorted({i.row() for i in list_widget.selectedIndexes()})
+                if not selected_rows or not rendered_items:
+                    QMessageBox.warning(dialog, "알림", "삭제할 자막을 선택해주세요.")
+                    return
+
+                source_indexes = sorted(
+                    {
+                        rendered_items[row].source_index
+                        for row in selected_rows
+                        if 0 <= row < len(rendered_items)
+                    },
+                    reverse=True,
                 )
-                if not selected_rows:
+                if not source_indexes:
                     QMessageBox.warning(dialog, "알림", "삭제할 자막을 선택해주세요.")
                     return
 
                 reply = QMessageBox.question(
                     dialog,
                     "확인",
-                    f"선택한 {len(selected_rows)}개의 자막을 삭제하시겠습니까?",
+                    f"선택한 {len(source_indexes)}개의 자막을 삭제하시겠습니까?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
 
                 if reply == QMessageBox.StandardButton.Yes:
                     with self.subtitle_lock:
-                        for row in selected_rows:
+                        for row in source_indexes:
+                            if not (0 <= row < len(self.subtitles)):
+                                continue
                             entry = self.subtitles[row]
                             self._cached_total_chars -= entry.char_count
                             self._cached_total_words -= entry.word_count
                             del self.subtitles[row]
                     self._refresh_text(force_full=True)
                     self._update_count_label()
+                    self._mark_session_dirty()
                     self._show_toast(
-                        f"{len(selected_rows)}개 자막이 삭제되었습니다.", "success"
+                        f"{len(source_indexes)}개 자막이 삭제되었습니다.", "success"
                     )
                     dialog.accept()
 
             buttons.accepted.connect(delete_selected)
             buttons.rejected.connect(dialog.reject)
             layout.addWidget(buttons)
+
+            self._load_more_subtitle_dialog_items(list_widget, state, reset=True)
 
             dialog.exec()

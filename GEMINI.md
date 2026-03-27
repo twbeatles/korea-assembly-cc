@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.4
+- **버전**: v16.14.5
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ## 2. 기술 스택
@@ -237,7 +237,7 @@ pip install -r requirements-dev.txt
 ### URL 감지 로직 개선
 - `_detect_live_broadcast`: API(`live_list.asp`)를 통해 `xcode`에 매칭되는 `xcgcd` 자동 탐색
 - 메인 페이지 리다이렉트 시 `xcode`에 해당하는 '생중계' 버튼 자동 클릭 및 복구 로직 추가
-- **생중계 목록 선택 UI 추가**: '📡 생중계 목록' 버튼을 통해 현재 진행 중인 방송을 확인하고 직접 선택하여 접속 가능 (`LiveBroadcastDialog`)
+- **생중계 목록 선택 UI 추가**: '📡 생중계 목록' 버튼을 통해 현재/종료 방송을 함께 확인할 수 있고, `종료/예정` 항목은 확인 후 URL만 채움 (`LiveBroadcastDialog`)
 
 
 ### 특별위원회 프리셋 추가
@@ -339,7 +339,7 @@ pip install -r requirements-dev.txt
 - **로그 경로 통일**: `core/logging_utils.py`가 `Config.LOG_DIR`를 사용하도록 정렬
 
 ### 🧩 UI 안정성/노이즈 필터
-- **LiveBroadcastDialog 종료 단일화**: `done`/`closeEvent` 모두 `_shutdown_fetch_thread()` 사용
+- **LiveBroadcastDialog 종료 비차단화**: persistent fetch thread를 제거하고, `done`/`closeEvent`는 closing flag + request token만 갱신
 - **짧은 발화 허용 + 노이즈 차단**: `is_meaningful_subtitle_text`로 1~2자 한글/영문 허용, 숫자/기호-only 차단
 
 ## 9.8 v16.13.1 수집 안정화
@@ -361,6 +361,16 @@ pip install -r requirements-dev.txt
 ### ✅ 검증 상태
 - `commit_live_row` 1,500회 benchmark 약 `10.3초 -> 3.8초`
 - `pytest -q` 59 pass, `pyright` 0 errors
+
+## 9.9.0 v16.14.5 UI/UX 운영 정합성 보강 (2026-03-27)
+
+- 캡처 시작 시 URL/위원회/헤드리스/실시간 저장을 `run-source` 스냅샷으로 고정하고, 추출 중 관련 UI 변경을 함께 잠금
+- 생중계 목록은 `생중계`와 `종료/예정`을 함께 보여주되 자동 감지는 live-only로 제한
+- DB 히스토리 50건, DB 검색 100건, 편집/삭제 200개 단위 `더 보기` 로딩을 도입
+- 편집/삭제 다이얼로그는 원본 subtitle index를 유지하는 검색형 목록으로 재구성
+- 세션 dirty tracking과 종료 시 `Save / Discard / Cancel` 정책을 세션 JSON 저장 기준으로 정리
+- `Escape`, `Ctrl+Shift+C`, `Ctrl+C` 문서와 실제 구현을 일치시킴
+- `pytest -q` 95 pass, `pyright` 0 errors
 
 ## 9.9.1 v16.14.4 기능 안정화 및 UX 정합성 보강 (2026-03-25)
 

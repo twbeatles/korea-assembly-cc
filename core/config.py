@@ -68,6 +68,9 @@ class Config:
     # 성능 최적화 상수 (#4, #1)
     MAX_RENDER_ENTRIES = 500           # 한 번에 렌더링할 최대 자막 수
     MAX_WORD_DIFF_OVERLAP = 200        # get_word_diff 최대 겹침 탐색 길이
+    DB_HISTORY_PAGE_SIZE = 50
+    DB_SEARCH_PAGE_SIZE = 100
+    SUBTITLE_DIALOG_PAGE_SIZE = 200
     
     # 경로
     LOG_DIR = str(APP_BASE_DIR / "logs")

@@ -466,12 +466,15 @@ class DatabaseManager:
                 return []
             # 연결은 캐싱되므로 닫지 않음
     
-    def search_subtitles(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def search_subtitles(
+        self, query: str, limit: int = 100, offset: int = 0
+    ) -> List[Dict[str, Any]]:
         """자막 텍스트 검색
         
         Args:
             query: 검색 키워드
             limit: 최대 반환 개수
+            offset: 시작 위치
             
         Returns:
             List[dict]: 검색 결과 (세션 정보 포함)
@@ -480,6 +483,7 @@ class DatabaseManager:
         if not safe_query:
             return []
         safe_limit = self._sanitize_limit(limit, default=100)
+        safe_offset = self._sanitize_offset(offset)
 
         with self.lock:
             conn = self._get_connection()
@@ -495,8 +499,8 @@ class DatabaseManager:
                         JOIN sessions sess ON s.session_id = sess.id
                         WHERE s.id IN (SELECT rowid FROM subtitles_fts WHERE text MATCH ? ORDER BY rank)
                         ORDER BY sess.created_at DESC, s.sequence
-                        LIMIT ?
-                    """, (safe_query, safe_limit))
+                        LIMIT ? OFFSET ?
+                    """, (safe_query, safe_limit, safe_offset))
                     results = [dict(row) for row in cursor.fetchall()]
                     
                     # FTS 검색 결과가 있으면 반환
@@ -516,8 +520,8 @@ class DatabaseManager:
                     JOIN sessions sess ON s.session_id = sess.id
                     WHERE s.text LIKE ?
                     ORDER BY sess.created_at DESC, s.sequence
-                    LIMIT ?
-                """, (like_query, safe_limit))
+                    LIMIT ? OFFSET ?
+                """, (like_query, safe_limit, safe_offset))
                 
                 return [dict(row) for row in cursor.fetchall()]
                 

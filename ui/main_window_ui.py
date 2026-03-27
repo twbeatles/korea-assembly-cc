@@ -180,7 +180,7 @@ class MainWindowUIMixin(MainWindowHost):
             edit_menu.addSeparator()
 
             copy_action = QAction("클립보드 복사", self)
-            # copy_action.setShortcut("Ctrl+C") # 텍스트 선택 복사 충돌 방지
+            copy_action.setShortcut("Ctrl+Shift+C")
             copy_action.setToolTip("전체 자막을 클립보드에 복사합니다")
             copy_action.triggered.connect(self._copy_to_clipboard)
             edit_menu.addAction(copy_action)
@@ -262,12 +262,12 @@ class MainWindowUIMixin(MainWindowHost):
             assert db_menu is not None
 
             db_history_action = QAction("📋 세션 히스토리", self)
-            db_history_action.setToolTip("저장된 모든 세션 목록을 확인합니다")
+            db_history_action.setToolTip("최근 저장 세션을 점진적으로 불러와 확인합니다")
             db_history_action.triggered.connect(self._show_db_history)
             db_menu.addAction(db_history_action)
 
             db_search_action = QAction("🔍 자막 검색", self)
-            db_search_action.setToolTip("모든 세션에서 키워드를 검색합니다")
+            db_search_action.setToolTip("검색 결과를 점진적으로 불러와 확인합니다")
             db_search_action.triggered.connect(self._show_db_search)
             db_menu.addAction(db_search_action)
 
@@ -450,14 +450,18 @@ class MainWindowUIMixin(MainWindowHost):
 
             # 태그 버튼
             self.tag_btn = QPushButton("🏷️ 태그")
-            self.tag_btn.setToolTip("현재 URL에 태그 추가/편집\n예: 본회의, 법사위, 상임위")
+            self.tag_btn.setToolTip(
+                "현재 URL에 태그 추가/편집\n예: 본회의, 법사위, 상임위\n추출 중에는 변경할 수 없습니다"
+            )
             self.tag_btn.setFixedWidth(90)
             self.tag_btn.clicked.connect(self._edit_url_tag)
             url_layout.addWidget(self.tag_btn)
 
             # 상임위원회 프리셋 버튼
             self.preset_btn = QPushButton("📋 상임위")
-            self.preset_btn.setToolTip("상임위원회 프리셋 선택\n빠른 URL 입력을 위한 기능")
+            self.preset_btn.setToolTip(
+                "상임위원회 프리셋 선택\n빠른 URL 입력을 위한 기능\n추출 중에는 변경할 수 없습니다"
+            )
             self.preset_btn.setFixedWidth(120)
 
             # 프리셋 메뉴 생성
@@ -471,7 +475,9 @@ class MainWindowUIMixin(MainWindowHost):
 
             # 생중계 목록 버튼 (추가)
             self.live_btn = QPushButton("📡 생중계 목록")
-            self.live_btn.setToolTip("현재 진행 중인 생중계 목록을 확인하고 선택합니다")
+            self.live_btn.setToolTip(
+                "현재/종료 생중계 목록을 확인하고 선택합니다\n추출 중에는 변경할 수 없습니다"
+            )
             self.live_btn.setFixedWidth(140)
             self.live_btn.clicked.connect(self._show_live_dialog)
             url_layout.addWidget(self.live_btn)
@@ -513,13 +519,17 @@ class MainWindowUIMixin(MainWindowHost):
             self.realtime_save_check = QCheckBox("💾 실시간 저장")
             self.realtime_save_check.setChecked(False)
             self.realtime_save_check.setToolTip(
-                "자막이 확정될 때마다 자동으로 파일에 저장합니다\n저장 위치: realtime_output 폴더"
+                "자막이 확정될 때마다 자동으로 파일에 저장합니다\n"
+                "저장 위치: realtime_output 폴더\n"
+                "추출 시작 전에만 변경할 수 있습니다"
             )
 
             self.headless_check = QCheckBox("🔇 헤드리스 모드 (인터넷창 숨김)")
             self.headless_check.setChecked(False)
             self.headless_check.setToolTip(
-                "Chrome 브라우저 창을 숨기고 백그라운드에서 실행합니다.\n자막 추출 중 다른 작업을 할 수 있습니다."
+                "Chrome 브라우저 창을 숨기고 백그라운드에서 실행합니다.\n"
+                "자막 추출 중 다른 작업을 할 수 있습니다.\n"
+                "추출 시작 전에만 변경할 수 있습니다."
             )
             options_layout.addWidget(self.auto_scroll_check)
             options_layout.addWidget(self.auto_clean_newlines_check)
@@ -880,6 +890,11 @@ class MainWindowUIMixin(MainWindowHost):
                     self.clean_newlines_action,
                     self.clean_btn,
                     self.clear_btn,
+                    self.preset_btn,
+                    self.live_btn,
+                    self.tag_btn,
+                    self.realtime_save_check,
+                    self.headless_check,
                 ]
             )
 
@@ -969,7 +984,7 @@ class MainWindowUIMixin(MainWindowHost):
 
     def _setup_shortcuts(self):
             QShortcut(QKeySequence("F5"), self, self._start)
-            QShortcut(QKeySequence("Escape"), self, self._stop)
+            QShortcut(QKeySequence("Escape"), self, self._handle_escape_shortcut)
             QShortcut(QKeySequence("F3"), self, lambda: self._nav_search(1))
             QShortcut(QKeySequence("Shift+F3"), self, lambda: self._nav_search(-1))
 
@@ -1126,15 +1141,19 @@ class MainWindowUIMixin(MainWindowHost):
             if not isinstance(self.url_history, dict):
                 self.url_history = {}
 
+            existing_tag = self.url_history.get(url, "")
+
             # 태그가 없으면 자동 감지
             if not tag:
                 # 1. 이미 저장된 태그가 있는지 확인
-                if url in self.url_history and self.url_history[url]:
-                    tag = self.url_history[url]
+                if existing_tag:
+                    tag = existing_tag
                 else:
                     # 2. 프리셋/약칭에서 매칭 확인
                     tag = self._autodetect_tag(url)
 
+            if url in self.url_history:
+                self.url_history.pop(url, None)
             self.url_history[url] = tag
 
             # 히스토리 크기 제한
@@ -1215,6 +1234,8 @@ class MainWindowUIMixin(MainWindowHost):
 
     def _edit_url_tag(self):
             """현재 URL의 태그 편집"""
+            if self._is_runtime_mutation_blocked("URL 태그 편집"):
+                return
             url = self._get_current_url()
             if not url or not url.startswith(("http://", "https://")):
                 QMessageBox.warning(self, "알림", "태그를 지정할 URL을 먼저 선택하세요.")
@@ -1318,6 +1339,8 @@ class MainWindowUIMixin(MainWindowHost):
 
     def _select_preset(self, url, name):
             """프리셋 선택 시 URL 설정"""
+            if self._is_runtime_mutation_blocked("상임위 프리셋 변경"):
+                return
             self.url_combo.setCurrentText(url)
             self._show_toast(f"'{name}' 선택됨", "success", 1500)
 
@@ -1513,8 +1536,8 @@ class MainWindowUIMixin(MainWindowHost):
     <li><b>옵션 설정</b>
         <ul>
         <li>자동 스크롤: 새 자막 자동 따라가기</li>
-        <li>실시간 저장: 자막 실시간 파일 저장</li>
-        <li>헤드리스 모드: 브라우저 창 숨기고 실행</li>
+        <li>실시간 저장: 자막 실시간 파일 저장 (추출 시작 전 설정)</li>
+        <li>헤드리스 모드: 브라우저 창 숨기고 실행 (추출 시작 전 설정)</li>
         </ul>
     </li>
     <li><b>시작</b> 버튼 클릭 (또는 F5)</li>
@@ -1524,11 +1547,12 @@ class MainWindowUIMixin(MainWindowHost):
     <h3>⌨️ 주요 단축키</h3>
     <table>
     <tr><td><b>F5</b></td><td>시작</td></tr>
-    <tr><td><b>Escape</b></td><td>중지</td></tr>
+    <tr><td><b>Escape</b></td><td>검색창 닫기 / 추출 중지</td></tr>
     <tr><td><b>Ctrl+F</b></td><td>검색</td></tr>
     <tr><td><b>F3</b></td><td>다음 검색</td></tr>
     <tr><td><b>Ctrl+T</b></td><td>테마 전환</td></tr>
     <tr><td><b>Ctrl+S</b></td><td>TXT 저장</td></tr>
+    <tr><td><b>Ctrl+Shift+C</b></td><td>전체 자막 복사</td></tr>
     </table>
     """
             msg = QMessageBox(self)
@@ -1548,7 +1572,7 @@ class MainWindowUIMixin(MainWindowHost):
     <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
     <tr style="background-color: #f0f0f0;"><th>단축키</th><th>기능</th></tr>
     <tr><td><b>F5</b></td><td>추출 시작</td></tr>
-    <tr><td><b>Escape</b></td><td>추출 중지</td></tr>
+    <tr><td><b>Escape</b></td><td>검색창 닫기 / 추출 중지</td></tr>
     <tr><td><b>Ctrl+Q</b></td><td>프로그램 종료</td></tr>
     </table>
 
@@ -1560,7 +1584,8 @@ class MainWindowUIMixin(MainWindowHost):
     <tr><td><b>Shift+F3</b></td><td>이전 검색 결과</td></tr>
     <tr><td><b>Ctrl+E</b></td><td>자막 편집</td></tr>
     <tr><td><b>Delete</b></td><td>자막 삭제</td></tr>
-    <tr><td><b>Ctrl+C</b></td><td>클립보드 복사</td></tr>
+    <tr><td><b>Ctrl+Shift+C</b></td><td>전체 자막 복사</td></tr>
+    <tr><td><b>Ctrl+C</b></td><td>선택한 텍스트 복사</td></tr>
     </table>
 
     <h3>💾 저장</h3>
@@ -1595,7 +1620,7 @@ class MainWindowUIMixin(MainWindowHost):
 
     <h3>🎯 실시간 자막 추출</h3>
     <p>국회 의사중계 웹사이트의 AI 자막을 실시간으로 캡처합니다.<br>
-    2초 동안 자막이 변경되지 않으면 자동으로 확정됩니다.</p>
+    3초 동안 자막이 변경되지 않으면 자동으로 확정됩니다.</p>
 
     <h3>💾 다양한 저장 형식</h3>
     <ul>
@@ -1614,7 +1639,7 @@ class MainWindowUIMixin(MainWindowHost):
 
     <h3>⚙️ 헤드리스 모드 (인터넷창 숨김)</h3>
     <p>브라우저 창을 숨기고 백그라운드에서 실행합니다.<br>
-    자막 추출 중 다른 작업을 할 수 있습니다.</p>
+    자막 추출 중 다른 작업을 할 수 있으며, 실행 중에는 변경할 수 없습니다.</p>
 
     <h3>📊 통계 패널</h3>
     <p>실행 시간, 글자 수, 공백 기준 단어 수, 분당 글자 수를 표시합니다.</p>
@@ -1642,7 +1667,7 @@ class MainWindowUIMixin(MainWindowHost):
     <li>python-docx (DOCX 저장용)</li>
     </ul>
 
-    <p><b>© 2024-2025</b></p>
+    <p><b>© 2024-2026</b></p>
     """
             msg = QMessageBox(self)
             msg.setWindowTitle("정보")

@@ -62,11 +62,13 @@ committee_presets.json
 presets_*.json
 
 # -----------------------------------------------------------------------------
-# User-exported result files (root-level exports only)
+# User-exported result files / copied release artifacts (root-level only)
 # -----------------------------------------------------------------------------
 /*.txt
 !requirements-dev.txt
 /*.log
+/*.exe
+/*.zip
 /*.srt
 /*.vtt
 /*.rtf

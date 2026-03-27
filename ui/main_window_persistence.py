@@ -8,6 +8,64 @@ from core.hwpx_export import save_hwpx_document
 
 class MainWindowPersistenceMixin(MainWindowHost):
 
+    def _build_session_save_context(self) -> tuple[str, str, int]:
+            """세션/백업 저장에 사용할 메타데이터를 계산한다."""
+            source_url = self._get_capture_source_url(fallback_to_current=True)
+            committee_name = self._get_capture_source_committee(fallback_to_url=True)
+            duration = int(time.time() - self.start_time) if self.start_time else 0
+            return source_url, committee_name, duration
+
+    def _write_session_snapshot(
+            self,
+            path: str,
+            prepared_entries: list[SubtitleEntry],
+            *,
+            include_db: bool = True,
+        ) -> dict[str, Any]:
+            """현재 세션 스냅샷을 JSON(+선택적 DB)으로 동기 저장한다."""
+            current_url, committee_name, duration = self._build_session_save_context()
+            created_at = datetime.now().isoformat()
+            utils.atomic_write_json_stream(
+                path,
+                head_items=[
+                    ("version", Config.VERSION),
+                    ("created", created_at),
+                    ("url", current_url),
+                    ("committee_name", committee_name),
+                ],
+                sequence_key="subtitles",
+                sequence_items=utils.iter_serialized_subtitles(prepared_entries),
+                ensure_ascii=False,
+            )
+
+            db_saved = False
+            db_error = ""
+            if include_db:
+                db = self.db
+                if db is not None:
+                    try:
+                        db_data = {
+                            "url": current_url,
+                            "committee_name": committee_name,
+                            "subtitles": prepared_entries,
+                            "version": Config.VERSION,
+                            "duration_seconds": duration,
+                        }
+                        db.save_session(db_data)
+                        db_saved = True
+                    except Exception as db_exc:
+                        db_error = str(db_exc)
+
+            return {
+                "path": path,
+                "saved_count": len(prepared_entries),
+                "db_saved": db_saved,
+                "db_error": db_error,
+                "url": current_url,
+                "committee_name": committee_name,
+                "created_at": created_at,
+            }
+
     def _auto_backup(self):
             """자동 백업 실행"""
             prepared_entries = self._build_prepared_entries_snapshot()
@@ -24,8 +82,9 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_file = backup_dir / f"backup_{timestamp}.json"
+                current_url = self._get_capture_source_url(fallback_to_current=True)
+                committee_name = self._get_capture_source_committee(fallback_to_url=True)
                 created_at = datetime.now().isoformat()
-                current_url = self._get_current_url()
 
             except Exception as e:
                 try:
@@ -43,6 +102,7 @@ class MainWindowPersistenceMixin(MainWindowHost):
                             ("version", Config.VERSION),
                             ("created", created_at),
                             ("url", current_url),
+                            ("committee_name", committee_name),
                         ],
                         sequence_key="subtitles",
                         sequence_items=utils.iter_serialized_subtitles(prepared_entries),
@@ -233,8 +293,8 @@ class MainWindowPersistenceMixin(MainWindowHost):
     def _generate_smart_filename(self, extension: str) -> str:
             """URL과 현재 시간 기반 스마트 파일명 생성 (#28)"""
             # 위원회명 추출 (현재 URL에서 자동 감지)
-            current_url = self._get_current_url()
-            committee_name = self._autodetect_tag(current_url)
+            current_url = self._get_capture_source_url(fallback_to_current=True)
+            committee_name = self._get_capture_source_committee(fallback_to_url=True)
             return utils.generate_filename(committee_name, extension)
 
 
@@ -760,54 +820,14 @@ class MainWindowPersistenceMixin(MainWindowHost):
             self._session_save_in_progress = True
             self._set_status("세션 저장 중...", "running")
 
-            current_url = self._get_current_url()
-            committee_name = self._autodetect_tag(current_url) or ""
-            duration = int(time.time() - self.start_time) if self.start_time else 0
-
             def background_save():
                 try:
-                    created_at = datetime.now().isoformat()
-                    utils.atomic_write_json_stream(
+                    info = self._write_session_snapshot(
                         path,
-                        head_items=[
-                            ("version", Config.VERSION),
-                            ("created", created_at),
-                            ("url", current_url),
-                            ("committee_name", committee_name),
-                        ],
-                        sequence_key="subtitles",
-                        sequence_items=utils.iter_serialized_subtitles(prepared_entries),
-                        ensure_ascii=False,
+                        prepared_entries,
+                        include_db=True,
                     )
-
-                    db_saved = False
-                    db_error = ""
-                    db = self.db
-                    if db is not None:
-                        try:
-                            db_data = {
-                                "url": current_url,
-                                "committee_name": committee_name,
-                                "subtitles": prepared_entries,
-                                "version": Config.VERSION,
-                                "duration_seconds": duration,
-                            }
-                            db.save_session(db_data)
-                            db_saved = True
-                        except Exception as db_exc:
-                            db_error = str(db_exc)
-
-                    self.message_queue.put(
-                        (
-                            "session_save_done",
-                            {
-                                "path": path,
-                                "saved_count": len(prepared_entries),
-                                "db_saved": db_saved,
-                                "db_error": db_error,
-                            },
-                        )
-                    )
+                    self.message_queue.put(("session_save_done", info))
                 except Exception as e:
                     logger.error(f"세션 저장 오류: {e}")
                     self.message_queue.put(
@@ -959,6 +979,7 @@ class MainWindowPersistenceMixin(MainWindowHost):
                 logger.info(f"스마트 리플로우: {old_count} -> {len(new_subtitles)}")
 
                 self._replace_subtitles_and_refresh(new_subtitles)
+                self._mark_session_dirty()
 
                 # 결과 알림
                 self._show_toast(f"정리 완료! ({len(new_subtitles)}개 문장)", "success")

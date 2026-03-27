@@ -118,6 +118,55 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 except Exception:
                     continue
 
+    def _set_capture_source_metadata(
+            self,
+            url: str,
+            committee_name: str = "",
+            *,
+            headless: bool = False,
+            realtime: bool = False,
+        ) -> None:
+            self._capture_source_url = str(url or "").strip()
+            self._capture_source_committee = str(committee_name or "").strip()
+            self._capture_source_headless = bool(headless)
+            self._capture_source_realtime = bool(realtime)
+
+    def _get_capture_source_url(self, fallback_to_current: bool = True) -> str:
+            source_url = str(self.__dict__.get("_capture_source_url", "") or "").strip()
+            if source_url:
+                return source_url
+            if not fallback_to_current:
+                return ""
+            return self._get_current_url().strip()
+
+    def _get_capture_source_committee(self, fallback_to_url: bool = True) -> str:
+            committee_name = str(
+                self.__dict__.get("_capture_source_committee", "") or ""
+            ).strip()
+            if committee_name:
+                return committee_name
+            if not fallback_to_url:
+                return ""
+            source_url = self._get_capture_source_url(fallback_to_current=True)
+            return self._autodetect_tag(source_url) or ""
+
+    def _mark_session_dirty(self) -> None:
+            self._session_dirty = True
+
+    def _clear_session_dirty(self) -> None:
+            self._session_dirty = False
+
+    def _has_dirty_session(self) -> bool:
+            return bool(self.__dict__.get("_session_dirty", False))
+
+    def _handle_escape_shortcut(self) -> None:
+            search_frame = self.__dict__.get("search_frame")
+            if search_frame is not None and search_frame.isVisible():
+                self._hide_search()
+                return
+            if self.is_running:
+                self._stop()
+
     def _normalize_subtitle_text_for_option(self, text: object) -> str:
             raw = "" if text is None else str(text)
             if self._is_auto_clean_newlines_enabled():
@@ -351,6 +400,11 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 "auto_reconnect", True, type=bool
             )
             self.current_url = ""  # 현재 연결 중인 URL 저장
+            self._capture_source_url = ""
+            self._capture_source_committee = ""
+            self._capture_source_headless = False
+            self._capture_source_realtime = False
+            self._session_dirty = False
 
             # 스마트 스크롤 상태 (사용자가 위로 스크롤하면 자동 스크롤 일시 중지)
             self._user_scrolled_up = False
@@ -363,6 +417,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             self._session_save_in_progress = False
             self._session_load_in_progress = False
             self._db_history_dialog_state: dict[str, Any] | None = None
+            self._db_search_dialog_state: dict[str, Any] | None = None
             self._active_background_threads: set[threading.Thread] = set()
             self._active_background_threads_lock = threading.Lock()
             self._background_shutdown_initiated = False
@@ -435,6 +490,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 # 히스토리에 추가
                 self._add_to_history(url)
                 self.current_url = url
+                committee_name = self.url_history.get(url, "") or self._autodetect_tag(url)
 
                 # 초기화
                 self.subtitle_text.clear()
@@ -473,6 +529,13 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                 self._is_stopping = False
                 self._clear_preview()
                 self.start_time = time.time()
+                self._clear_session_dirty()
+                self._set_capture_source_metadata(
+                    url,
+                    committee_name,
+                    headless=self.headless_check.isChecked(),
+                    realtime=self.realtime_save_check.isChecked(),
+                )
                 run_id = self._activate_capture_run()
 
                 # 큐 비우기
@@ -822,38 +885,51 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             subtitles_snapshot = self._build_prepared_entries_snapshot()
             subtitle_count = len(subtitles_snapshot)
 
-            # 저장하지 않은 자막이 있으면 확인
-            if subtitle_count:
-                reply = QMessageBox.question(
-                    self,
-                    "종료 확인",
-                    f"저장하지 않은 자막 {subtitle_count}개가 있습니다.\n\n"
-                    "저장하시겠습니까?",
-                    QMessageBox.StandardButton.Save
-                    | QMessageBox.StandardButton.Discard
-                    | QMessageBox.StandardButton.Cancel,
-                )
-                if reply == QMessageBox.StandardButton.Cancel:
-                    event.ignore()
-                    return
-                elif reply == QMessageBox.StandardButton.Save:
-                    # 저장 대화상자에서 취소하면 종료도 취소
-                    filename = f"국회자막_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-                    path, _ = QFileDialog.getSaveFileName(
-                        self, "TXT 저장", filename, "텍스트 (*.txt)"
+            if self._has_dirty_session():
+                if subtitle_count > 0:
+                    reply = QMessageBox.question(
+                        self,
+                        "종료 확인",
+                        f"저장하지 않은 세션 변경 {subtitle_count}개가 있습니다.\n\n"
+                        "세션 JSON으로 저장하시겠습니까?",
+                        QMessageBox.StandardButton.Save
+                        | QMessageBox.StandardButton.Discard
+                        | QMessageBox.StandardButton.Cancel,
                     )
-                    if not path:  # 사용자가 취소한 경우
+                    if reply == QMessageBox.StandardButton.Cancel:
                         event.ignore()
                         return
-                    # 파일 저장 (스레드 안전하게 자막 복사)
-                    try:
-                        lines = [
-                            f"[{entry.timestamp.strftime('%H:%M:%S')}] {entry.text}\n"
-                            for entry in subtitles_snapshot
-                        ]
-                        utils.atomic_write_text(path, "".join(lines), encoding="utf-8")
-                    except Exception as e:
-                        QMessageBox.critical(self, "오류", f"저장 실패: {e}")
+                    if reply == QMessageBox.StandardButton.Save:
+                        filename = (
+                            f"{Config.SESSION_DIR}/세션_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                        )
+                        path, _ = QFileDialog.getSaveFileName(
+                            self, "세션 저장", filename, "JSON (*.json)"
+                        )
+                        if not path:
+                            event.ignore()
+                            return
+                        try:
+                            Path(path).parent.mkdir(parents=True, exist_ok=True)
+                            self._write_session_snapshot(
+                                path,
+                                subtitles_snapshot,
+                                include_db=False,
+                            )
+                            self._clear_session_dirty()
+                        except Exception as e:
+                            QMessageBox.critical(self, "오류", f"세션 저장 실패: {e}")
+                            event.ignore()
+                            return
+                else:
+                    reply = QMessageBox.question(
+                        self,
+                        "종료 확인",
+                        "저장되지 않은 변경이 있습니다.\n종료하시겠습니까?",
+                        QMessageBox.StandardButton.Discard
+                        | QMessageBox.StandardButton.Cancel,
+                    )
+                    if reply == QMessageBox.StandardButton.Cancel:
                         event.ignore()
                         return
 
