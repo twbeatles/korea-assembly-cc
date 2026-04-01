@@ -13,7 +13,7 @@ from pathlib import Path
 block_cipher = None
 
 
-def _load_version_from_readme(default: str = "16.14.5") -> str:
+def _load_version_from_readme(default: str = "16.14.7") -> str:
     spec_path = Path(globals().get("__file__", "subtitle_extractor.spec")).resolve()
     readme_path = spec_path.parent / "README.md"
     try:
@@ -62,6 +62,10 @@ HIDDEN_IMPORTS = [
     'core.file_io',
     'core.hwpx_export',
     'core.live_capture',
+    'core.live_capture_impl',
+    'core.live_capture_impl.ledger',
+    'core.live_capture_impl.models',
+    'core.live_capture_impl.reconcile',
     'core.logging_utils',
     'core.models',
     'core.reflow',
@@ -83,6 +87,22 @@ HIDDEN_IMPORTS = [
     'ui.main_window_capture',
     'ui.main_window_common',
     'ui.main_window_database',
+    'ui.main_window_impl',
+    'ui.main_window_impl.capture_browser',
+    'ui.main_window_impl.capture_dom',
+    'ui.main_window_impl.capture_live',
+    'ui.main_window_impl.capture_observer',
+    'ui.main_window_impl.contracts',
+    'ui.main_window_impl.pipeline_messages',
+    'ui.main_window_impl.pipeline_queue',
+    'ui.main_window_impl.pipeline_state',
+    'ui.main_window_impl.pipeline_stream',
+    'ui.main_window_impl.runtime_driver',
+    'ui.main_window_impl.runtime_lifecycle',
+    'ui.main_window_impl.runtime_state',
+    'ui.main_window_impl.view_editing',
+    'ui.main_window_impl.view_render',
+    'ui.main_window_impl.view_search',
     'ui.main_window_persistence',
     'ui.main_window_pipeline',
     'ui.main_window_types',

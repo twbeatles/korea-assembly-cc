@@ -27,8 +27,11 @@
 
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
+- 공개 고정 경로는 `ui/main_window_capture.py`, `ui/main_window_pipeline.py`, `ui/main_window_view.py`, `core/live_capture.py`이지만 실제 구현은 `ui/main_window_impl/*`, `core/live_capture_impl/*`로 이동할 수 있다. 고정 의미론 변경 시 facade와 내부 구현 문서를 함께 맞춘다.
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.14.6)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.14.7)
+- `ui/main_window_capture.py`/`ui/main_window_impl/capture_browser.py`/`core/config.py`: 브라우저 헬스체크(`window_handles`, `current_url`, script ping), recoverable WebDriver 오류 승격, 같은 모드/마지막 확정 live URL 기반 Chrome 자동 재기동, `reconnected` 상태 반영을 추가했다. 이는 수집 연속성과 driver lifecycle 안정화 레이어 변경이며 글로벌 히스토리 + suffix 의미론 자체는 바꾸지 않는다.
+- `ui/main_window.py`/`ui/main_window_capture.py`/`ui/main_window_pipeline.py`/`ui/main_window_view.py`/`core/live_capture.py`: 공개 facade는 유지하고 실제 구현을 `ui/main_window_impl/`, `core/live_capture_impl/`로 재배치했다. 책임 경계와 import 구조만 바뀌며 코어 자막 의미론은 바뀌지 않는다.
 - `ui/main_window.py`/`ui/main_window_persistence.py`/`ui/main_window_pipeline.py`/`core/config.py`: 수동 세션 저장, 종료 저장, 자동 백업이 공통 recovery state(`session_recovery.json`)를 기록하고, 시작 시 최신 복구 가능 스냅샷을 제안하는 흐름을 추가
 - `core/database_manager.py`: `subtitles` 테이블을 additive migration으로 확장해 `entry_id`/`source_*`/`speaker_*`/`speaker_changed`를 lossless round-trip으로 저장하고, 기본 검색을 FTS raw query가 아닌 literal substring 검색으로 고정
 - `core/reflow.py`/`ui/main_window_persistence.py`: 수동 reflow를 prepared snapshot 기반 백그라운드 작업으로 이동하고, `SubtitleEntry` 메타데이터 및 timing 정책을 유지하도록 재작성
@@ -65,11 +68,12 @@
 - `_merge_sessions`: 중복 제거 정책을 텍스트-only에서 `정규화 텍스트 + 시간 버킷(30초)` 기준으로 개선
 - `closeEvent`/백그라운드 실행 경로: 공통 레지스트리 기반 종료 drain (`신규 작업 차단 -> inflight 대기 -> 자원 정리`)
 
-### 2.3 구조 분리 이력 (v16.14.0, 2026-03-16)
+### 2.3 구조 분리 이력 (v16.14.0 ~ v16.14.7)
 - `ui/main_window.py`는 파사드로 축소되고, 실제 책임은 `ui/main_window_capture.py`, `ui/main_window_pipeline.py`, `ui/main_window_view.py`, `ui/main_window_persistence.py`, `ui/main_window_database.py`, `ui/main_window_ui.py`로 분리되었다.
 - `core/live_capture.py`와 `core/subtitle_pipeline.py`는 더 이상 `MainWindow` 내부 임시 로직이 아니라 운영 기준 코어 모듈이다.
 - `core/file_io.py`, `core/text_utils.py`, `core/reflow.py`, `core/database_manager.py`를 추가하고, `core/utils.py`와 `database.py`는 호환 shim으로 유지한다.
 - `ui/main_window_types.py`는 분할된 mixin이 공유하는 `MainWindowHost` 타입 계약을 제공해 Pylance/Pyright 기준의 공통 `self` 표면을 고정하고, 로컬 `typings/`는 외부 GUI/selenium 패키지 해석 편차를 흡수한다.
+- `v16.14.7`에서는 capture/browser/dom/observer, pipeline/state/queue/stream/messages, runtime/state/lifecycle/driver, view/render/search/editing 구현이 `ui/main_window_impl/`로 이동했고, `core/live_capture.py` 내부 구현은 `core/live_capture_impl/ledger.py`, `models.py`, `reconcile.py`로 재배치되었다. `ui/main_window_ui.py`는 공개 UI mixin 경로를 유지한다.
 
 ### 2.2 안정화 이력 (v16.12.1, 2026-02-25)
 - `_extraction_worker`: URL에 `xcgcd`가 없을 때만 `xcode` 기반 자동 감지를 연결

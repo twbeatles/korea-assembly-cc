@@ -65,6 +65,22 @@ class _StopAfterSecondWaitEvent:
         return False
 
 
+class _StopAfterSixWaitsEvent:
+    def __init__(self):
+        self._wait_calls = 0
+        self._is_set = False
+
+    def is_set(self):
+        return self._is_set
+
+    def wait(self, timeout=None):
+        self._wait_calls += 1
+        if self._wait_calls >= 6:
+            self._is_set = True
+            return True
+        return False
+
+
 class _ReconnectOnceEvent:
     def __init__(self):
         self._wait_calls = 0
@@ -114,6 +130,18 @@ class _FakeWebDriverWait:
 class _SwitchToStub:
     def default_content(self):
         return None
+
+
+class _ProbeFailureDriver:
+    def __init__(self, message):
+        self.message = message
+        self.switch_to = _SwitchToStub()
+
+    def execute_script(self, *_args):
+        raise RuntimeError(self.message)
+
+    def find_elements(self, *_args):
+        return []
 
 
 class _SmiWordCollectDriver:
@@ -292,6 +320,117 @@ def test_extraction_worker_reconnect_reuses_detected_url(monkeypatch):
     assert drivers[0].get_calls[:2] == [original_url, detected_url]
     assert drivers[1].get_calls[0] == detected_url
     assert detect_calls == [original_url]
+
+    queued = []
+    while not win.message_queue.empty():
+        queued.append(win.message_queue.get_nowait())
+    assert any(msg_type == "reconnected" for msg_type, _payload in queued)
+
+
+def test_extraction_worker_reconnects_after_healthcheck_failures(monkeypatch):
+    original_url = "https://example.com/live?xcode=25"
+    detected_url = "https://example.com/live?xcode=25&xcgcd=DCM0000251234567890"
+
+    win = _build_window(
+        auto_reconnect_enabled=True,
+        stop_event=_StopAfterSixWaitsEvent(),
+    )
+    drivers = []
+    detect_calls = []
+    health_checks = {}
+
+    def create_driver(options=None):
+        driver = _FakeDriver()
+        drivers.append(driver)
+        return driver
+
+    def detect_live(_driver, input_url):
+        detect_calls.append(input_url)
+        return detected_url
+
+    def fake_health_check(driver):
+        key = id(driver)
+        health_checks[key] = health_checks.get(key, 0) + 1
+        if driver is drivers[0] and health_checks[key] <= 2:
+            return None, "silent browser death"
+        return 1, driver.current_url
+
+    _configure_basic_worker_stubs(win)
+    win._detect_live_broadcast = detect_live
+    win._get_reconnect_delay = lambda attempt: 0.0
+    win._check_driver_health = fake_health_check
+
+    monkeypatch.setattr(mw_mod.webdriver, "Chrome", create_driver)
+    monkeypatch.setattr(mw_mod, "WebDriverWait", _FakeWebDriverWait)
+    monkeypatch.setattr(mw_mod.Config, "DRIVER_HEALTH_CHECK_INTERVAL", 0.0)
+    monkeypatch.setattr(mw_mod.Config, "DRIVER_HEALTH_FAILURE_THRESHOLD", 2)
+
+    MainWindow._extraction_worker(win, original_url, "#viewSubtit", False)
+
+    assert len(drivers) >= 2
+    assert drivers[0].get_calls[:2] == [original_url, detected_url]
+    assert drivers[1].get_calls[0] == detected_url
+    assert detect_calls == [original_url]
+
+    queued = []
+    while not win.message_queue.empty():
+        queued.append(win.message_queue.get_nowait())
+    assert any(msg_type == "reconnecting" for msg_type, _payload in queued)
+    assert any(msg_type == "reconnected" for msg_type, _payload in queued)
+
+
+def test_extraction_worker_keeps_single_driver_when_healthcheck_is_healthy(
+    monkeypatch,
+):
+    url_with_xcgcd = "https://example.com/live?xcode=10&xcgcd=DCM0000101234567890"
+
+    win = _build_window(
+        auto_reconnect_enabled=True,
+        stop_event=_StopAfterSecondWaitEvent(),
+    )
+    drivers = []
+
+    _configure_basic_worker_stubs(win)
+    win._check_driver_health = lambda driver: (1, driver.current_url)
+    win._get_reconnect_delay = lambda attempt: 0.0
+
+    monkeypatch.setattr(
+        mw_mod.webdriver,
+        "Chrome",
+        lambda options=None: drivers.append(_FakeDriver()) or drivers[-1],
+    )
+    monkeypatch.setattr(mw_mod, "WebDriverWait", _FakeWebDriverWait)
+    monkeypatch.setattr(mw_mod.Config, "DRIVER_HEALTH_CHECK_INTERVAL", 0.0)
+
+    MainWindow._extraction_worker(win, url_with_xcgcd, "#viewSubtit", False)
+
+    assert len(drivers) == 1
+
+    queued = []
+    while not win.message_queue.empty():
+        queued.append(win.message_queue.get_nowait())
+    assert not any(msg_type == "reconnecting" for msg_type, _payload in queued)
+
+
+def test_collect_observer_changes_raises_recoverable_webdriver_error():
+    win = MainWindow.__new__(MainWindow)
+    driver = _ProbeFailureDriver("target closed")
+
+    with pytest.raises(mw_mod.RecoverableWebDriverError):
+        MainWindow._collect_observer_changes(win, driver)
+
+
+def test_read_subtitle_probe_raises_recoverable_webdriver_error():
+    win = MainWindow.__new__(MainWindow)
+    win._last_subtitle_frame_path = ()
+    driver = _ProbeFailureDriver("no such window: target window already closed")
+
+    with pytest.raises(mw_mod.RecoverableWebDriverError):
+        MainWindow._read_subtitle_probe_by_selectors(
+            win,
+            driver,
+            ["#viewSubtit .smi_word"],
+        )
 
 
 def test_read_subtitle_text_collects_smi_word_window():

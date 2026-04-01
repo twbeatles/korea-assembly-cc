@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.5
+- **버전**: v16.14.7
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -119,6 +119,7 @@ korea-assembly-cc/
     database_manager.py
     file_io.py
     live_capture.py
+    live_capture_impl/          # ledger/model/reconcile 내부 구현
     logging_utils.py
     models.py
     reflow.py
@@ -137,6 +138,7 @@ korea-assembly-cc/
     main_window_types.py
     main_window_ui.py
     main_window_view.py
+    main_window_impl/           # capture/pipeline/view/runtime 내부 구현
     themes.py
     widgets.py
     main_window.py              # MainWindow 파사드
@@ -174,6 +176,11 @@ korea-assembly-cc/
 | `MainWindowPersistenceMixin` | ui/main_window_persistence.py | 저장/세션/자동백업/export 처리 |
 | `DatabaseManager` | core/database_manager.py | SQLite CRUD 작업 (#26) |
 
+추가 메모
+- 공개 import 경로는 유지하지만 capture/pipeline/view/runtime의 실제 구현은 `ui/main_window_impl/`로 이동했습니다.
+- `core/live_capture.py`는 facade이고 실제 ledger/model/reconcile 구현은 `core/live_capture_impl/`에 있습니다.
+- 내부 모듈은 `ui.main_window_impl.contracts`의 좁은 Protocol을 사용하고, 공개 호환 계약은 `ui.main_window_types.MainWindowHost`로 유지합니다.
+
 ### 5.3 핵심 메서드
 | 메서드 | 설명 |
 |--------|------|
@@ -202,7 +209,16 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.5 기준)
+## 6. 최신 변경 요약 (v16.14.7 기준)
+
+### v16.14.7 브라우저 자동 복구 + 내부 구조 분리 정합화 메모
+- **Chrome 세션 헬스체크**: Worker가 `window_handles`, `current_url`, script ping 기준으로 브라우저 생존을 확인하고 연속 실패 시 recoverable WebDriver 오류로 승격
+- **예외 승격 정리**: observer/probe/frame 순회 경로에서 `invalid session`, `target closed`, `no such window`, `chrome not reachable` 계열 오류를 내부에서 삼키지 않고 재기동 루프로 전달
+- **재기동 일관성**: 같은 headless/visible 모드와 마지막 확정 live URL을 우선 재사용하고, 성공 시 `reconnected` 메시지로 UI 상태를 갱신
+- **내부 구조 분리**: `ui/main_window_impl/`에 capture/browser/dom/observer, pipeline/state/queue/stream/messages, runtime/state/lifecycle/driver, view/render/search/editing 구현을 분리
+- **코어 분리 고도화**: `core/live_capture.py`는 호환 facade로 유지하고, ledger/model/reconcile 구현은 `core/live_capture_impl/`로 이동
+- **빌드/문서 동기화**: `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장하고, `.gitignore`는 루트 `*.manifest`, `*.pyz` 산출물까지 무시
+- **주의점**: `ui/main_window_ui.py`는 이번 배치에서 공개 UI mixin 경로를 유지하며 shell/preset/help 책임은 후속 분리 대상으로 남음
 
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록

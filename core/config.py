@@ -53,6 +53,8 @@ class Config:
     PAGE_LOAD_WAIT = 3                 # 페이지 로딩 대기 시간 (초)
     WEBDRIVER_WAIT_TIMEOUT = 20        # WebDriver 대기 타임아웃 (초)
     SCRIPT_DELAY = 0.5                 # 스크립트 실행 후 대기 (초)
+    WEBDRIVER_SCRIPT_TIMEOUT = 20      # execute_script 타임아웃 (초)
+    WEBDRIVER_IMPLICIT_WAIT = 0        # implicit wait 비활성화 (명시적 wait 사용)
     
     # 네트워크 타임아웃 (초)
     API_TIMEOUT = 5           # API 호출
@@ -189,7 +191,9 @@ class Config:
     
     # 연결 상태 모니터링 (#30)
     CONNECTION_CHECK_INTERVAL = 5000   # 연결 상태 체크 간격 (ms)
-    
+    DRIVER_HEALTH_CHECK_INTERVAL = 5.0
+    DRIVER_HEALTH_FAILURE_THRESHOLD = 2
+
     # 스마트 스크롤
     SCROLL_BOTTOM_THRESHOLD = 50       # 맨 아래 감지 임계값 (픽셀)
 
@@ -202,6 +206,20 @@ class Config:
     RECONNECT_BASE_DELAY = 2           # 초기 대기 시간 (초)
     RECONNECT_MAX_DELAY = 60           # 최대 대기 시간 (초)
     SUBTITLE_RESET_GRACE_MS = 1000
+
+    # Chrome 장기 실행 안정화
+    CHROME_PAGE_LOAD_STRATEGY = "eager"
+    CHROME_WINDOW_SIZE = "1280,720"
+    CHROME_STABILITY_ARGS = (
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-dev-shm-usage",
+        "--disable-session-crashed-bubble",
+        "--disable-features=CalculateNativeWinOcclusion",
+        "--no-first-run",
+        "--no-default-browser-check",
+    )
 
     # 중지 시 브라우저 창 유지
     KEEP_BROWSER_ON_STOP = True

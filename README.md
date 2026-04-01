@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.14.5
+# 🏛️ 국회 의사중계 자막 추출기 v16.14.7
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 데스크톱 프로그램입니다.
 
@@ -10,6 +10,8 @@
 ---
 
 ## 📋 목차
+- [브라우저 자동 복구 + 내부 구조 분리 정합화 (v16.14.7)](#-v16147-브라우저-자동-복구--내부-구조-분리-정합화-2026-04-01)
+- [자막 유실 방지 배치 (v16.14.6)](#-v16146-자막-유실-방지-배치-2026-04-01)
 - [UI/UX 운영 정합성 보강 (v16.14.5)](#-v16145-uiux-운영-정합성-보강-2026-03-27)
 - [기능 안정화 및 UX 정합성 보강 (v16.14.4)](#-v16144-기능-안정화-및-ux-정합성-보강-2026-03-25)
 - [운영 정합성 동기화 (v16.14.3)](#-v16143-운영-정합성-동기화-2026-03-23)
@@ -31,6 +33,43 @@
 - [파이프라인 고정 문서](#-파이프라인-고정-문서)
 
 ---
+
+## ✨ v16.14.7 브라우저 자동 복구 + 내부 구조 분리 정합화 (2026-04-01)
+
+### 🛡️ Chrome 세션 자동 복구
+- Worker가 `window_handles`, `current_url`, `execute_script("return 1")` 기준으로 브라우저 생존을 주기적으로 점검하고, 연속 실패 시 recoverable WebDriver 오류로 승격합니다.
+- observer/probe/frame 순회 경로에서 `invalid session`, `target closed`, `no such window`, `chrome not reachable` 계열 예외를 더 이상 내부에서 묻지 않고 재기동 루프로 올립니다.
+- 재연결 성공 시 같은 headless/visible 모드와 마지막 확정 live URL로 크롬을 다시 띄우고, UI에는 `reconnected` 상태를 명시적으로 반영합니다.
+
+### 🧩 내부 구현 구조 정리
+- 공개 import 경로(`ui.main_window`, `ui.main_window_capture`, `ui.main_window_pipeline`, `ui.main_window_view`, `core.live_capture`)는 그대로 유지하고, 실제 구현은 `ui/main_window_impl/`와 `core/live_capture_impl/`로 분리했습니다.
+- `ui/main_window_impl/`는 capture/browser/dom/observer, pipeline/state/queue/stream/messages, runtime/state/lifecycle/driver, view/render/search/editing 책임을 나눠 `MainWindow`의 직접 의존을 줄였습니다.
+- `core/live_capture.py`는 호환 facade로 유지하고, ledger/model/reconcile 구현은 `core/live_capture_impl/`로 이동했습니다.
+- `ui/main_window_ui.py`는 이번 배치에서 공개 UI mixin 경로를 유지하며 shell/preset/help 계층은 후속 분리 대상으로 남깁니다.
+
+### 📦 문서 / 빌드 / 저장소 정합성
+- `subtitle_extractor.spec`는 `ui.main_window_impl.*`와 `core.live_capture_impl.*` hidden import를 명시해 frozen 빌드에서 내부 모듈 누락 가능성을 줄였습니다.
+- `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`를 현재 구조와 버전(`v16.14.7`) 기준으로 동기화했습니다.
+- `.gitignore`는 PyInstaller 빌드 중 루트에 남을 수 있는 보조 산출물(`*.manifest`, `*.pyz`)까지 무시하도록 보강했습니다.
+
+### ✅ 현재 검증 상태
+- `pytest -q tests/test_review_20260323_regressions.py tests/test_live_capture.py tests/test_worker_stability.py tests/test_worker_probe_payload.py tests/test_feature_plan_20260325.py tests/test_ui_ux_plan_20260327.py tests/test_lossless_session_plan_20260401.py tests/test_compat_imports.py tests/test_pyright_regression.py`: `51 passed`
+- import smoke: `MainWindow`, `reconcile_live_capture` 공개 경로 확인
+- `pyinstaller --clean subtitle_extractor.spec`: 빌드 성공 (`dist/국회의사중계자막추출기 v16.14.7.exe`)
+
+## ✨ v16.14.6 자막 유실 방지 배치 (2026-04-01)
+
+### 🛡️ 세션 / 복구
+- 수동 세션 저장과 종료 직전 저장 모두 `JSON + DB` 경로를 사용하고, 성공한 세션 저장/자동 백업은 `session_recovery.json`에 최신 복구 가능 스냅샷 메타데이터를 기록합니다.
+- 시작 시 복구 state가 남아 있으면 최신 자동 백업 또는 세션 저장본을 제안하고, 복구된 세션은 다시 저장 전까지 dirty 상태로 유지합니다.
+
+### 🧾 Reflow / DB
+- 수동 `줄넘김 정리`는 pending preview까지 포함한 prepared snapshot 기준으로 백그라운드 reflow를 수행하며, `SubtitleEntry`의 `entry_id`/`source_*`/`speaker_*`/timing 정책을 보존합니다.
+- `DatabaseManager`는 additive migration으로 lossless subtitle metadata를 저장/복원하고, 기본 검색은 FTS raw query가 아니라 literal substring 검색으로 동작합니다.
+
+### 📄 Export / 저장소 hygiene
+- DOCX/HWPX는 한 `SubtitleEntry`를 한 문단/블록으로 유지하고, 엔트리 내부 개행은 paragraph split이 아니라 line break로 저장합니다.
+- `.gitignore`는 `session_recovery.json` 같은 런타임 복구 state를 무시하고, `subtitle_extractor.spec`은 이 state가 frozen 번들에 포함되지 않음을 명시합니다.
 
 ## ✨ v16.14.5 UI/UX 운영 정합성 보강 (2026-03-27)
 
@@ -564,12 +603,12 @@ pip install pyinstaller
 pyinstaller subtitle_extractor.spec
 
 # 결과물
-dist/국회의사중계자막추출기 v16.14.5.exe
+dist/국회의사중계자막추출기 v16.14.7.exe
 ```
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
-- `python-docx`, `pywin32`, `core.subtitle_processor`, 분할된 `ui.main_window_*` 모듈(`ui.main_window_types` 포함)은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
+- `python-docx`, `pywin32`, `core.subtitle_processor`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `core.live_capture_impl.*` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
 - `typings/`는 정적 분석 전용 로컬 stub이므로 frozen 번들에는 포함하지 않습니다.
 - 빌드 산출물은 기존 `.gitignore`의 `build/`, `dist/` 규칙으로 계속 관리됩니다.
 
@@ -577,14 +616,15 @@ dist/국회의사중계자막추출기 v16.14.5.exe
 
 ## 📝 변경 이력
 
-### v16.14.4 (2026-03-25)
-- 검색을 `QTextEdit` 렌더 텍스트가 아닌 전체 `self.subtitles` 스냅샷 기준으로 전환하고, 검색 이동 시 렌더 윈도우를 동적으로 재배치
-- 추출 중 세션 불러오기/DB 세션 로드/병합/줄넘김 정리/지우기/편집/삭제를 공통 가드와 action disable로 차단
-- 파일/DB 세션 로드 payload를 통합하고, DB 검색 결과에서 세션 로드 후 `sequence` 위치로 즉시 이동 가능하게 개선
-- 프리셋 export/import round-trip(`committee` + `custom`) 및 overwrite 정책 정렬, 통계/프리셋 export의 원자적 저장 경로 통일
-- 병합 dedupe 모드에 `보수적(같은 초)` / `기존(30초 버킷)` 옵션 추가
-- `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`, `FEATURE_IMPLEMENTATION_REVIEW_20260325.md`를 `v16.14.4` 기준으로 동기화
-- 회귀 테스트 확장 후 `pytest -q` 85개 전체 통과, `pyright` 0 errors 확인
+### v16.14.7 (2026-04-01)
+- 브라우저 헬스체크, Chrome 세션 자동 재기동, `reconnected` 상태 반영으로 장시간 수집 중 창 종료 복구를 보강
+- `ui/main_window_impl/`와 `core/live_capture_impl/`로 capture/pipeline/view/runtime/live capture 내부 구현을 재배치하고 공개 facade import 경로는 유지
+- `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장하고, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 현재 구조 기준으로 재동기화
+
+### v16.14.6 (2026-04-01)
+- recovery state(`session_recovery.json`) 기반 최신 복구 가능 세션 제안, 종료 직전 저장/자동 백업 메타데이터 정리
+- prepared snapshot 기반 수동 reflow, lossless DB metadata round-trip, DOCX/HWPX multiline export 정책 정리
+- `.gitignore`와 `subtitle_extractor.spec`에 runtime recovery state 제외 정책을 반영
 
 ### v16.14.5 (2026-03-27)
 - 캡처 시작 시 URL/위원회/헤드리스/실시간 저장을 `run-source` 스냅샷으로 고정하고, 추출 중 관련 UI 변경을 공통 잠금 정책으로 정리
@@ -594,6 +634,15 @@ dist/국회의사중계자막추출기 v16.14.5.exe
 - 단축키 문서와 실제 동작을 `Escape`, `Ctrl+Shift+C`, `Ctrl+C` 기준으로 동기화
 - `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`, `FEATURE_IMPLEMENTATION_REVIEW_20260325.md`, `.gitignore`를 `v16.14.5` 기준으로 재점검
 - 회귀 테스트 추가 후 `pytest -q` 95개 전체 통과, `pyright` 0 errors 확인
+
+### v16.14.4 (2026-03-25)
+- 검색을 `QTextEdit` 렌더 텍스트가 아닌 전체 `self.subtitles` 스냅샷 기준으로 전환하고, 검색 이동 시 렌더 윈도우를 동적으로 재배치
+- 추출 중 세션 불러오기/DB 세션 로드/병합/줄넘김 정리/지우기/편집/삭제를 공통 가드와 action disable로 차단
+- 파일/DB 세션 로드 payload를 통합하고, DB 검색 결과에서 세션 로드 후 `sequence` 위치로 즉시 이동 가능하게 개선
+- 프리셋 export/import round-trip(`committee` + `custom`) 및 overwrite 정책 정렬, 통계/프리셋 export의 원자적 저장 경로 통일
+- 병합 dedupe 모드에 `보수적(같은 초)` / `기존(30초 버킷)` 옵션 추가
+- `subtitle_extractor.spec`, `README.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `CLAUDE.md`, `GEMINI.md`, `FEATURE_IMPLEMENTATION_REVIEW_20260325.md`를 `v16.14.4` 기준으로 동기화
+- 회귀 테스트 확장 후 `pytest -q` 85개 전체 통과, `pyright` 0 errors 확인
 
 ### v16.14.3 (2026-03-23)
 - `self.driver` 접근을 `_driver_lock`과 identity helper로 통일하고, stop timeout 이후 stale worker run을 `run_id`로 격리
