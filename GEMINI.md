@@ -398,6 +398,17 @@ pip install -r requirements-dev.txt
 - `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
 - `pytest -q` 85 pass, `pyright` 0 errors
 
+## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
+### 🛡️ 세션 / 복구
+- 수동 세션 저장과 종료 직전 저장 모두 `JSON + DB` 경로를 사용하고, 성공한 세션 저장/자동 백업은 `session_recovery.json`에 최신 복구 가능 스냅샷 메타데이터를 기록
+- 시작 시 복구 state가 남아 있으면 최신 자동 백업 또는 세션 저장본을 제안하고, 복구된 세션은 다시 저장 전까지 dirty 상태로 유지
+### 🧾 Reflow / DB
+- 수동 `줄넘김 정리`는 pending preview까지 포함한 prepared snapshot 기준으로 백그라운드 reflow를 수행하며, `SubtitleEntry`의 `entry_id`/`source_*`/`speaker_*`/timing 정책을 보존
+- `DatabaseManager`는 additive migration으로 lossless subtitle metadata를 저장/복원하고, 기본 검색은 FTS raw query가 아니라 literal substring 검색으로 동작
+### 📄 Export / 저장소 hygiene
+- DOCX/HWPX는 한 `SubtitleEntry`를 한 문단/블록으로 유지하고, 엔트리 내부 개행은 paragraph split이 아니라 line break로 저장
+- `.gitignore`는 `session_recovery.json` 같은 런타임 복구 state를 무시하고, `subtitle_extractor.spec`은 이 state가 frozen 번들에 포함되지 않음을 명시
+
 ## 9.10 v16.14.1 자동 줄넘김 정리 기본 활성화 (2026-03-17)
 ### 🧹 자동 줄넘김 정리 옵션
 - 메인 옵션 영역에 `✨ 자동 줄넘김 정리` 체크박스를 추가하고 기본값을 활성화

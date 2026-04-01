@@ -79,6 +79,7 @@ class Config:
     BACKUP_DIR = str(APP_BASE_DIR / "backups")
     PRESET_FILE = str(APP_BASE_DIR / "committee_presets.json")
     URL_HISTORY_FILE = str(APP_BASE_DIR / "url_history.json")
+    RECOVERY_STATE_FILE = str(APP_BASE_DIR / "session_recovery.json")
     
     # 기본 CSS 선택자
     DEFAULT_SELECTORS = [

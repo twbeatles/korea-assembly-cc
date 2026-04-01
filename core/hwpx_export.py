@@ -68,7 +68,6 @@ _FIRST_PARAGRAPH = (
 _PARAGRAPH_TEMPLATE = (
     '<hp:p id="{paragraph_id}" paraPrIDRef="3" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">'
     '<hp:run charPrIDRef="0">{text_node}</hp:run>'
-    '<hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="42520" flags="393216"/></hp:linesegarray>'
     '</hp:p>'
 )
 
@@ -91,11 +90,13 @@ def build_hwpx_lines(subtitles_snapshot: Sequence[tuple[datetime, str]], generat
         else:
             prefix = ""
 
-        for part_index, part in enumerate((text or "").splitlines() or [""]):
-            if part_index == 0:
-                lines.append(f"{prefix}{part}")
-            else:
-                lines.append(part)
+        normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+        parts = normalized.split("\n")
+        first_part = parts[0] if parts else ""
+        if len(parts) > 1:
+            lines.append(f"{prefix}{first_part}\n" + "\n".join(parts[1:]))
+        else:
+            lines.append(f"{prefix}{first_part}")
 
     lines.extend(["", f"총 {len(subtitles_snapshot)}문장, {total_chars:,}자"])
     return lines
@@ -104,7 +105,13 @@ def build_hwpx_lines(subtitles_snapshot: Sequence[tuple[datetime, str]], generat
 def _text_node(text: str) -> str:
     if not text:
         return "<hp:t/>"
-    return f'<hp:t xml:space="preserve">{escape(text)}</hp:t>'
+    parts = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    nodes: list[str] = []
+    for index, part in enumerate(parts):
+        nodes.append(f'<hp:t xml:space="preserve">{escape(part)}</hp:t>')
+        if index < len(parts) - 1:
+            nodes.append("<hp:lineBreak/>")
+    return "".join(nodes)
 
 
 def build_section_xml(lines: Sequence[str]) -> str:
@@ -168,7 +175,7 @@ def build_hwpx_bytes(subtitles_snapshot: Sequence[tuple[datetime, str]], generat
     header_xml = _HEADER_TEMPLATE_PATH.read_text(encoding="utf-8")
     lines = build_hwpx_lines(subtitles_snapshot, generated)
     section_xml = build_section_xml(lines)
-    preview_text = "\r\n".join(lines).rstrip() + "\r\n"
+    preview_text = "\r\n".join(line.replace("\n", "\r\n") for line in lines).rstrip() + "\r\n"
     content_hpf = build_content_hpf(generated)
     settings_xml = (
         f"{_XML_DECL}"

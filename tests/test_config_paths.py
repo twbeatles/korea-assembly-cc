@@ -11,6 +11,7 @@ def test_config_paths_are_absolute():
         "BACKUP_DIR",
         "PRESET_FILE",
         "URL_HISTORY_FILE",
+        "RECOVERY_STATE_FILE",
         "DATABASE_PATH",
     ]
     for field in path_fields:
@@ -29,6 +30,7 @@ def test_config_paths_resolve_under_app_base_dir():
         "BACKUP_DIR",
         "PRESET_FILE",
         "URL_HISTORY_FILE",
+        "RECOVERY_STATE_FILE",
         "DATABASE_PATH",
     ]
     for field in path_fields:

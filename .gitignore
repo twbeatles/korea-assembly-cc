@@ -59,6 +59,7 @@ subtitle_history.db-*
 *.db-wal
 url_history.json
 committee_presets.json
+session_recovery.json
 presets_*.json
 
 # -----------------------------------------------------------------------------

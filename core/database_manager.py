@@ -5,10 +5,12 @@ SQLite 데이터베이스 관리 모듈 (#26)
 """
 
 from collections.abc import Iterable
+import json
 import logging
 import sqlite3
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -100,6 +102,71 @@ class DatabaseManager:
             return 0
         return max(0, duration)
 
+    @staticmethod
+    def _normalize_datetime_value(value: object) -> object:
+        if isinstance(value, str) or value is None:
+            return value
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return value
+
+    @staticmethod
+    def _serialize_frame_path(value: object) -> str | None:
+        if value in (None, "", ()):
+            return None
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                return None
+            value = parsed
+        if not isinstance(value, (list, tuple)):
+            return None
+        normalized: list[int] = []
+        for item in value:
+            try:
+                normalized.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        if not normalized:
+            return None
+        return json.dumps(normalized, ensure_ascii=False)
+
+    @staticmethod
+    def _deserialize_frame_path(value: object) -> list[int] | None:
+        if not value:
+            return None
+        if isinstance(value, list):
+            normalized: list[int] = []
+            for item in value:
+                try:
+                    normalized.append(int(item))
+                except (TypeError, ValueError):
+                    continue
+            return normalized or None
+        if not isinstance(value, str):
+            return None
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return None
+        if not isinstance(parsed, list):
+            return None
+        normalized: list[int] = []
+        for item in parsed:
+            try:
+                normalized.append(int(item))
+            except (TypeError, ValueError):
+                continue
+        return normalized or None
+
+    @staticmethod
+    def _escape_like_query(query: str) -> str:
+        escaped = query.replace("\\", "\\\\")
+        escaped = escaped.replace("%", "\\%")
+        escaped = escaped.replace("_", "\\_")
+        return escaped
+
     def _cleanup_stale_connections_locked(self, force: bool = False) -> None:
         """종료된 스레드의 캐시 연결을 정리한다. (lock 내부 전용)"""
         if not self._thread_connections:
@@ -131,11 +198,43 @@ class DatabaseManager:
     def _iter_subtitle_rows(
         session_id: int,
         subtitles: object,
-    ) -> Iterable[tuple[int, str, object, object, object, int]]:
+    ) -> Iterable[
+        tuple[
+            int,
+            str,
+            object,
+            object,
+            object,
+            int,
+            object,
+            object,
+            object,
+            object,
+            object,
+            object,
+            int,
+        ]
+    ]:
         if not isinstance(subtitles, Iterable) or isinstance(subtitles, (str, bytes, dict)):
             return ()
 
-        def _generator() -> Iterable[tuple[int, str, object, object, object, int]]:
+        def _generator() -> Iterable[
+            tuple[
+                int,
+                str,
+                object,
+                object,
+                object,
+                int,
+                object,
+                object,
+                object,
+                object,
+                object,
+                object,
+                int,
+            ]
+        ]:
             sequence = 0
             for item in subtitles:
                 if isinstance(item, SubtitleEntry):
@@ -146,16 +245,30 @@ class DatabaseManager:
                         item.start_time.isoformat() if item.start_time else None,
                         item.end_time.isoformat() if item.end_time else None,
                         sequence,
+                        item.entry_id,
+                        item.source_selector,
+                        DatabaseManager._serialize_frame_path(item.source_frame_path),
+                        item.source_node_key,
+                        item.speaker_color,
+                        item.speaker_channel,
+                        1 if item.speaker_changed else 0,
                     )
                     sequence += 1
                 elif isinstance(item, dict):
                     yield (
                         session_id,
                         str(item.get("text", "")),
-                        item.get("timestamp"),
-                        item.get("start_time"),
-                        item.get("end_time"),
+                        DatabaseManager._normalize_datetime_value(item.get("timestamp")),
+                        DatabaseManager._normalize_datetime_value(item.get("start_time")),
+                        DatabaseManager._normalize_datetime_value(item.get("end_time")),
                         sequence,
+                        item.get("entry_id"),
+                        item.get("source_selector"),
+                        DatabaseManager._serialize_frame_path(item.get("source_frame_path")),
+                        item.get("source_node_key"),
+                        item.get("speaker_color"),
+                        item.get("speaker_channel"),
+                        1 if bool(item.get("speaker_changed", False)) else 0,
                     )
                     sequence += 1
 
@@ -222,9 +335,17 @@ class DatabaseManager:
                         start_time DATETIME,
                         end_time DATETIME,
                         sequence INTEGER,
+                        entry_id TEXT,
+                        source_selector TEXT,
+                        source_frame_path TEXT,
+                        source_node_key TEXT,
+                        speaker_color TEXT,
+                        speaker_channel TEXT,
+                        speaker_changed INTEGER DEFAULT 0,
                         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
                     )
                 """)
+                self._ensure_subtitle_table_columns(cursor)
                 
                 # FTS5 가상 테이블 생성 (전체 텍스트 검색용)
                 cursor.execute("""
@@ -286,6 +407,23 @@ class DatabaseManager:
                 logger.error(f"데이터베이스 초기화 오류: {e}")
                 raise
             # 연결은 캐싱되므로 닫지 않음
+
+    def _ensure_subtitle_table_columns(self, cursor: sqlite3.Cursor) -> None:
+        column_rows = cursor.execute("PRAGMA table_info(subtitles)").fetchall()
+        existing_columns = {str(row[1]) for row in column_rows}
+        required_columns = {
+            "entry_id": "TEXT",
+            "source_selector": "TEXT",
+            "source_frame_path": "TEXT",
+            "source_node_key": "TEXT",
+            "speaker_color": "TEXT",
+            "speaker_channel": "TEXT",
+            "speaker_changed": "INTEGER DEFAULT 0",
+        }
+        for column_name, sql_type in required_columns.items():
+            if column_name in existing_columns:
+                continue
+            cursor.execute(f"ALTER TABLE subtitles ADD COLUMN {column_name} {sql_type}")
     
     def save_session(self, session_data: object) -> int:
         """세션 저장
@@ -358,8 +496,22 @@ class DatabaseManager:
                 if total_subtitles:
                     cursor.executemany("""
                         INSERT INTO subtitles 
-                        (session_id, text, timestamp, start_time, end_time, sequence)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (
+                            session_id,
+                            text,
+                            timestamp,
+                            start_time,
+                            end_time,
+                            sequence,
+                            entry_id,
+                            source_selector,
+                            source_frame_path,
+                            source_node_key,
+                            speaker_color,
+                            speaker_channel,
+                            speaker_changed
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, self._iter_subtitle_rows(session_id, subtitles))
                 
                 conn.commit()
@@ -423,7 +575,16 @@ class DatabaseManager:
                             "text": row["text"],
                             "timestamp": row["timestamp"],
                             "start_time": row["start_time"],
-                            "end_time": row["end_time"]
+                            "end_time": row["end_time"],
+                            "entry_id": row["entry_id"],
+                            "source_selector": row["source_selector"],
+                            "source_frame_path": self._deserialize_frame_path(
+                                row["source_frame_path"]
+                            ),
+                            "source_node_key": row["source_node_key"],
+                            "speaker_color": row["speaker_color"],
+                            "speaker_channel": row["speaker_channel"],
+                            "speaker_changed": bool(row["speaker_changed"]),
                         }
                         for row in subtitle_rows
                     ]
@@ -467,7 +628,11 @@ class DatabaseManager:
             # 연결은 캐싱되므로 닫지 않음
     
     def search_subtitles(
-        self, query: str, limit: int = 100, offset: int = 0
+        self,
+        query: str,
+        limit: int = 100,
+        offset: int = 0,
+        syntax: str = "literal",
     ) -> List[Dict[str, Any]]:
         """자막 텍스트 검색
         
@@ -489,36 +654,31 @@ class DatabaseManager:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                
-                # FTS 검색 시도 (MATCH 연산자)
-                try:
-                    cursor.execute("""
-                        SELECT s.id as subtitle_id, s.text, s.timestamp, s.sequence,
-                               sess.id as session_id, sess.created_at, sess.committee_name
-                        FROM subtitles s
-                        JOIN sessions sess ON s.session_id = sess.id
-                        WHERE s.id IN (SELECT rowid FROM subtitles_fts WHERE text MATCH ? ORDER BY rank)
-                        ORDER BY sess.created_at DESC, s.sequence
-                        LIMIT ? OFFSET ?
-                    """, (safe_query, safe_limit, safe_offset))
-                    results = [dict(row) for row in cursor.fetchall()]
-                    
-                    # FTS 검색 결과가 있으면 반환
-                    if results:
-                        return results
-                        
-                except sqlite3.OperationalError as fts_error:
-                    # FTS 검색 실패 시 LIKE으로 Fallback (#6)
-                    logger.debug(f"FTS 검색 실패, LIKE로 Fallback: {fts_error}")
-                
-                # Fallback: LIKE 검색 (특수문자, 따옴표 등 처리)
-                like_query = f"%{safe_query}%"
+
+                if str(syntax or "literal").strip().lower() == "fts":
+                    try:
+                        cursor.execute("""
+                            SELECT s.id as subtitle_id, s.text, s.timestamp, s.sequence,
+                                   sess.id as session_id, sess.created_at, sess.committee_name
+                            FROM subtitles s
+                            JOIN sessions sess ON s.session_id = sess.id
+                            WHERE s.id IN (
+                                SELECT rowid FROM subtitles_fts WHERE text MATCH ? ORDER BY rank
+                            )
+                            ORDER BY sess.created_at DESC, s.sequence
+                            LIMIT ? OFFSET ?
+                        """, (safe_query, safe_limit, safe_offset))
+                        return [dict(row) for row in cursor.fetchall()]
+                    except sqlite3.OperationalError as fts_error:
+                        logger.debug(f"FTS 검색 실패, literal LIKE로 fallback: {fts_error}")
+
+                like_query = f"%{self._escape_like_query(safe_query)}%"
                 cursor.execute("""
                     SELECT s.id as subtitle_id, s.text, s.timestamp, s.sequence,
                            sess.id as session_id, sess.created_at, sess.committee_name
                     FROM subtitles s
                     JOIN sessions sess ON s.session_id = sess.id
-                    WHERE s.text LIKE ?
+                    WHERE s.text LIKE ? ESCAPE '\\'
                     ORDER BY sess.created_at DESC, s.sequence
                     LIMIT ? OFFSET ?
                 """, (like_query, safe_limit, safe_offset))

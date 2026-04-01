@@ -28,7 +28,12 @@
 고정 의미론
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.14.5)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.14.6)
+- `ui/main_window.py`/`ui/main_window_persistence.py`/`ui/main_window_pipeline.py`/`core/config.py`: 수동 세션 저장, 종료 저장, 자동 백업이 공통 recovery state(`session_recovery.json`)를 기록하고, 시작 시 최신 복구 가능 스냅샷을 제안하는 흐름을 추가
+- `core/database_manager.py`: `subtitles` 테이블을 additive migration으로 확장해 `entry_id`/`source_*`/`speaker_*`/`speaker_changed`를 lossless round-trip으로 저장하고, 기본 검색을 FTS raw query가 아닌 literal substring 검색으로 고정
+- `core/reflow.py`/`ui/main_window_persistence.py`: 수동 reflow를 prepared snapshot 기반 백그라운드 작업으로 이동하고, `SubtitleEntry` 메타데이터 및 timing 정책을 유지하도록 재작성
+- `core/hwpx_export.py`/`ui/main_window_persistence.py`: DOCX/HWPX multiline export를 한 `SubtitleEntry = 한 문단/블록` 의미로 통일하고, 내부 개행은 line break로 표현
+- `.gitignore`/`subtitle_extractor.spec`: runtime 복구 state(`session_recovery.json`)를 저장소/번들에서 제외하는 규칙을 명시
 - `ui/main_window.py`/`ui/main_window_capture.py`/`ui/main_window_database.py`/`ui/main_window_persistence.py`/`ui/main_window_ui.py`/`ui/main_window_view.py`: v16.14.5에서 run-source 스냅샷 고정, live list manual/auto 정책 분리, DB/편집 목록의 점진 로드, dirty-session 종료 프롬프트, 단축키 문구 정합성이 반영되었지만 이 변경은 UI/상태 관리 레이어에 한정되며 코어의 글로벌 히스토리 + suffix 의미론을 바꾸지 않는다.
 - `ui/main_window_view.py`/`ui/main_window_pipeline.py`/`ui/main_window_database.py`: v16.14.4에서 검색 기준이 전체 `self.subtitles` 스냅샷으로 바뀌고, 검색/DB 결과 focus 시 해당 entry가 보이도록 렌더 offset을 동적으로 조정했다. 이는 UI 탐색 경로 보강이며 코어의 글로벌 히스토리 + suffix 의미론은 변경하지 않는다.
 - `ui/main_window.py`/`ui/main_window_ui.py`/`ui/main_window_persistence.py`/`ui/main_window_database.py`: v16.14.4에서 세션 로드/병합/리플로우/삭제 계열을 공통 runtime mutation guard로 묶고, 파일/DB 세션 로드 payload와 완료 핸들러를 통합했다. 이는 상태 전이 안전성 정리이며 코어 추출 알고리즘 자체는 바꾸지 않는다.

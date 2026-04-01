@@ -885,6 +885,8 @@ class MainWindowPipelineMixin(MainWindowHost):
             created_at = str(payload.get("created_at", "") or "")
             loaded_subtitles = payload.get("subtitles", [])
             skipped_items = int(payload.get("skipped", 0) or 0)
+            mark_dirty = bool(payload.get("mark_dirty", False))
+            recovery = bool(payload.get("recovery", False))
             highlight_sequence = int(payload.get("highlight_sequence", -1) or -1)
             highlight_query = str(payload.get("highlight_query", "") or "")
 
@@ -918,12 +920,16 @@ class MainWindowPipelineMixin(MainWindowHost):
                 self._add_to_history(source_url, committee_name)
                 self.current_url = source_url
 
-            summary = f"세션 불러오기 완료! {len(self.subtitles)}개 문장"
+            summary_prefix = "세션 복구 완료!" if recovery else "세션 불러오기 완료!"
+            summary = f"{summary_prefix} {len(self.subtitles)}개 문장"
             if skipped_items > 0:
                 summary += f" (손상 항목 {skipped_items}개 제외)"
             self._set_status(summary, "success")
             self._show_toast(summary, "success")
-            self._clear_session_dirty()
+            if mark_dirty:
+                self._mark_session_dirty()
+            else:
+                self._clear_session_dirty()
 
             if highlight_sequence >= 0:
                 self._focus_loaded_session_result(highlight_sequence, highlight_query)
@@ -1124,6 +1130,8 @@ class MainWindowPipelineMixin(MainWindowHost):
                     info = data if isinstance(data, dict) else {}
                     path = str(info.get("path", ""))
                     err = str(info.get("error", "JSON 파싱 오류"))
+                    if bool(info.get("recovery", False)):
+                        self._clear_recovery_state()
                     reply = QMessageBox.question(
                         self,
                         "파일 손상",
@@ -1142,6 +1150,33 @@ class MainWindowPipelineMixin(MainWindowHost):
                     err = data.get("error") if isinstance(data, dict) else str(data)
                     self._set_status(f"세션 불러오기 실패: {err}", "error")
                     QMessageBox.critical(self, "오류", f"불러오기 실패: {err}")
+
+                elif msg_type == "reflow_done":
+                    self._reflow_in_progress = False
+                    payload = data if isinstance(data, dict) else {}
+                    new_subtitles = payload.get("subtitles", [])
+                    old_count = int(payload.get("old_count", len(self.subtitles)) or 0)
+                    if not isinstance(new_subtitles, list) or not new_subtitles:
+                        self._set_status("줄넘김 정리 결과가 비어 있어 적용하지 않았습니다.", "warning")
+                        self._show_toast("줄넘김 정리 결과가 비어 있습니다.", "warning")
+                        return
+                    logger.info(f"스마트 리플로우: {old_count} -> {len(new_subtitles)}")
+                    self._replace_subtitles_and_refresh(new_subtitles)
+                    self._mark_session_dirty()
+                    self._set_status(
+                        f"줄넘김 정리 완료 ({old_count} -> {len(new_subtitles)})",
+                        "success",
+                    )
+                    self._show_toast(
+                        f"정리 완료! ({len(new_subtitles)}개 문장)",
+                        "success",
+                    )
+
+                elif msg_type == "reflow_failed":
+                    self._reflow_in_progress = False
+                    err = data.get("error") if isinstance(data, dict) else str(data)
+                    self._set_status(f"줄넘김 정리 실패: {err}", "error")
+                    self._show_toast(f"줄넘김 정리 실패: {err}", "error", 4000)
 
                 elif msg_type == "subtitle_not_found":
                     self._retire_capture_run()

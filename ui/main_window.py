@@ -416,6 +416,8 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             self._last_status_message = ""
             self._session_save_in_progress = False
             self._session_load_in_progress = False
+            self._reflow_in_progress = False
+            self._startup_recovery_prompted = False
             self._db_history_dialog_state: dict[str, Any] | None = None
             self._db_search_dialog_state: dict[str, Any] | None = None
             self._active_background_threads: set[threading.Thread] = set()
@@ -469,6 +471,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
 
             # 시스템 트레이 설정
             self._setup_tray()
+            QTimer.singleShot(0, self._prompt_session_recovery_if_available)
 
 
     def _start(self):
@@ -891,7 +894,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                         self,
                         "종료 확인",
                         f"저장하지 않은 세션 변경 {subtitle_count}개가 있습니다.\n\n"
-                        "세션 JSON으로 저장하시겠습니까?",
+                        "세션(JSON + DB)으로 저장하시겠습니까?",
                         QMessageBox.StandardButton.Save
                         | QMessageBox.StandardButton.Discard
                         | QMessageBox.StandardButton.Cancel,
@@ -911,12 +914,20 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
                             return
                         try:
                             Path(path).parent.mkdir(parents=True, exist_ok=True)
-                            self._write_session_snapshot(
+                            info = self._write_session_snapshot(
                                 path,
                                 subtitles_snapshot,
-                                include_db=False,
+                                include_db=True,
                             )
                             self._clear_session_dirty()
+                            db_error = str(info.get("db_error", "") or "").strip()
+                            if db_error:
+                                QMessageBox.warning(
+                                    self,
+                                    "DB 저장 경고",
+                                    "세션 JSON 저장은 완료되었지만 DB 저장은 실패했습니다.\n"
+                                    f"위치: {path}\n오류: {db_error}",
+                                )
                         except Exception as e:
                             QMessageBox.critical(self, "오류", f"세션 저장 실패: {e}")
                             event.ignore()
@@ -936,6 +947,7 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
             # 종료 단계 진입: 신규 백그라운드 작업 차단 -> inflight 작업 대기
             self._begin_background_shutdown()
             self._wait_active_background_threads(timeout=Config.SAVE_THREAD_SHUTDOWN_TIMEOUT)
+            self._clear_recovery_state()
 
             # 창 위치/크기 저장
             self.settings.setValue("geometry", self.saveGeometry())

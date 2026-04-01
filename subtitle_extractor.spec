@@ -105,6 +105,7 @@ a = Analysis(
     binaries=[],
     # Config.VERSION이 README 첫 줄에서 버전을 읽으므로 빌드 산출물에도 함께 포함한다.
     # HWPX 기본 내보내기는 assets/hwpx/header.xml 템플릿을 사용한다.
+    # session_recovery.json / backups / sessions 는 런타임 생성물이라 frozen 번들에 포함하지 않는다.
     # typings/ 는 pyright 전용 로컬 stub이므로 frozen 번들에는 포함하지 않는다.
     datas=[('README.md', '.'), ('assets/icon.ico', 'assets'), ('assets/hwpx', 'assets/hwpx')],
     hiddenimports=HIDDEN_IMPORTS + ['sqlite3'],

@@ -114,6 +114,8 @@ if TYPE_CHECKING:
         _last_status_message: str
         _session_save_in_progress: bool
         _session_load_in_progress: bool
+        _reflow_in_progress: bool
+        _startup_recovery_prompted: bool
         _realtime_error_count: int
         _last_subtitle_frame_path: tuple[int, ...]
         url_history: dict[str, str]
@@ -241,6 +243,16 @@ if TYPE_CHECKING:
         def _is_auto_clean_newlines_enabled(self) -> bool: ...
         def _is_runtime_mutation_blocked(self, action_name: str) -> bool: ...
         def _load_session(self) -> None: ...
+        def _start_session_load_from_path(
+            self,
+            path: str,
+            *,
+            mark_dirty: bool = False,
+            recovery: bool = False,
+        ) -> bool: ...
+        def _load_recovery_state(self) -> dict[str, Any] | None: ...
+        def _clear_recovery_state(self) -> None: ...
+        def _prompt_session_recovery_if_available(self) -> None: ...
         def _merge_sessions(
             self,
             file_paths: list[Path | str],

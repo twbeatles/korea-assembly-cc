@@ -15,6 +15,161 @@ class MainWindowPersistenceMixin(MainWindowHost):
             duration = int(time.time() - self.start_time) if self.start_time else 0
             return source_url, committee_name, duration
 
+    def _record_recovery_snapshot(
+            self,
+            path: str | Path,
+            snapshot_type: str,
+            *,
+            created_at: str,
+            url: str = "",
+            committee_name: str = "",
+        ) -> None:
+            utils.atomic_write_json(
+                Config.RECOVERY_STATE_FILE,
+                {
+                    "path": str(Path(path).resolve()),
+                    "snapshot_type": str(snapshot_type or "session"),
+                    "created_at": str(created_at or ""),
+                    "saved_at": datetime.now().isoformat(),
+                    "url": str(url or ""),
+                    "committee_name": str(committee_name or ""),
+                },
+                ensure_ascii=False,
+            )
+
+    def _clear_recovery_state(self) -> None:
+            try:
+                Path(Config.RECOVERY_STATE_FILE).unlink(missing_ok=True)
+            except Exception as e:
+                logger.debug(f"recovery state 정리 오류: {e}")
+
+    def _load_recovery_state(self) -> dict[str, Any] | None:
+            recovery_path = Path(Config.RECOVERY_STATE_FILE)
+            if not recovery_path.exists():
+                return None
+            try:
+                data = json.loads(recovery_path.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning(f"recovery state 파싱 오류: {e}")
+                self._clear_recovery_state()
+                return None
+            if not isinstance(data, dict):
+                self._clear_recovery_state()
+                return None
+            snapshot_path = str(data.get("path", "") or "").strip()
+            if not snapshot_path or not Path(snapshot_path).exists():
+                self._clear_recovery_state()
+                return None
+            return data
+
+    def _start_session_load_from_path(
+            self,
+            path: str,
+            *,
+            mark_dirty: bool = False,
+            recovery: bool = False,
+        ) -> bool:
+            if self._is_background_shutdown_active():
+                self._show_toast("종료 중이라 세션 불러오기를 시작할 수 없습니다.", "warning")
+                return False
+            if self._session_load_in_progress:
+                self._show_toast("이미 세션 불러오기가 진행 중입니다.", "info")
+                return False
+
+            self._session_load_in_progress = True
+            status_text = "세션 복구 중..." if recovery else "세션 불러오기 중..."
+            self._set_status(status_text, "running")
+
+            def background_load():
+                try:
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                    except json.JSONDecodeError as json_err:
+                        self.message_queue.put(
+                            (
+                                "session_load_json_error",
+                                {"path": path, "error": str(json_err), "recovery": recovery},
+                            )
+                        )
+                        return
+
+                    session_version = data.get("version", "unknown")
+                    new_subtitles, skipped = self._deserialize_subtitles(
+                        data.get("subtitles", []),
+                        source=f"session:{path}",
+                    )
+
+                    self.message_queue.put(
+                        (
+                            "session_load_done",
+                            {
+                                "path": path,
+                                "version": session_version,
+                                "created_at": data.get("created", ""),
+                                "url": data.get("url", ""),
+                                "committee_name": data.get("committee_name", ""),
+                                "subtitles": new_subtitles,
+                                "skipped": skipped,
+                                "mark_dirty": mark_dirty,
+                                "recovery": recovery,
+                            },
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"세션 불러오기 오류: {e}")
+                    self.message_queue.put(
+                        ("session_load_failed", {"path": path, "error": str(e), "recovery": recovery})
+                    )
+
+            started = self._start_background_thread(background_load, "SessionLoadWorker")
+            if not started:
+                self._session_load_in_progress = False
+                self._set_status("세션 불러오기 시작 거부 (종료 중)", "warning")
+                self._show_toast("종료 중이라 세션 불러오기를 시작할 수 없습니다.", "warning")
+                return False
+
+            message = (
+                f"📂 복구 시작: {Path(path).name}"
+                if recovery
+                else f"📂 세션 불러오기 시작: {Path(path).name}"
+            )
+            self._show_toast(message, "info", 1500)
+            return True
+
+    def _prompt_session_recovery_if_available(self) -> None:
+            if bool(self.__dict__.get("_startup_recovery_prompted", False)):
+                return
+            self._startup_recovery_prompted = True
+            if self._session_load_in_progress or self.is_running:
+                return
+
+            recovery_state = self._load_recovery_state()
+            if not recovery_state:
+                return
+
+            snapshot_path = str(recovery_state.get("path", "") or "")
+            snapshot_type = str(recovery_state.get("snapshot_type", "") or "session")
+            created_at = str(recovery_state.get("created_at", "") or "")
+            description = "자동 백업" if snapshot_type == "backup" else "세션 저장본"
+            created_suffix = f"\n시각: {created_at}" if created_at else ""
+            reply = QMessageBox.question(
+                self,
+                "세션 복구",
+                "이전에 정상 종료되지 않은 것으로 보입니다.\n"
+                f"최신 {description}을 복구하시겠습니까?\n"
+                f"파일: {snapshot_path}{created_suffix}",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self._clear_recovery_state()
+                return
+            self._start_session_load_from_path(
+                snapshot_path,
+                mark_dirty=True,
+                recovery=True,
+            )
+
     def _write_session_snapshot(
             self,
             path: str,
@@ -36,6 +191,13 @@ class MainWindowPersistenceMixin(MainWindowHost):
                 sequence_key="subtitles",
                 sequence_items=utils.iter_serialized_subtitles(prepared_entries),
                 ensure_ascii=False,
+            )
+            self._record_recovery_snapshot(
+                path,
+                "session",
+                created_at=created_at,
+                url=current_url,
+                committee_name=committee_name,
             )
 
             db_saved = False
@@ -107,6 +269,13 @@ class MainWindowPersistenceMixin(MainWindowHost):
                         sequence_key="subtitles",
                         sequence_items=utils.iter_serialized_subtitles(prepared_entries),
                         ensure_ascii=False,
+                    )
+                    self._record_recovery_snapshot(
+                        backup_file,
+                        "backup",
+                        created_at=created_at,
+                        url=current_url,
+                        committee_name=committee_name,
                     )
 
                     # 오래된 백업 삭제 (최대 개수 유지)
@@ -410,6 +579,17 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
                 self._save_in_background(do_save, path, "VTT 저장 완료!", "VTT 저장 실패")
 
+    def _add_docx_multiline_text(self, paragraph: Any, text: str, break_types: Any) -> None:
+            normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+            parts = normalized.split("\n")
+            if not parts:
+                paragraph.add_run("")
+                return
+            for index, part in enumerate(parts):
+                paragraph.add_run(part)
+                if index < len(parts) - 1:
+                    paragraph.add_run().add_break(break_types.LINE)
+
 
     def _save_docx(self):
             """DOCX (Word) 파일로 저장"""
@@ -447,6 +627,7 @@ class MainWindowPersistenceMixin(MainWindowHost):
                 document_factory = cast(Callable[[], Any], docx_module.Document)
                 point_factory = cast(Callable[[int], Any], docx_shared.Pt)
                 paragraph_alignment = cast(Any, docx_enum_text.WD_ALIGN_PARAGRAPH)
+                break_types = cast(Any, docx_enum_text.WD_BREAK)
 
                 def do_save(filepath):
                     doc = document_factory()
@@ -475,7 +656,7 @@ class MainWindowPersistenceMixin(MainWindowHost):
                             run.font.size = point_factory(9)
                             run.font.color.rgb = None  # 기본 색상
                             last_printed_ts = timestamp
-                        p.add_run(text)
+                        self._add_docx_multiline_text(p, text, break_types)
 
                     # 통계
                     doc.add_paragraph()
@@ -846,13 +1027,6 @@ class MainWindowPersistenceMixin(MainWindowHost):
     def _load_session(self):
             if self._is_runtime_mutation_blocked("세션 불러오기"):
                 return
-            if self._is_background_shutdown_active():
-                self._show_toast("종료 중이라 세션 불러오기를 시작할 수 없습니다.", "warning")
-                return
-
-            if self._session_load_in_progress:
-                self._show_toast("이미 세션 불러오기가 진행 중입니다.", "info")
-                return
 
             path, _ = QFileDialog.getOpenFileName(
                 self, "세션 불러오기", f"{Config.SESSION_DIR}/", "JSON (*.json)"
@@ -860,57 +1034,7 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
             if not path:
                 return
-
-            self._session_load_in_progress = True
-            self._set_status("세션 불러오기 중...", "running")
-
-            def background_load():
-                try:
-                    try:
-                        with open(path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                    except json.JSONDecodeError as json_err:
-                        self.message_queue.put(
-                            (
-                                "session_load_json_error",
-                                {"path": path, "error": str(json_err)},
-                            )
-                        )
-                        return
-
-                    session_version = data.get("version", "unknown")
-                    new_subtitles, skipped = self._deserialize_subtitles(
-                        data.get("subtitles", []),
-                        source=f"session:{path}",
-                    )
-
-                    self.message_queue.put(
-                        (
-                            "session_load_done",
-                            {
-                                "path": path,
-                                "version": session_version,
-                                "created_at": data.get("created", ""),
-                                "url": data.get("url", ""),
-                                "committee_name": data.get("committee_name", ""),
-                                "subtitles": new_subtitles,
-                                "skipped": skipped,
-                            },
-                        )
-                    )
-                except Exception as e:
-                    logger.error(f"세션 불러오기 오류: {e}")
-                    self.message_queue.put(
-                        ("session_load_failed", {"path": path, "error": str(e)})
-                    )
-
-            started = self._start_background_thread(background_load, "SessionLoadWorker")
-            if not started:
-                self._session_load_in_progress = False
-                self._set_status("세션 불러오기 시작 거부 (종료 중)", "warning")
-                self._show_toast("종료 중이라 세션 불러오기를 시작할 수 없습니다.", "warning")
-                return
-            self._show_toast(f"📂 세션 불러오기 시작: {Path(path).name}", "info", 1500)
+            self._start_session_load_from_path(path)
 
 
     def _deserialize_subtitles(
@@ -941,8 +1065,15 @@ class MainWindowPersistenceMixin(MainWindowHost):
             """줄넘김 정리: 문장 부호 분리 및 병합 (스마트 리플로우)"""
             if self._is_runtime_mutation_blocked("줄넘김 정리"):
                 return
+            if self._is_background_shutdown_active():
+                self._show_toast("종료 중이라 줄넘김 정리를 시작할 수 없습니다.", "warning")
+                return
+            if bool(self.__dict__.get("_reflow_in_progress", False)):
+                self._show_toast("이미 줄넘김 정리가 진행 중입니다.", "info")
+                return
             # 자막이 없는 경우 처리
-            if not self.subtitles:
+            prepared_entries = self._build_prepared_entries_snapshot()
+            if not prepared_entries:
                 self._show_toast("정리할 자막이 없습니다.", "warning")
                 return
 
@@ -961,32 +1092,33 @@ class MainWindowPersistenceMixin(MainWindowHost):
             if reply == QMessageBox.StandardButton.No:
                 return
 
-            # 병합/분리 로직 (utils 모듈 위임)
-            try:
-                old_count = len(self.subtitles)
+            old_count = len(prepared_entries)
+            self._reflow_in_progress = True
+            self._set_status("줄넘김 정리 중...", "running")
 
-                # 스레드 안전하게 복사본 생성 후 처리
-                with self.subtitle_lock:
-                    current_subs = list(self.subtitles)
+            def background_reflow():
+                try:
+                    new_subtitles = utils.reflow_subtitles(prepared_entries)
+                    self.message_queue.put(
+                        (
+                            "reflow_done",
+                            {
+                                "old_count": old_count,
+                                "subtitles": new_subtitles,
+                            },
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"리플로우 중 오류: {e}")
+                    self.message_queue.put(("reflow_failed", {"error": str(e)}))
 
-                # 처리 (시간 소요 가능성 있으므로 락 밖에서 수행 권장하지만, 데이터가 크지 않아 즉시 수행)
-                new_subtitles = utils.reflow_subtitles(current_subs)
-
-                if not new_subtitles:
-                    return
-
-                # 원본과 개수 차이 확인
-                logger.info(f"스마트 리플로우: {old_count} -> {len(new_subtitles)}")
-
-                self._replace_subtitles_and_refresh(new_subtitles)
-                self._mark_session_dirty()
-
-                # 결과 알림
-                self._show_toast(f"정리 완료! ({len(new_subtitles)}개 문장)", "success")
-
-            except Exception as e:
-                logger.error(f"리플로우 중 오류: {e}")
-                self._show_toast(f"오류 발생: {e}", "error")
+            started = self._start_background_thread(background_reflow, "ReflowWorker")
+            if not started:
+                self._reflow_in_progress = False
+                self._set_status("줄넘김 정리 시작 거부 (종료 중)", "warning")
+                self._show_toast("종료 중이라 줄넘김 정리를 시작할 수 없습니다.", "warning")
+                return
+            self._show_toast("줄넘김 정리 시작...", "info", 1500)
 
 
     def _merge_sessions(

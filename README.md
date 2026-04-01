@@ -122,7 +122,7 @@
 ### 🧠 파이프라인 / 메모리 최적화
 - `core/subtitle_pipeline.py`는 `confirmed_segments` 기반 증분 갱신으로 hot path append/tail update에서 전체 history rebuild를 피합니다.
 - `SubtitleEntry`는 `__slots__` + compact cache를 사용하고, `CaptureSessionState.snapshot_clone()`은 no-preview 경로에서 기존 엔트리를 재복제하지 않습니다.
-- 세션 저장/자동 백업은 `atomic_write_json_stream()`으로 JSON 배열을 스트리밍 저장하고, DB 저장은 `SubtitleEntry` 객체 리스트를 직접 소비해 중간 dict 복제를 줄였습니다.
+- 세션 저장/자동 백업은 `atomic_write_json_stream()`으로 JSON 배열을 스트리밍 저장하고, DB 저장도 `SubtitleEntry`의 `entry_id`/`source_*`/`speaker_*`/timing 메타데이터를 함께 보존하는 lossless 경로로 동작합니다.
 
 ### 🖥️ UI 체감 성능 개선
 - `capture_state.entries`를 단일 source of truth로 두고 `self.subtitles`는 alias로 유지합니다.
@@ -148,6 +148,7 @@
 ### 🔁 파이프라인 정규화 옵션화
 - `core/subtitle_pipeline.py`는 `auto_clean_newlines` 설정값을 읽어 preview/live-row/flush 경로 정규화를 동일하게 적용합니다.
 - 옵션을 끄면 기존처럼 개행을 유지한 raw 텍스트 흐름으로 수집할 수 있습니다.
+- 수동 `줄넘김 정리`는 pending preview를 포함한 prepared snapshot 기준으로 백그라운드 reflow를 수행하며, `SubtitleEntry` 메타데이터와 timing 정책을 유지합니다.
 
 ### 🧪 문서/빌드 정합성 보강
 - `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`를 `v16.14.1` 기준으로 동기화했습니다.
@@ -284,6 +285,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션 저장
 ### 🔍 검색 및 하이라이트
 - **실시간 검색** (Ctrl+F, 전체 자막 기준)
 - 검색 결과 이동 시 오래된 자막도 자동으로 렌더 범위를 재조정해 표시
+- DB 자막 검색은 기본적으로 FTS 문법이 아니라 literal substring 검색으로 동작하며, `%`, `_`, `OR`, `-`, `:` 같은 입력도 문자 그대로 해석합니다.
 - **키워드 하이라이트** - 특정 단어 강조
 - **알림 키워드** - 감지 시 토스트 알림
 
@@ -297,6 +299,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션 저장
 - 헤드리스 모드 (브라우저 창 숨김)
 - 실시간 저장, 세션 저장/불러오기
 - DB 검색 결과에서 세션 불러오기 / 해당 문장 위치 이동
+- 비정상 종료 뒤에는 최신 자동 백업 또는 세션 저장본을 시작 시 복구 제안합니다.
 - 자동 줄넘김 정리 옵션 (기본 활성화)
 - 자동 백업 (5분마다)
 - 다크/라이트 테마
@@ -320,6 +323,7 @@ pip install -r requirements-dev.txt
 - 최소 실행만 필요하면 `pip install PyQt6 selenium`만 설치해도 됩니다.
 - HWPX 저장은 추가 외부 프로그램 없이 기본 기능으로 사용할 수 있습니다.
 - HWP 저장은 Windows 환경과 한컴오피스가 추가로 필요합니다.
+- DOCX/HWPX는 한 `SubtitleEntry`를 한 문단/블록으로 유지하고, 엔트리 내부 개행은 paragraph split이 아니라 line break로 저장합니다.
 
 ### 4. Chrome 브라우저
 - Chrome 브라우저가 설치되어 있어야 합니다

@@ -38,7 +38,25 @@ def test_build_hwpx_bytes_escapes_special_characters_and_preserves_multiline() -
 
     assert "&amp;" in section_xml
     assert "&lt;줄&gt;" in section_xml
+    assert "<hp:lineBreak/>" in section_xml
     assert "첫 줄 & 둘째 <줄>" in preview_text
-    assert "줄바꿈 첫째" in preview_text
-    assert "줄바꿈 둘째" in preview_text
-    assert "[10:02:00] 줄바꿈 첫째" in preview_text
+    assert "[10:02:00] 줄바꿈 첫째\r\n줄바꿈 둘째" in preview_text
+
+
+def test_build_hwpx_bytes_omits_stale_linesegarray_for_dynamic_paragraphs() -> None:
+    entries = [
+        (
+            datetime(2026, 3, 23, 10, 0, 0),
+            "아주 긴 문장이라 저장 후에도 한글이 문단 줄바꿈을 다시 계산해야 자연스럽게 보인다.",
+        ),
+        (datetime(2026, 3, 23, 10, 1, 5), "둘째 문장"),
+    ]
+
+    payload = build_hwpx_bytes(entries, datetime(2026, 3, 23, 18, 0, 0))
+
+    with ZipFile(BytesIO(payload)) as archive:
+        section_xml = archive.read("Contents/section0.xml").decode("utf-8")
+
+    assert section_xml.count("<hp:linesegarray>") == 1
+    assert "[10:00:00] 아주 긴 문장이라 저장 후에도 한글이 문단 줄바꿈을 다시 계산해야 자연스럽게 보인다." in section_xml
+    assert "[10:01:05] 둘째 문장" in section_xml
