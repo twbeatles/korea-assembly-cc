@@ -7,10 +7,9 @@ import threading
 import time
 from datetime import datetime
 from importlib import import_module
-from pathlib import Path
 
 from PyQt6.QtGui import QCloseEvent
-from PyQt6.QtWidgets import QSystemTrayIcon
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
 
 from core.config import Config
 from core.live_capture import create_empty_live_capture_ledger
@@ -85,27 +84,24 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             self._clear_preview()
             self.start_time = time.time()
             self._clear_session_dirty()
+            self._clear_destructive_undo_state()
+            self._initial_recovery_snapshot_done = False
             self._set_capture_source_metadata(
                 url,
                 committee_name,
                 headless=self.headless_check.isChecked(),
-                realtime=self.realtime_save_check.isChecked(),
+                realtime=False,
             )
             run_id = self._activate_capture_run()
 
             self._clear_message_queue()
-
-            self.realtime_file = None
-            if self.realtime_save_check.isChecked():
-                try:
-                    Path(Config.REALTIME_DIR).mkdir(exist_ok=True)
-                    filename = (
-                        f"{Config.REALTIME_DIR}/자막_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-                    )
-                    self.realtime_file = open(filename, "w", encoding="utf-8-sig")
-                    self._set_status(f"실시간 저장: {filename}", "success")
-                except Exception as e:
-                    logger.error(f"실시간 저장 파일 생성 오류: {e}")
+            realtime_active = self._open_realtime_save_for_run()
+            self._set_capture_source_metadata(
+                url,
+                committee_name,
+                headless=self.headless_check.isChecked(),
+                realtime=realtime_active,
+            )
 
             self.is_running = True
             self.stop_event.clear()
@@ -116,7 +112,12 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             self.progress.show()
             self._sync_runtime_action_state()
 
-            self._set_status("Chrome 브라우저 시작 중...", "running")
+            status_text = "Chrome 브라우저 시작 중..."
+            status_level = "running"
+            if self.realtime_save_check.isChecked() and not realtime_active:
+                status_text = "Chrome 브라우저 시작 중... (실시간 저장 중단)"
+                status_level = "warning"
+            self._set_status(status_text, status_level)
             self._update_tray_status("🟢 추출 중")
 
             headless = self.headless_check.isChecked()
@@ -136,12 +137,8 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
         except Exception as e:
             logger.exception(f"시작 오류: {e}")
             self._retire_capture_run()
-            if self.realtime_file:
-                try:
-                    self.realtime_file.close()
-                except Exception as close_err:
-                    logger.debug(f"실시간 저장 파일 닫기 오류: {close_err}")
-                self.realtime_file = None
+            self._close_realtime_save_file()
+            self._reset_realtime_save_run_state()
             self._reset_ui()
             main_window_mod.QMessageBox.critical(self, "오류", f"시작 중 오류 발생: {e}")
 
@@ -174,7 +171,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
                 driver = None
             if driver:
                 self._force_quit_driver_with_timeout(
-                    driver, timeout=2.0, source="stop_initial"
+                    driver, timeout=Config.DRIVER_QUIT_TIMEOUT, source="stop_initial"
                 )
 
             worker_stopped = self._wait_worker_shutdown(
@@ -188,7 +185,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
                 driver = None
             if driver:
                 self._force_quit_driver_with_timeout(
-                    driver, timeout=2.0, source="stop_escalation"
+                    driver, timeout=Config.DRIVER_QUIT_TIMEOUT, source="stop_escalation"
                 )
                 worker_stopped = self._wait_worker_shutdown(timeout=1.0)
 
@@ -207,15 +204,13 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             self._sync_capture_state_entries(force_refresh=False)
             self._finalize_pending_subtitle()
             self._clear_preview()
+            self._close_realtime_save_file()
+            self._reset_realtime_save_run_state()
+            self._initial_recovery_snapshot_done = False
 
-            if self.realtime_file:
-                try:
-                    self.realtime_file.close()
-                except Exception as e:
-                    logger.debug(f"파일 닫기 오류: {e}")
-                self.realtime_file = None
-
-            self._cleanup_detached_drivers_with_timeout(timeout=2.0)
+            self._cleanup_detached_drivers_with_timeout(
+                timeout=Config.DETACHED_DRIVER_QUIT_TIMEOUT
+            )
 
             if retire_after_finalize:
                 self._retire_capture_run()
@@ -272,6 +267,60 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
 
         return True
 
+    def _ensure_detached_driver_cleanup_state(self) -> None:
+        state = getattr(self, "__dict__", {})
+        if state.get("_detached_driver_cleanup_lock") is None:
+            self._detached_driver_cleanup_lock = threading.Lock()
+        if "_detached_driver_cleanup_in_progress" not in state:
+            self._detached_driver_cleanup_in_progress = False
+
+    def _register_detached_driver(self, driver) -> None:
+        if not driver:
+            return
+        with self._detached_drivers_lock:
+            if any(existing is driver for existing in self._detached_drivers):
+                return
+            self._detached_drivers.append(driver)
+
+    def _schedule_detached_driver_cleanup(self, timeout: float | None = None) -> bool:
+        self._ensure_detached_driver_cleanup_state()
+        with self._detached_drivers_lock:
+            has_detached = bool(self._detached_drivers)
+        if not has_detached:
+            return False
+
+        with self._detached_driver_cleanup_lock:
+            if self._detached_driver_cleanup_in_progress:
+                return False
+            self._detached_driver_cleanup_in_progress = True
+
+        cleanup_timeout = max(
+            0.0,
+            float(
+                timeout
+                if timeout is not None
+                else Config.DETACHED_DRIVER_QUIT_TIMEOUT
+            ),
+        )
+
+        def cleanup_worker() -> None:
+            try:
+                self._cleanup_detached_drivers_with_timeout(timeout=cleanup_timeout)
+            finally:
+                with self._detached_driver_cleanup_lock:
+                    self._detached_driver_cleanup_in_progress = False
+
+        started = self._start_background_thread(
+            cleanup_worker,
+            "DetachedDriverCleanupWorker",
+        )
+        if started:
+            return True
+
+        with self._detached_driver_cleanup_lock:
+            self._detached_driver_cleanup_in_progress = False
+        return False
+
     def _wait_worker_shutdown(self, timeout: float) -> bool:
         if not self.worker or not self.worker.is_alive():
             return True
@@ -283,22 +332,30 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             detached_drivers = list(self._detached_drivers)
             self._detached_drivers.clear()
 
+        failed_drivers: list[object] = []
         for idx, drv in enumerate(detached_drivers, start=1):
-            self._force_quit_driver_with_timeout(
+            closed = self._force_quit_driver_with_timeout(
                 drv,
                 timeout=timeout,
                 source=f"detached_{idx}",
             )
+            if not closed:
+                failed_drivers.append(drv)
+
+        if failed_drivers:
+            with self._detached_drivers_lock:
+                for drv in failed_drivers:
+                    if any(existing is drv for existing in self._detached_drivers):
+                        continue
+                    self._detached_drivers.append(drv)
 
     def _ensure_background_registry(self) -> None:
-        if not hasattr(self, "_active_background_threads") or self._active_background_threads is None:
+        state = getattr(self, "__dict__", {})
+        if state.get("_active_background_threads") is None:
             self._active_background_threads = set()
-        if (
-            not hasattr(self, "_active_background_threads_lock")
-            or self._active_background_threads_lock is None
-        ):
+        if state.get("_active_background_threads_lock") is None:
             self._active_background_threads_lock = threading.Lock()
-        if not hasattr(self, "_background_shutdown_initiated"):
+        if "_background_shutdown_initiated" not in state:
             self._background_shutdown_initiated = False
 
     def _begin_background_shutdown(self) -> None:
@@ -371,6 +428,71 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
     def _wait_active_save_threads(self, timeout: float) -> None:
         self._wait_active_background_threads(timeout=timeout)
 
+    def _get_live_background_threads(self) -> list[threading.Thread]:
+        self._ensure_background_registry()
+        current_thread = threading.current_thread()
+        with self._active_background_threads_lock:
+            live_threads = [
+                t
+                for t in self._active_background_threads
+                if t is not None and t is not current_thread and t.is_alive()
+            ]
+            if not live_threads:
+                self._active_background_threads = {
+                    t for t in self._active_background_threads if t.is_alive()
+                }
+            return live_threads
+
+    def _wait_for_background_threads_during_exit(self) -> None:
+        warning_after = max(0.0, float(Config.SAVE_THREAD_SHUTDOWN_TIMEOUT))
+        wait_started_at = time.monotonic()
+        warning_emitted = False
+        app = QApplication.instance()
+
+        while True:
+            live_threads = self._get_live_background_threads()
+            if not live_threads:
+                return
+
+            if (
+                not warning_emitted
+                and warning_after > 0
+                and time.monotonic() - wait_started_at >= warning_after
+            ):
+                warning_emitted = True
+                live_thread_names = ", ".join(
+                    sorted(
+                        thread.name or f"thread-{idx}"
+                        for idx, thread in enumerate(live_threads, start=1)
+                    )
+                )
+                logger.warning(
+                    "종료 대기 중 백그라운드 작업이 아직 남아 있습니다: %s개 (%s)",
+                    len(live_threads),
+                    live_thread_names or "unnamed",
+                )
+                try:
+                    self._show_toast(
+                        "백그라운드 작업이 끝날 때까지 종료를 기다립니다.",
+                        "warning",
+                        2500,
+                    )
+                except Exception:
+                    logger.debug("종료 대기 toast 표시 실패", exc_info=True)
+
+            for thread in live_threads:
+                thread.join(timeout=0.1)
+
+            if app is not None:
+                try:
+                    app.processEvents()
+                except Exception:
+                    logger.debug("종료 대기 중 processEvents 실패", exc_info=True)
+            try:
+                self._process_message_queue()
+            except Exception:
+                logger.debug("종료 대기 중 큐 처리 실패", exc_info=True)
+
     def closeEvent(self, a0: QCloseEvent | None) -> None:
         main_window_mod = _main_window_public()
         if a0 is None:
@@ -400,67 +522,35 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
                 return
             self._stop(for_app_exit=True)
 
-        subtitles_snapshot = self._build_prepared_entries_snapshot()
-        subtitle_count = len(subtitles_snapshot)
+        if bool(self.__dict__.get("_session_save_in_progress", False)):
+            try:
+                self._set_status("세션 저장 마무리 대기 중...", "warning")
+            except Exception:
+                logger.debug("세션 저장 종료 대기 상태 텍스트 갱신 실패", exc_info=True)
+            try:
+                self._update_tray_status("🟡 세션 저장 마무리 중")
+            except Exception:
+                logger.debug("세션 저장 종료 대기 트레이 상태 갱신 실패", exc_info=True)
+            self._wait_for_background_threads_during_exit()
+            try:
+                self._process_message_queue()
+            except Exception:
+                logger.debug("세션 저장 종료 대기 후 큐 처리 실패", exc_info=True)
 
-        if self._has_dirty_session():
-            if subtitle_count > 0:
-                reply = main_window_mod.QMessageBox.question(
-                    self,
-                    "종료 확인",
-                    f"저장하지 않은 세션 변경 {subtitle_count}개가 있습니다.\n\n"
-                    "세션(JSON + DB)으로 저장하시겠습니까?",
-                    main_window_mod.QMessageBox.StandardButton.Save
-                    | main_window_mod.QMessageBox.StandardButton.Discard
-                    | main_window_mod.QMessageBox.StandardButton.Cancel,
-                )
-                if reply == main_window_mod.QMessageBox.StandardButton.Cancel:
-                    event.ignore()
-                    return
-                if reply == main_window_mod.QMessageBox.StandardButton.Save:
-                    filename = (
-                        f"{Config.SESSION_DIR}/세션_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                    )
-                    path, _ = main_window_mod.QFileDialog.getSaveFileName(
-                        self, "세션 저장", filename, "JSON (*.json)"
-                    )
-                    if not path:
-                        event.ignore()
-                        return
-                    try:
-                        Path(path).parent.mkdir(parents=True, exist_ok=True)
-                        info = self._write_session_snapshot(
-                            path,
-                            subtitles_snapshot,
-                            include_db=True,
-                        )
-                        self._clear_session_dirty()
-                        db_error = str(info.get("db_error", "") or "").strip()
-                        if db_error:
-                            main_window_mod.QMessageBox.warning(
-                                self,
-                                "DB 저장 경고",
-                                "세션 JSON 저장은 완료되었지만 DB 저장은 실패했습니다.\n"
-                                f"위치: {path}\n오류: {db_error}",
-                            )
-                    except Exception as e:
-                        main_window_mod.QMessageBox.critical(self, "오류", f"세션 저장 실패: {e}")
-                        event.ignore()
-                        return
-            else:
-                reply = main_window_mod.QMessageBox.question(
-                    self,
-                    "종료 확인",
-                    "저장되지 않은 변경이 있습니다.\n종료하시겠습니까?",
-                    main_window_mod.QMessageBox.StandardButton.Discard
-                    | main_window_mod.QMessageBox.StandardButton.Cancel,
-                )
-                if reply == main_window_mod.QMessageBox.StandardButton.Cancel:
-                    event.ignore()
-                    return
+        if not self._confirm_dirty_session_action("종료"):
+            event.ignore()
+            return
 
         self._begin_background_shutdown()
-        self._wait_active_background_threads(timeout=Config.SAVE_THREAD_SHUTDOWN_TIMEOUT)
+        try:
+            self._set_status("종료 대기 중...", "warning")
+        except Exception:
+            logger.debug("종료 대기 상태 텍스트 갱신 실패", exc_info=True)
+        try:
+            self._update_tray_status("🟡 종료 대기 중")
+        except Exception:
+            logger.debug("종료 대기 트레이 상태 갱신 실패", exc_info=True)
+        self._wait_for_background_threads_during_exit()
         self._clear_recovery_state()
 
         self.settings.setValue("geometry", self.saveGeometry())
@@ -469,20 +559,22 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
         self.queue_timer.stop()
         self.stats_timer.stop()
         self.backup_timer.stop()
-
-        if self.realtime_file:
+        cleanup_timer = self.__dict__.get("detached_driver_cleanup_timer")
+        if cleanup_timer is not None:
             try:
-                self.realtime_file.close()
-            except Exception as e:
-                logger.debug(f"파일 닫기 오류: {e}")
-            self.realtime_file = None
+                cleanup_timer.stop()
+            except Exception:
+                logger.debug("분리된 드라이버 정리 타이머 중지 실패", exc_info=True)
+        self._close_realtime_save_file()
+        self._reset_realtime_save_run_state()
+        self._initial_recovery_snapshot_done = False
 
         driver = self._take_current_driver()
         if driver:
             self._force_quit_driver_with_timeout(
-                driver, timeout=2.0, source="close_event_idle"
+                driver, timeout=Config.DRIVER_QUIT_TIMEOUT, source="close_event_idle"
             )
-        self._cleanup_detached_drivers_with_timeout(timeout=2.0)
+        self._cleanup_detached_drivers_with_timeout(timeout=Config.DETACHED_DRIVER_QUIT_TIMEOUT)
 
         db = self.db
         if db is not None:

@@ -4,7 +4,7 @@
 """
 
 import logging
-from datetime import datetime
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from core.config import Config
@@ -15,7 +15,7 @@ def setup_logging():
     log_dir = Path(Config.LOG_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    log_file = log_dir / f"subtitle_{datetime.now().strftime('%Y%m%d')}.log"
+    log_file = log_dir / "subtitle.log"
 
     # 로거 설정
     logger = logging.getLogger("SubtitleExtractor")
@@ -25,9 +25,16 @@ def setup_logging():
     if logger.handlers:
         return logger
 
-    # 파일 핸들러 (DEBUG 레벨)
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    # 파일 핸들러 (DEBUG 레벨, 자정 기준 회전)
+    file_handler = TimedRotatingFileHandler(
+        log_file,
+        when="midnight",
+        interval=1,
+        backupCount=max(1, int(getattr(Config, "LOG_RETENTION_DAYS", 14) or 14)),
+        encoding="utf-8",
+    )
     file_handler.setLevel(logging.DEBUG)
+    file_handler.suffix = "%Y%m%d"
     file_format = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(funcName)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",

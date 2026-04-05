@@ -180,10 +180,7 @@ class MainWindowViewRenderMixin(ViewRenderBase):
             saved_scroll = scrollbar.value()
             scrollbar.blockSignals(True)
 
-        with self.subtitle_lock:
-            subtitles_copy = [entry.clone() for entry in self.subtitles]
-
-        total_count = len(subtitles_copy)
+        total_count = 0
         render_offset = 0
         anchor_index = None
         search_matches = list(getattr(self, "search_matches", []))
@@ -200,16 +197,20 @@ class MainWindowViewRenderMixin(ViewRenderBase):
             focus_entry_index = getattr(self, "_search_focus_entry_index", None)
             if focus_entry_index is not None:
                 anchor_index = int(focus_entry_index)
-        if total_count > Config.MAX_RENDER_ENTRIES:
-            if anchor_index is None:
-                render_offset = total_count - Config.MAX_RENDER_ENTRIES
-            else:
-                max_offset = max(0, total_count - Config.MAX_RENDER_ENTRIES)
-                render_offset = min(
-                    max(0, anchor_index - (Config.MAX_RENDER_ENTRIES // 2)),
-                    max_offset,
-                )
-            subtitles_copy = subtitles_copy[render_offset:]
+        with self.subtitle_lock:
+            total_count = len(self.subtitles)
+            if total_count > Config.MAX_RENDER_ENTRIES:
+                if anchor_index is None:
+                    render_offset = total_count - Config.MAX_RENDER_ENTRIES
+                else:
+                    max_offset = max(0, total_count - Config.MAX_RENDER_ENTRIES)
+                    render_offset = min(
+                        max(0, anchor_index - (Config.MAX_RENDER_ENTRIES // 2)),
+                        max_offset,
+                    )
+            subtitles_copy = [
+                entry.clone() for entry in self.subtitles[render_offset:]
+            ]
 
         visible_count = len(subtitles_copy)
         last_text = subtitles_copy[-1].text if subtitles_copy else ""

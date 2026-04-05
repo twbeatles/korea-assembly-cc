@@ -10,6 +10,7 @@ from zipfile import ZipFile
 import pytest
 
 import ui.main_window_persistence as persistence_mod
+import ui.main_window_impl.runtime_driver as runtime_driver_mod
 from core.config import Config
 from core.models import SubtitleEntry
 from core.subtitle_pipeline import create_empty_capture_state
@@ -59,6 +60,22 @@ class _RealtimeFile:
 
     def flush(self) -> None:
         assert self.lock.held is False
+
+
+class _FailingRealtimeFile:
+    def __init__(self) -> None:
+        self.write_calls = 0
+        self.closed = False
+
+    def write(self, _line: str) -> None:
+        self.write_calls += 1
+        raise OSError("disk full")
+
+    def flush(self) -> None:
+        raise AssertionError("write 실패 후 flush는 호출되면 안 됩니다.")
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class _FakePythonCom:
@@ -187,6 +204,68 @@ def test_add_text_to_subtitles_writes_realtime_after_releasing_lock():
 
     assert len(win.subtitles) == 1
     assert realtime.lines == [f"[{win.subtitles[0].timestamp.strftime('%H:%M:%S')}] 첫 문장\n"]
+
+
+def test_add_text_to_subtitles_invalidates_undo_and_schedules_initial_recovery():
+    win = _build_window()
+    invalidated: list[bool] = []
+    scheduled: list[list[str]] = []
+    win._invalidate_destructive_undo = lambda: invalidated.append(True)
+    win._schedule_initial_recovery_snapshot_if_needed = (
+        lambda entries: scheduled.append([entry.text for entry in entries]) or True
+    )
+
+    MainWindow._add_text_to_subtitles(win, "첫 문장")
+
+    assert invalidated == [True]
+    assert scheduled == [["첫 문장"]]
+
+
+def test_open_realtime_save_failure_marks_run_inactive(monkeypatch):
+    win = _build_window()
+    win.realtime_save_check = SimpleNamespace(isChecked=lambda: True)
+    win._capture_source_url = "https://assembly.example/live"
+    win._capture_source_committee = "행정안전위원회"
+    win._capture_source_headless = False
+    win._capture_source_realtime = True
+    statuses: list[tuple[str, str]] = []
+    toasts: list[str] = []
+    win._set_status = lambda message, level="info": statuses.append((message, level))
+    win._show_toast = lambda message, *_args, **_kwargs: toasts.append(str(message))
+
+    def fail_mkdir(self, *args, **kwargs):
+        raise OSError("mkdir blocked")
+
+    monkeypatch.setattr(runtime_driver_mod.Path, "mkdir", fail_mkdir)
+
+    assert MainWindow._open_realtime_save_for_run(win) is False
+    assert win.realtime_file is None
+    assert win._capture_source_realtime is False
+    assert win._realtime_save_status == "failed"
+    assert statuses == [("실시간 저장 실패 - 이번 실행에서는 중단됨", "warning")]
+    assert toasts == ["실시간 저장 파일을 열지 못해 이번 실행에서는 실시간 저장을 중단합니다."]
+
+
+def test_write_realtime_line_failure_disables_realtime_for_run():
+    win = _build_window()
+    win.realtime_file = _FailingRealtimeFile()
+    win._capture_source_url = "https://assembly.example/live"
+    win._capture_source_committee = "행정안전위원회"
+    win._capture_source_headless = False
+    win._capture_source_realtime = True
+    statuses: list[tuple[str, str]] = []
+    toasts: list[str] = []
+    win._set_status = lambda message, level="info": statuses.append((message, level))
+    win._show_toast = lambda message, *_args, **_kwargs: toasts.append(str(message))
+
+    MainWindow._write_realtime_line(win, "첫 문장\n")
+    MainWindow._write_realtime_line(win, "둘째 문장\n")
+
+    assert win.realtime_file is None
+    assert win._capture_source_realtime is False
+    assert win._realtime_save_status == "failed"
+    assert statuses == [("실시간 저장 실패 - 이번 실행에서는 중단됨", "warning")]
+    assert toasts == ["실시간 저장 쓰기 실패로 이번 실행의 실시간 저장을 중단합니다."]
 
 
 def test_finalize_subtitle_skips_text_already_materialized_in_capture_state():

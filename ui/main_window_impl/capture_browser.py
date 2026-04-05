@@ -113,17 +113,49 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
         chrome_factory = cast(Callable[..., Any], getattr(capture_mod.webdriver, "Chrome"))
         return chrome_factory(options=options)
 
-    def _dispose_driver(self, driver: Any | None) -> None:
+    def _dispose_driver(
+        self,
+        driver: Any | None,
+        *,
+        source: str = "worker_dispose",
+        timeout: float | None = None,
+    ) -> bool:
         if not driver:
-            return
+            return True
+        quit_succeeded = False
         try:
-            driver.quit()
+            quit_timeout = (
+                max(0.0, float(timeout))
+                if timeout is not None
+                else Config.DRIVER_QUIT_TIMEOUT
+            )
+            force_quit = getattr(self, "_force_quit_driver_with_timeout", None)
+            if callable(force_quit):
+                quit_succeeded = bool(
+                    force_quit(driver, timeout=quit_timeout, source=source)
+                )
+            else:
+                driver.quit()
+                quit_succeeded = True
         except Exception as quit_err:
             logger.debug("드라이버 종료 실패, detached 목록에 추가: %s", quit_err)
-            with self._detached_drivers_lock:
-                self._detached_drivers.append(driver)
         finally:
+            if not quit_succeeded:
+                register_detached = getattr(self, "_register_detached_driver", None)
+                if callable(register_detached):
+                    register_detached(driver)
+                else:
+                    with self._detached_drivers_lock:
+                        if not any(existing is driver for existing in self._detached_drivers):
+                            self._detached_drivers.append(driver)
+                schedule_cleanup = getattr(self, "_schedule_detached_driver_cleanup", None)
+                if callable(schedule_cleanup):
+                    try:
+                        schedule_cleanup(timeout=Config.DETACHED_DRIVER_QUIT_TIMEOUT)
+                    except Exception:
+                        logger.debug("detached driver cleanup 예약 실패", exc_info=True)
             self._clear_current_driver_if(driver)
+        return quit_succeeded
 
     def _resolve_active_selector(
         self, driver: Any, selector_candidates: list[str]
@@ -230,7 +262,7 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                 observer_frame_path,
             )
         except Exception:
-            self._dispose_driver(driver)
+            self._dispose_driver(driver, source="open_session_failure")
             raise
 
     def _check_driver_health(self, driver: Any) -> tuple[int | None, str]:
@@ -456,7 +488,8 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                     if self.stop_event.is_set():
                         break
 
-                    if self.auto_reconnect_enabled and self._is_recoverable_webdriver_error(e):
+                    recoverable_error = self._is_recoverable_webdriver_error(e)
+                    if self.auto_reconnect_enabled and recoverable_error:
                         reconnect_attempt += 1
                         if reconnect_attempt <= Config.MAX_RECONNECT_ATTEMPTS:
                             delay = self._get_reconnect_delay(reconnect_attempt)
@@ -477,7 +510,10 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                                 Config.MAX_RECONNECT_ATTEMPTS,
                             )
 
-                            self._dispose_driver(driver)
+                            self._dispose_driver(
+                                driver,
+                                source=f"reconnect_attempt_{reconnect_attempt}",
+                            )
                             driver = None
 
                             if self.stop_event.wait(timeout=delay):
@@ -533,6 +569,13 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                                 )
                             )
                             break
+                    elif recoverable_error:
+                        logger.error("재연결 비활성 상태에서 WebDriver 오류로 수집 종료: %s", e)
+                        self.message_queue.put(("connection_status", {"status": "disconnected"}))
+                        self.message_queue.put(
+                            ("error", f"Chrome 연결이 끊겨 수집을 종료합니다: {e}")
+                        )
+                        break
                     else:
                         logger.warning(f"모니터링 중 오류: {e}")
                         self.stop_event.wait(timeout=0.5)
@@ -542,7 +585,7 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                 self.message_queue.put(("error", str(e)))
 
         finally:
-            self._dispose_driver(driver)
+            self._dispose_driver(driver, source="worker_finally")
             if callable(clear_worker_run_id):
                 clear_worker_run_id()
             self.message_queue.put(("finished", ""))

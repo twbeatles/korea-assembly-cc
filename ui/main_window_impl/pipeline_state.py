@@ -44,21 +44,19 @@ PipelineStateBase = object
 
 class MainWindowPipelineStateMixin(PipelineStateBase):
     def _bind_subtitles_to_capture_state(self) -> None:
-        if not hasattr(self, "capture_state") or not isinstance(
-            self.capture_state, CaptureSessionState
-        ):
+        state = self.__dict__.get("capture_state")
+        if not isinstance(state, CaptureSessionState):
             return
         with self.subtitle_lock:
-            if getattr(self, "subtitles", None) is not self.capture_state.entries:
-                self.subtitles = self.capture_state.entries
+            if self.__dict__.get("subtitles") is not state.entries:
+                self.subtitles = state.entries
 
     def _ensure_capture_runtime_state(self) -> None:
         pipeline_mod = _pipeline_public()
-        if not hasattr(self, "capture_state") or not isinstance(
-            self.capture_state, CaptureSessionState
-        ):
+        capture_state = self.__dict__.get("capture_state")
+        if not isinstance(capture_state, CaptureSessionState):
             state = create_empty_capture_state()
-            existing_entries = getattr(self, "subtitles", [])
+            existing_entries = self.__dict__.get("subtitles", [])
             if isinstance(existing_entries, list):
                 state.entries = existing_entries
             else:
@@ -67,11 +65,12 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
                 pipeline_mod.rebuild_confirmed_history(state)
             self.capture_state = state
         self._bind_subtitles_to_capture_state()
-        if not hasattr(self, "live_capture_ledger"):
+        state_dict = self.__dict__
+        if "live_capture_ledger" not in state_dict:
             self.live_capture_ledger = create_empty_live_capture_ledger()
-        if not hasattr(self, "_pending_subtitle_reset_source"):
+        if "_pending_subtitle_reset_source" not in state_dict:
             self._pending_subtitle_reset_source = ""
-        if not hasattr(self, "_pending_subtitle_reset_timer"):
+        if "_pending_subtitle_reset_timer" not in state_dict:
             try:
                 timer = QTimer(self)
                 timer.setSingleShot(True)
@@ -402,4 +401,10 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             updated_existing=updated_existing,
             force_refresh=force_refresh,
         )
+        if appended_entries or updated_existing:
+            self._mark_session_dirty()
+            self._invalidate_destructive_undo()
+            self._schedule_initial_recovery_snapshot_if_needed(
+                self._build_prepared_entries_snapshot()
+            )
         return changed

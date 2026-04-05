@@ -133,6 +133,9 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
 
         self.realtime_file = None
         self._realtime_error_count = 0
+        self._realtime_save_status = "inactive"
+        self._realtime_save_path = ""
+        self._realtime_save_active = False
 
         self.capture_state: CaptureSessionState = create_empty_capture_state()
         self.subtitles: list[SubtitleEntry] = self.capture_state.entries
@@ -168,16 +171,23 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._active_capture_run_id: int | None = None
         self._worker_message_lock = threading.Lock()
         self._coalesced_worker_messages: dict[tuple[int, str], Any] = {}
+        self._control_message_lock = threading.Lock()
+        self._coalesced_control_messages: dict[object, tuple[str, Any]] = {}
         self._last_status_message = ""
         self._session_save_in_progress = False
         self._session_load_in_progress = False
         self._reflow_in_progress = False
+        self._initial_recovery_snapshot_done = False
+        self._destructive_undo_snapshot: dict[str, Any] | None = None
+        self._restoring_destructive_undo = False
         self._startup_recovery_prompted = False
         self._db_history_dialog_state: dict[str, Any] | None = None
         self._db_search_dialog_state: dict[str, Any] | None = None
         self._active_background_threads: set[threading.Thread] = set()
         self._active_background_threads_lock = threading.Lock()
         self._background_shutdown_initiated = False
+        self._detached_driver_cleanup_lock = threading.Lock()
+        self._detached_driver_cleanup_in_progress = False
 
         self.url_history = self._load_url_history()
 
@@ -190,6 +200,12 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self.queue_timer = QTimer(self)
         self.queue_timer.timeout.connect(self._process_message_queue)
         self.queue_timer.start(Config.QUEUE_PROCESS_INTERVAL)
+
+        self.detached_driver_cleanup_timer = QTimer(self)
+        self.detached_driver_cleanup_timer.timeout.connect(
+            lambda: self._schedule_detached_driver_cleanup()
+        )
+        self.detached_driver_cleanup_timer.start(Config.DETACHED_DRIVER_CLEANUP_INTERVAL)
 
         self.stats_timer = QTimer(self)
         self.stats_timer.timeout.connect(self._update_stats)

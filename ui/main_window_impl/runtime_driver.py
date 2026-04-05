@@ -3,10 +3,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from core import utils
 from core.config import Config
+from core.logging_utils import logger
+from core.models import SubtitleEntry
 from ui.main_window_impl.contracts import RuntimeHost
 
 
@@ -14,6 +18,199 @@ RuntimeBase = object
 
 
 class MainWindowRuntimeDriverMixin(RuntimeBase):
+    def _update_realtime_status_indicator(self) -> None:
+        label = self.__dict__.get("realtime_status_label")
+        if label is None:
+            return
+
+        status = str(self.__dict__.get("_realtime_save_status", "inactive") or "inactive")
+        path = str(self.__dict__.get("_realtime_save_path", "") or "")
+        if status == "active":
+            label.setText("💾 실시간 저장 중")
+            label.setToolTip(path or "실시간 저장이 정상 동작 중입니다.")
+            label.setStyleSheet("color: #3fb950; background: transparent; border: none;")
+            label.show()
+            return
+        if status == "failed":
+            label.setText("⚠️ 실시간 저장 실패")
+            label.setToolTip(path or "실시간 저장이 실패하여 현재 실행에서 중단되었습니다.")
+            label.setStyleSheet("color: #d29922; background: transparent; border: none;")
+            label.show()
+            return
+        if label.isVisible():
+            label.hide()
+        label.setText("")
+        label.setToolTip("")
+
+    def _set_realtime_save_status(self, status: str, *, path: str = "") -> None:
+        normalized = str(status or "inactive").strip().lower() or "inactive"
+        if normalized not in {"inactive", "active", "failed"}:
+            normalized = "inactive"
+        self._realtime_save_status = normalized
+        self._realtime_save_path = str(path or "")
+        self._realtime_save_active = normalized == "active"
+        self._update_realtime_status_indicator()
+
+    def _reset_realtime_save_run_state(self) -> None:
+        self._realtime_error_count = 0
+        self._set_realtime_save_status("inactive")
+
+    def _close_realtime_save_file(self) -> None:
+        realtime_file = self.__dict__.get("realtime_file")
+        if realtime_file is None:
+            return
+        try:
+            realtime_file.close()
+        except Exception:
+            pass
+        self.realtime_file = None
+
+    def _disable_realtime_save_for_run(
+        self,
+        *,
+        message: str,
+        toast_message: str = "",
+        error: object | None = None,
+    ) -> None:
+        if error is not None:
+            logger.error("실시간 저장 중단: %s", error)
+        self._close_realtime_save_file()
+        self._set_capture_source_metadata(
+            self.__dict__.get("_capture_source_url", ""),
+            self.__dict__.get("_capture_source_committee", ""),
+            headless=bool(self.__dict__.get("_capture_source_headless", False)),
+            realtime=False,
+        )
+        self._set_realtime_save_status(
+            "failed",
+            path=str(message or ""),
+        )
+        self._set_status("실시간 저장 실패 - 이번 실행에서는 중단됨", "warning")
+        if toast_message:
+            self._show_toast(toast_message, "warning", 4000)
+
+    def _open_realtime_save_for_run(self) -> bool:
+        self._reset_realtime_save_run_state()
+        self.realtime_file = None
+        if not bool(getattr(self.realtime_save_check, "isChecked", lambda: False)()):
+            return False
+
+        try:
+            Path(Config.REALTIME_DIR).mkdir(exist_ok=True)
+            filename = (
+                f"{Config.REALTIME_DIR}/자막_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            )
+            self.realtime_file = open(filename, "w", encoding="utf-8-sig")
+            self._set_realtime_save_status("active", path=filename)
+            return True
+        except Exception as e:
+            logger.error("실시간 저장 파일 생성 오류: %s", e)
+            self.realtime_file = None
+            self._disable_realtime_save_for_run(
+                message=str(e),
+                toast_message="실시간 저장 파일을 열지 못해 이번 실행에서는 실시간 저장을 중단합니다.",
+            )
+            return False
+
+    def _block_session_replacement_while_saving(self, action_name: str) -> bool:
+        if not bool(self.__dict__.get("_session_save_in_progress", False)):
+            return False
+        action_label = str(action_name or "작업").strip() or "작업"
+        self._set_status("세션 저장 마무리 대기 중...", "warning")
+        self._show_toast(
+            f"세션 저장 완료 후 다시 시도하세요. ({action_label})",
+            "warning",
+            3000,
+        )
+        return True
+
+    def _update_destructive_undo_action_state(self) -> None:
+        action = self.__dict__.get("undo_destructive_action")
+        if action is None:
+            return
+        has_snapshot = bool(self.__dict__.get("_destructive_undo_snapshot"))
+        try:
+            action.setEnabled((not bool(self.__dict__.get("is_running", False))) and has_snapshot)
+        except Exception:
+            return
+
+    def _clear_destructive_undo_state(self) -> None:
+        self._destructive_undo_snapshot = None
+        self._update_destructive_undo_action_state()
+
+    def _invalidate_destructive_undo(self) -> None:
+        if bool(self.__dict__.get("_restoring_destructive_undo", False)):
+            return
+        self._clear_destructive_undo_state()
+
+    def _store_destructive_undo_snapshot(self) -> bool:
+        if bool(self.__dict__.get("_restoring_destructive_undo", False)):
+            return False
+
+        entries = [entry.clone() for entry in self._build_prepared_entries_snapshot()]
+        self._destructive_undo_snapshot = {
+            "subtitles": entries,
+            "capture_source_url": str(self.__dict__.get("_capture_source_url", "") or ""),
+            "capture_source_committee": str(self.__dict__.get("_capture_source_committee", "") or ""),
+            "capture_source_headless": bool(self.__dict__.get("_capture_source_headless", False)),
+            "capture_source_realtime": bool(self.__dict__.get("_capture_source_realtime", False)),
+            "current_url": str(self.__dict__.get("current_url", "") or ""),
+            "dirty": self._has_dirty_session(),
+        }
+        self._update_destructive_undo_action_state()
+        return True
+
+    def _notify_destructive_undo_available(self) -> None:
+        self._update_destructive_undo_action_state()
+        self._show_toast("되돌리기 가능 (Ctrl+Z)", "info", 2500)
+
+    def _restore_last_destructive_change(self) -> bool:
+        if self._is_runtime_mutation_blocked("되돌리기"):
+            return False
+
+        snapshot = self.__dict__.get("_destructive_undo_snapshot")
+        if not isinstance(snapshot, dict):
+            self._show_toast("되돌릴 변경이 없습니다.", "info", 2000)
+            return False
+
+        self._restoring_destructive_undo = True
+        try:
+            entries = [
+                entry.clone()
+                for entry in snapshot.get("subtitles", [])
+                if isinstance(entry, SubtitleEntry)
+            ]
+            self._replace_subtitles_and_refresh(
+                entries,
+                keep_history_from_subtitles=bool(entries),
+            )
+            self._set_capture_source_metadata(
+                str(snapshot.get("capture_source_url", "") or ""),
+                str(snapshot.get("capture_source_committee", "") or ""),
+                headless=bool(snapshot.get("capture_source_headless", False)),
+                realtime=bool(snapshot.get("capture_source_realtime", False)),
+            )
+            restored_current_url = str(snapshot.get("current_url", "") or "")
+            self.current_url = restored_current_url
+            url_combo = self.__dict__.get("url_combo")
+            if url_combo is not None:
+                try:
+                    url_combo.setCurrentText(restored_current_url)
+                except Exception:
+                    try:
+                        url_combo.setEditText(restored_current_url)
+                    except Exception:
+                        pass
+            if bool(snapshot.get("dirty", False)):
+                self._mark_session_dirty()
+            else:
+                self._clear_session_dirty()
+            self._show_toast("마지막 파괴적 변경을 되돌렸습니다.", "success", 2500)
+            return True
+        finally:
+            self._restoring_destructive_undo = False
+            self._clear_destructive_undo_state()
+
     def _is_auto_clean_newlines_enabled(self) -> bool:
         checkbox = self.__dict__.get("auto_clean_newlines_check")
         if checkbox is not None:
@@ -48,6 +245,7 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
                 control.setEnabled(should_enable)
             except Exception:
                 continue
+        self._update_destructive_undo_action_state()
 
     def _set_capture_source_metadata(
         self,
@@ -89,6 +287,16 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
 
     def _has_dirty_session(self) -> bool:
         return bool(self.__dict__.get("_session_dirty", False))
+
+    def _coerce_highlight_sequence(self, value: object) -> int:
+        if value is None:
+            return -1
+        if isinstance(value, str) and not value.strip():
+            return -1
+        try:
+            return int(value)
+        except Exception:
+            return -1
 
     def _handle_escape_shortcut(self) -> None:
         search_frame = self.__dict__.get("search_frame")

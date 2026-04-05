@@ -231,7 +231,63 @@ def test_extraction_worker_respects_auto_reconnect_setting(monkeypatch):
 
     MainWindow._extraction_worker(win, "https://example.com/live", "#viewSubtit", False)
 
+    queued = []
+    while not win.message_queue.empty():
+        queued.append(win.message_queue.get_nowait())
+
     assert delay_calls == []
+    assert any(
+        msg_type == "error" and "Chrome 연결이 끊겨 수집을 종료합니다" in str(payload)
+        for msg_type, payload in queued
+        if isinstance((msg_type, payload), tuple)
+    )
+
+
+def test_dispose_driver_uses_timeout_wrapper_and_quarantines_failed_driver():
+    win = _build_window(auto_reconnect_enabled=False)
+    driver = _FakeDriver()
+    cleared: list[object] = []
+    force_quit_calls: list[tuple[object, float, str]] = []
+    scheduled: list[float | None] = []
+
+    win._force_quit_driver_with_timeout = (
+        lambda drv, timeout=0.0, source="": force_quit_calls.append((drv, timeout, source))
+        or False
+    )
+    win._clear_current_driver_if = lambda drv: cleared.append(drv)
+    win._schedule_detached_driver_cleanup = (
+        lambda timeout=None: scheduled.append(timeout) or True
+    )
+
+    assert MainWindow._dispose_driver(win, driver, source="worker_finally") is False
+    assert force_quit_calls == [(driver, mw_mod.Config.DRIVER_QUIT_TIMEOUT, "worker_finally")]
+    assert win._detached_drivers == [driver]
+    assert scheduled == [mw_mod.Config.DETACHED_DRIVER_QUIT_TIMEOUT]
+    assert cleared == [driver]
+
+
+def test_cleanup_detached_drivers_requeues_failed_driver():
+    win = MainWindow.__new__(MainWindow)
+    keep_driver = object()
+    closed_driver = object()
+    win._detached_drivers = [keep_driver, closed_driver]
+    win._detached_drivers_lock = threading.Lock()
+
+    force_quit_calls: list[tuple[object, float, str]] = []
+
+    def fake_force_quit(driver, timeout=0.0, source=""):
+        force_quit_calls.append((driver, timeout, source))
+        return driver is closed_driver
+
+    win._force_quit_driver_with_timeout = fake_force_quit
+
+    MainWindow._cleanup_detached_drivers_with_timeout(win, timeout=0.25)
+
+    assert force_quit_calls == [
+        (keep_driver, 0.25, "detached_1"),
+        (closed_driver, 0.25, "detached_2"),
+    ]
+    assert win._detached_drivers == [keep_driver]
 
 
 def test_extraction_worker_detects_live_url_when_xcgcd_missing(monkeypatch):

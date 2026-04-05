@@ -190,6 +190,16 @@ class MainWindowUIMixin(MainWindowHost):
             self.clear_action.triggered.connect(self._clear_text)
             edit_menu.addAction(self.clear_action)
 
+            self.undo_destructive_action = QAction("마지막 파괴적 변경 되돌리기", self)
+            self.undo_destructive_action.setShortcut("Ctrl+Z")
+            self.undo_destructive_action.setToolTip(
+                "마지막 삭제/정리/병합 변경을 한 번 되돌립니다"
+            )
+            self.undo_destructive_action.triggered.connect(
+                self._restore_last_destructive_change
+            )
+            edit_menu.addAction(self.undo_destructive_action)
+
             # 보기 메뉴
             view_menu = menubar.addMenu("보기")
             assert view_menu is not None
@@ -869,10 +879,17 @@ class MainWindowUIMixin(MainWindowHost):
                 font-weight: 500;
             """)
 
+            self.realtime_status_label = QLabel("")
+            self.realtime_status_label.setStyleSheet(
+                "background: transparent; border: none; font-weight: 600;"
+            )
+            self.realtime_status_label.hide()
+
             status_layout.addWidget(self.status_label)
             status_layout.addStretch()
             status_layout.addWidget(self.connection_indicator)
             status_layout.addWidget(separator)
+            status_layout.addWidget(self.realtime_status_label)
             status_layout.addWidget(self.count_label)
 
             layout.addWidget(status_frame)
@@ -1514,6 +1531,9 @@ class MainWindowUIMixin(MainWindowHost):
 
     def _reset_ui(self):
             self.is_running = False
+            self._close_realtime_save_file()
+            self._reset_realtime_save_run_state()
+            self._initial_recovery_snapshot_done = False
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
             self.url_combo.setEnabled(True)

@@ -137,8 +137,10 @@ class MainWindowViewEditingMixin(ViewEditingBase):
         if reply != view_mod.QMessageBox.StandardButton.Yes:
             return
 
+        self._store_destructive_undo_snapshot()
         self._replace_subtitles_and_refresh([], keep_history_from_subtitles=False)
         self._mark_session_dirty()
+        self._notify_destructive_undo_available()
         self._show_toast(f"🗑️ {count}개 자막 삭제됨", "success")
 
     def _clear_text(self):
@@ -157,8 +159,10 @@ class MainWindowViewEditingMixin(ViewEditingBase):
         )
 
         if reply == view_mod.QMessageBox.StandardButton.Yes:
+            self._store_destructive_undo_snapshot()
             self._replace_subtitles_and_refresh([], keep_history_from_subtitles=False)
             self._mark_session_dirty()
+            self._notify_destructive_undo_available()
             self.status_label.setText("내용 삭제됨")
 
     def _edit_subtitle(self):
@@ -253,6 +257,7 @@ class MainWindowViewEditingMixin(ViewEditingBase):
                     self._refresh_text(force_full=True)
                     self._update_count_label()
                     self._mark_session_dirty()
+                    self._invalidate_destructive_undo()
                     self._show_toast("자막이 수정되었습니다.", "success")
                     dialog.accept()
                 else:
@@ -353,6 +358,7 @@ class MainWindowViewEditingMixin(ViewEditingBase):
             )
 
             if reply == view_mod.QMessageBox.StandardButton.Yes:
+                self._store_destructive_undo_snapshot()
                 with self.subtitle_lock:
                     for row in source_indexes:
                         if not (0 <= row < len(self.subtitles)):
@@ -364,6 +370,7 @@ class MainWindowViewEditingMixin(ViewEditingBase):
                 self._refresh_text(force_full=True)
                 self._update_count_label()
                 self._mark_session_dirty()
+                self._notify_destructive_undo_available()
                 self._show_toast(
                     f"{len(source_indexes)}개 자막이 삭제되었습니다.", "success"
                 )

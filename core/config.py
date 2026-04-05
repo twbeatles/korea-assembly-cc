@@ -61,6 +61,9 @@ class Config:
     PAGE_LOAD_TIMEOUT = 30    # 페이지 로딩
     ELEMENT_WAIT_TIMEOUT = 10 # 요소 대기
     SAVE_THREAD_SHUTDOWN_TIMEOUT = 5.0  # 저장 스레드 종료 대기 시간 (초)
+    DRIVER_QUIT_TIMEOUT = 2.0           # WebDriver 종료 대기 시간 (초)
+    DETACHED_DRIVER_QUIT_TIMEOUT = 1.0  # 분리된 드라이버 정리 대기 시간 (초)
+    DETACHED_DRIVER_CLEANUP_INTERVAL = 60000  # 분리된 드라이버 재정리 주기 (ms)
     
     # 자동 백업
     AUTO_BACKUP_INTERVAL = 300000      # 5분 (ms)
@@ -248,6 +251,7 @@ class Config:
     
     # 데이터베이스 (#26)
     DATABASE_PATH = str(APP_BASE_DIR / "subtitle_history.db")
+    LOG_RETENTION_DAYS = 14
     
     # 성능 최적화: 사전 컴파일된 정규식 패턴
     RE_YEAR = re.compile(r'\b\d{4}년\b')              # 년도 제거용

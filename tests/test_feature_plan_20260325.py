@@ -157,6 +157,14 @@ class _FakeTextEdit:
         self._cursor = cursor
 
 
+class _CloneCountingEntry(SubtitleEntry):
+    clone_calls = 0
+
+    def clone(self) -> SubtitleEntry:
+        type(self).clone_calls += 1
+        return super().clone()
+
+
 def _build_runtime_window() -> tuple[Any, list[str]]:
     win = MainWindow.__new__(MainWindow)
     entries = [SubtitleEntry("기존 자막", datetime(2026, 3, 25, 9, 0, 0))]
@@ -303,6 +311,24 @@ def test_search_spans_full_subtitle_list_and_restores_tail_render():
     assert target_index not in win._rendered_entry_text_spans
 
 
+def test_render_subtitles_clones_only_visible_window(monkeypatch):
+    win = _build_search_window()
+    start = datetime(2026, 3, 25, 9, 0, 0)
+    _CloneCountingEntry.clone_calls = 0
+
+    monkeypatch.setattr(mw_mod.Config, "MAX_RENDER_ENTRIES", 10)
+
+    win.subtitles = [
+        _CloneCountingEntry(f"문장 {index}", start + timedelta(seconds=index))
+        for index in range(100)
+    ]
+
+    MainWindow._render_subtitles(win)
+
+    assert _CloneCountingEntry.clone_calls == 10
+    assert win._last_render_offset == 90
+
+
 def test_complete_loaded_session_cancels_on_version_mismatch(monkeypatch):
     win, history, focus_calls = _build_session_window()
     payload = {
@@ -353,6 +379,22 @@ def test_complete_loaded_session_restores_url_and_focuses_sequence(monkeypatch):
     assert win.url_combo.current_text == "https://assembly.example/session"
     assert history == [("https://assembly.example/session", "행정안전위원회")]
     assert focus_calls == [(1, "검색어")]
+
+
+def test_complete_loaded_session_preserves_highlight_sequence_zero(monkeypatch):
+    win, history, focus_calls = _build_session_window()
+    payload = {
+        "version": Config.VERSION,
+        "url": "https://assembly.example/session",
+        "committee_name": "행정안전위원회",
+        "subtitles": [SubtitleEntry("첫 문장", datetime(2026, 3, 25, 10, 0, 0))],
+        "highlight_sequence": 0,
+        "highlight_query": "첫",
+    }
+
+    assert MainWindow._complete_loaded_session(win, payload) is True
+    assert history == [("https://assembly.example/session", "행정안전위원회")]
+    assert focus_calls == [(0, "첫")]
 
 
 def _assert_db_load_task_result_uses_common_handler(

@@ -53,12 +53,12 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
             self.realtime_file.write(line)
             self.realtime_file.flush()
             self._realtime_error_count = 0
-        except IOError as e:
-            self._realtime_error_count = getattr(self, "_realtime_error_count", 0) + 1
-            if self._realtime_error_count >= 3:
-                logger.error(f"실시간 저장 연속 실패: {e}")
-            else:
-                logger.warning(f"실시간 저장 쓰기 오류: {e}")
+        except OSError as e:
+            self._disable_realtime_save_for_run(
+                message=str(e),
+                toast_message="실시간 저장 쓰기 실패로 이번 실행의 실시간 저장을 중단합니다.",
+                error=e,
+            )
 
     def _append_text_to_subtitles_shared(
         self,
@@ -143,6 +143,10 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         if check_alert:
             self._check_keyword_alert(new_text)
         self._mark_session_dirty()
+        self._invalidate_destructive_undo()
+        self._schedule_initial_recovery_snapshot_if_needed(
+            self._build_prepared_entries_snapshot()
+        )
         self._update_count_label()
         if refresh:
             self._refresh_text(force_full=False)

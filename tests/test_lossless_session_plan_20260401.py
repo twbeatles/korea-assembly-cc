@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9,8 +11,10 @@ import pytest
 
 import ui.main_window_persistence as persistence_mod
 import ui.main_window_pipeline as pipeline_mod
+import ui.main_window_impl.runtime_lifecycle as runtime_lifecycle_mod
 from core.config import Config
 from core.models import SubtitleEntry
+from ui.main_window_common import MainWindowMessageQueue
 
 mw_mod = pytest.importorskip("ui.main_window")
 MainWindow = mw_mod.MainWindow
@@ -56,6 +60,21 @@ class _ImmediateQueue:
     def put(self, item: tuple[str, object]) -> None:
         msg_type, payload = item
         MainWindow._handle_message(self.owner, msg_type, payload)
+
+    def put_nowait(self, item: tuple[str, object]) -> None:
+        self.put(item)
+
+
+class _CloneTrackingEntry(SubtitleEntry):
+    __slots__ = ("clone_calls",)
+
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.clone_calls = 0
+
+    def clone(self) -> SubtitleEntry:
+        self.clone_calls += 1
+        return super().clone()
 
 
 class _FakeRun:
@@ -189,23 +208,62 @@ def test_complete_loaded_recovery_marks_session_dirty():
     assert win._session_dirty is True
 
 
-def test_close_event_exit_save_uses_json_and_db_and_clears_recovery(monkeypatch, tmp_path):
+def test_confirm_dirty_session_action_save_uses_json_and_db_snapshot(monkeypatch, tmp_path):
+    win = MainWindow.__new__(MainWindow)
+    win._session_dirty = True
+    win._build_prepared_entries_snapshot = lambda: [SubtitleEntry("저장 전 자막")]
+    captured: dict[str, object] = {}
+    win._write_session_snapshot = lambda path, entries, include_db=True: captured.update(
+        {"path": path, "count": len(entries), "include_db": include_db}
+    ) or {"db_error": ""}
+    win._clear_session_dirty = lambda: setattr(win, "_session_dirty", False)
+
+    monkeypatch.setattr(
+        persistence_mod.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: persistence_mod.QMessageBox.StandardButton.Save,
+    )
+    monkeypatch.setattr(
+        persistence_mod.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(tmp_path / "confirm-save.json"), "JSON (*.json)"),
+    )
+
+    assert MainWindow._confirm_dirty_session_action(win, "세션 불러오기") is True
+    assert captured["include_db"] is True
+    assert captured["count"] == 1
+    assert win._session_dirty is False
+
+
+def test_load_session_stops_when_dirty_confirmation_is_cancelled(monkeypatch):
+    win = MainWindow.__new__(MainWindow)
+    win.is_running = False
+    win._is_runtime_mutation_blocked = lambda _action: False
+    win._confirm_dirty_session_action = lambda _action: False
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("dirty confirmation이 취소되면 파일 선택기로 넘어가면 안 됩니다.")
+
+    monkeypatch.setattr(persistence_mod.QFileDialog, "getOpenFileName", _unexpected)
+
+    MainWindow._load_session(win)
+
+
+def test_close_event_uses_dirty_confirmation_and_waits_for_background_shutdown():
     win = MainWindow.__new__(MainWindow)
     win.minimize_to_tray = False
     win.tray_icon = _FakeTrayIcon()
     win.is_running = False
-    win._has_dirty_session = lambda: True
-    win._build_prepared_entries_snapshot = lambda: [SubtitleEntry("종료 전 자막")]
-    win._clear_session_dirty = lambda: None
+    win._session_save_in_progress = False
     captured: dict[str, object] = {}
-    win._write_session_snapshot = lambda path, entries, include_db=True: captured.update(
-        {"path": path, "count": len(entries), "include_db": include_db}
-    ) or {"db_error": "db failed"}
-    win._begin_background_shutdown = lambda: captured.setdefault("shutdown", True)
-    win._wait_active_background_threads = lambda timeout: captured.setdefault(
-        "wait_timeout", timeout
+    win._confirm_dirty_session_action = (
+        lambda action: captured.setdefault("dirty_action", action) or True
     )
+    win._begin_background_shutdown = lambda: captured.setdefault("shutdown", True)
+    win._wait_for_background_threads_during_exit = lambda: captured.setdefault("waited", True)
     win._clear_recovery_state = lambda: captured.setdefault("recovery_cleared", True)
+    win._set_status = lambda text, level="info": captured.setdefault("status", (text, level))
+    win._update_tray_status = lambda text: captured.setdefault("tray_status", text)
     win.settings = _FakeSettings()
     win.saveGeometry = lambda: b"geometry"
     win.saveState = lambda: b"state"
@@ -219,30 +277,297 @@ def test_close_event_exit_save_uses_json_and_db_and_clears_recovery(monkeypatch,
     )
     win.db = None
 
-    warnings: list[str] = []
-    monkeypatch.setattr(
-        mw_mod.QMessageBox,
-        "question",
-        lambda *_args, **_kwargs: mw_mod.QMessageBox.StandardButton.Save,
-    )
-    monkeypatch.setattr(
-        mw_mod.QFileDialog,
-        "getSaveFileName",
-        lambda *_args, **_kwargs: (str(tmp_path / "closing-session.json"), "JSON (*.json)"),
-    )
-    monkeypatch.setattr(
-        mw_mod.QMessageBox,
-        "warning",
-        lambda *_args, **kwargs: warnings.append(str(kwargs.get("text") or _args[2])),
-    )
+    event = _FakeEvent()
+    MainWindow.closeEvent(win, event)
+
+    assert captured["dirty_action"] == "종료"
+    assert captured["waited"] is True
+    assert captured["recovery_cleared"] is True
+    assert event.accepted is True
+
+
+def test_close_event_waits_for_session_save_completion_before_dirty_confirmation():
+    win = MainWindow.__new__(MainWindow)
+    win.minimize_to_tray = False
+    win.tray_icon = _FakeTrayIcon()
+    win.is_running = False
+    win._session_save_in_progress = True
+    order: list[str] = []
+
+    def wait_for_background() -> None:
+        order.append("wait")
+        win._session_save_in_progress = False
+
+    win._wait_for_background_threads_during_exit = wait_for_background
+    win._process_message_queue = lambda: order.append("process")
+    win._confirm_dirty_session_action = lambda _action: order.append("dirty") or True
+    win._begin_background_shutdown = lambda: order.append("shutdown")
+    win._clear_recovery_state = lambda: order.append("recovery")
+    win._set_status = lambda *_args, **_kwargs: None
+    win._update_tray_status = lambda *_args, **_kwargs: None
+    win.settings = _FakeSettings()
+    win.saveGeometry = lambda: b"geometry"
+    win.saveState = lambda: b"state"
+    win.queue_timer = _FakeTimer()
+    win.stats_timer = _FakeTimer()
+    win.backup_timer = _FakeTimer()
+    win.realtime_file = None
+    win._take_current_driver = lambda: None
+    win._cleanup_detached_drivers_with_timeout = lambda timeout=0.0: None
+    win.db = None
 
     event = _FakeEvent()
     MainWindow.closeEvent(win, event)
 
-    assert captured["include_db"] is True
-    assert captured["recovery_cleared"] is True
+    assert order[:3] == ["wait", "process", "dirty"]
     assert event.accepted is True
-    assert warnings and "DB 저장은 실패" in warnings[0]
+
+
+def test_wait_for_background_threads_during_exit_blocks_until_complete(monkeypatch):
+    win = MainWindow.__new__(MainWindow)
+    win._show_toast = lambda *_args, **_kwargs: None
+    process_calls: list[bool] = []
+    win._process_message_queue = lambda: process_calls.append(True)
+    win._active_background_threads_lock = threading.Lock()
+    completed: list[bool] = []
+
+    def _background_work() -> None:
+        time.sleep(0.15)
+        completed.append(True)
+
+    worker = threading.Thread(target=_background_work, daemon=False, name="BackgroundWaitTest")
+    worker.start()
+    win._active_background_threads = {worker}
+
+    class _FakeApp:
+        def processEvents(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        runtime_lifecycle_mod,
+        "QApplication",
+        SimpleNamespace(instance=lambda: _FakeApp()),
+    )
+
+    started_at = time.perf_counter()
+    MainWindow._wait_for_background_threads_during_exit(win)
+    elapsed = time.perf_counter() - started_at
+
+    assert completed == [True]
+    assert elapsed >= 0.12
+    assert not worker.is_alive()
+    assert process_calls
+
+
+def test_process_message_queue_drains_overflowed_control_messages():
+    win = MainWindow.__new__(MainWindow)
+    win.message_queue = MainWindowMessageQueue(win, maxsize=1)
+    win._worker_message_lock = threading.Lock()
+    win._coalesced_worker_messages = {}
+    win._control_message_lock = threading.Lock()
+    win._coalesced_control_messages = {}
+    win._active_capture_run_id = None
+    win._is_stopping = False
+    win._last_status_message = ""
+    win._session_save_in_progress = True
+    status_updates: list[tuple[str, str]] = []
+    toasts: list[str] = []
+    dirty_cleared: list[bool] = []
+
+    win._clear_session_dirty = lambda: dirty_cleared.append(True)
+    win._set_status = lambda text, level="info": status_updates.append((text, level))
+    win._show_toast = lambda message, *_args, **_kwargs: toasts.append(str(message))
+
+    win.message_queue.put_nowait("occupied")
+    MainWindow._emit_control_message(win, "session_save_done", {"saved_count": 3})
+
+    assert win._coalesced_control_messages
+
+    MainWindow._process_message_queue(win)
+
+    assert win._session_save_in_progress is False
+    assert dirty_cleared == [True]
+    assert status_updates == [("세션 저장 완료 (3개)", "success")]
+    assert toasts == ["세션 저장 완료!"]
+
+
+def test_schedule_initial_recovery_snapshot_runs_only_once():
+    win = MainWindow.__new__(MainWindow)
+    win.is_running = True
+    win._initial_recovery_snapshot_done = False
+
+    calls: list[tuple[list[str], str]] = []
+    win._start_backup_snapshot_write = (
+        lambda entries, worker_name="AutoBackupWorker": calls.append(
+            ([entry.text for entry in entries], worker_name)
+        )
+        or True
+    )
+
+    entries = [SubtitleEntry("첫 자막")]
+
+    assert MainWindow._schedule_initial_recovery_snapshot_if_needed(win, entries) is True
+    assert MainWindow._schedule_initial_recovery_snapshot_if_needed(win, entries) is False
+    assert calls == [(["첫 자막"], "InitialRecoverySnapshotWorker")]
+
+
+def test_start_backup_snapshot_write_reuses_prepared_entries_without_full_clone(
+    tmp_path, monkeypatch
+):
+    entry = _CloneTrackingEntry("첫 자막")
+    written: dict[str, object] = {}
+
+    win = MainWindow.__new__(MainWindow)
+    win._auto_backup_lock = threading.Lock()
+    win._is_background_shutdown_active = lambda: False
+    win._build_session_save_context = (
+        lambda: ("https://assembly.example/live", "행정안전위원회", 0)
+    )
+    win._record_recovery_snapshot = lambda *_args, **_kwargs: None
+    win._cleanup_old_backups = lambda: None
+    win._start_background_thread = lambda target, _name: target() or True
+
+    monkeypatch.setattr(persistence_mod.Config, "BACKUP_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        persistence_mod.utils,
+        "atomic_write_json_stream",
+        lambda path, **kwargs: written.update(
+            path=str(path),
+            subtitles=list(kwargs.get("sequence_items", [])),
+        ),
+    )
+
+    assert MainWindow._start_backup_snapshot_write(win, [entry]) is True
+    assert entry.clone_calls == 0
+    assert str(written["path"]).endswith(".json")
+    assert written["subtitles"] == [entry.to_dict()]
+
+
+def test_start_db_session_load_respects_dirty_confirmation():
+    win = MainWindow.__new__(MainWindow)
+    win.db = object()
+    win._show_toast = lambda *_args, **_kwargs: None
+    win._confirm_dirty_session_action = lambda _action: False
+    win._run_db_task = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("dirty confirmation이 거부되면 DB 로드를 시작하면 안 됩니다.")
+    )
+
+    assert (
+        MainWindow._start_db_session_load(
+            win,
+            1,
+            task_name="db_history_load_selected",
+            action_name="세션 불러오기",
+            loading_text="DB 세션 불러오는 중...",
+            busy_message="세션을 불러오는 중입니다...",
+            source_tag="db_session",
+        )
+        is False
+    )
+
+
+def test_load_session_is_blocked_while_session_save_is_in_progress(monkeypatch):
+    win = MainWindow.__new__(MainWindow)
+    win.is_running = False
+    win._session_save_in_progress = True
+    statuses: list[tuple[str, str]] = []
+    toasts: list[str] = []
+    win._is_runtime_mutation_blocked = lambda _action: False
+    win._set_status = lambda text, level="info": statuses.append((text, level))
+    win._show_toast = lambda message, *_args, **_kwargs: toasts.append(str(message))
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("저장 중이면 파일 선택기로 넘어가면 안 됩니다.")
+
+    monkeypatch.setattr(persistence_mod.QFileDialog, "getOpenFileName", _unexpected)
+
+    MainWindow._load_session(win)
+
+    assert statuses == [("세션 저장 마무리 대기 중...", "warning")]
+    assert toasts == ["세션 저장 완료 후 다시 시도하세요. (세션 불러오기)"]
+
+
+def test_start_db_session_load_is_blocked_while_session_save_is_in_progress():
+    win = MainWindow.__new__(MainWindow)
+    win.db = object()
+    win._session_save_in_progress = True
+    statuses: list[tuple[str, str]] = []
+    toasts: list[str] = []
+    win._set_status = lambda text, level="info": statuses.append((text, level))
+    win._show_toast = lambda message, *_args, **_kwargs: toasts.append(str(message))
+    win._confirm_dirty_session_action = lambda _action: True
+
+    assert (
+        MainWindow._start_db_session_load(
+            win,
+            1,
+            task_name="db_history_load_selected",
+            action_name="세션 불러오기",
+            loading_text="DB 세션 불러오는 중...",
+            busy_message="세션을 불러오는 중입니다...",
+            source_tag="db_session",
+        )
+        is False
+    )
+    assert statuses == [("세션 저장 마무리 대기 중...", "warning")]
+    assert toasts == ["세션 저장 완료 후 다시 시도하세요. (세션 불러오기)"]
+
+
+def test_start_db_session_load_enqueues_highlight_payload_and_busy_state():
+    class _FakeDb:
+        def load_session(self, _session_id: int) -> dict[str, object]:
+            return {
+                "version": Config.VERSION,
+                "created_at": "2026-04-01T09:00:00",
+                "url": "https://assembly.example/db",
+                "committee_name": "행정안전위원회",
+                "subtitles": [{"text": "DB 자막", "timestamp": "2026-04-01T09:00:00"}],
+            }
+
+    win = MainWindow.__new__(MainWindow)
+    win.db = _FakeDb()
+    win._show_toast = lambda *_args, **_kwargs: None
+    win._confirm_dirty_session_action = lambda _action: True
+    win._deserialize_subtitles = lambda _items, source="": ([SubtitleEntry("DB 자막")], 0)
+
+    captured: dict[str, Any] = {}
+    busy_calls: list[tuple[bool, str]] = []
+
+    def fake_run_db_task(task_name: str, worker, context=None, loading_text: str = "") -> bool:
+        captured["task_name"] = task_name
+        captured["context"] = dict(context or {})
+        captured["loading_text"] = loading_text
+        captured["payload"] = worker()
+        return True
+
+    win._run_db_task = fake_run_db_task
+
+    started = MainWindow._start_db_session_load(
+        win,
+        7,
+        task_name="db_search_load_selected",
+        action_name="검색 결과 이동",
+        loading_text="DB 검색 결과 세션 불러오는 중...",
+        busy_message="검색 결과 세션을 불러오는 중입니다...",
+        source_tag="db_search_session",
+        set_busy=lambda busy, message: busy_calls.append((busy, message)),
+        dialog="dialog-ref",
+        highlight_sequence=3,
+        highlight_query="예산",
+    )
+
+    assert started is True
+    assert captured["task_name"] == "db_search_load_selected"
+    assert captured["loading_text"] == "DB 검색 결과 세션 불러오는 중..."
+    assert captured["context"] == {
+        "session_id": 7,
+        "dialog": "dialog-ref",
+        "highlight": True,
+        "query": "예산",
+    }
+    assert captured["payload"]["highlight_sequence"] == 3
+    assert captured["payload"]["highlight_query"] == "예산"
+    assert busy_calls == [(True, "검색 결과 세션을 불러오는 중입니다...")]
 
 
 def test_clean_newlines_uses_prepared_snapshot_and_applies_result(monkeypatch):
@@ -295,3 +620,28 @@ def test_add_docx_multiline_text_inserts_line_break_runs():
 
     assert [run.text for run in paragraph.runs] == ["첫째 줄", "", "둘째 줄"]
     assert paragraph.runs[1].breaks == ["LINE"]
+
+
+def test_save_rtf_writes_ascii_safe_unicode_and_preserves_line_breaks(tmp_path, monkeypatch):
+    target = tmp_path / "unicode-test.rtf"
+    entry = SubtitleEntry("한글🙂\n둘째 줄")
+
+    win = MainWindow.__new__(MainWindow)
+    win._build_prepared_entries_snapshot = lambda: [entry]
+    win._generate_smart_filename = lambda _ext: "unicode-test.rtf"
+    win._save_in_background = lambda save_func, path, *_args: save_func(path)
+
+    monkeypatch.setattr(
+        persistence_mod.QFileDialog,
+        "getSaveFileName",
+        lambda *_args, **_kwargs: (str(target), "RTF 문서 (*.rtf)"),
+    )
+
+    MainWindow._save_rtf(win)
+
+    raw = target.read_bytes().decode("ascii")
+    expected_text = MainWindow._rtf_encode(win, entry.text)
+
+    assert raw.isascii()
+    assert expected_text in raw
+    assert "\\line " in raw

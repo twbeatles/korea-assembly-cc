@@ -40,10 +40,9 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             skipped_items = 0
         mark_dirty = bool(payload.get("mark_dirty", False))
         recovery = bool(payload.get("recovery", False))
-        try:
-            highlight_sequence = int(payload.get("highlight_sequence", -1) or -1)
-        except Exception:
-            highlight_sequence = -1
+        highlight_sequence = self._coerce_highlight_sequence(
+            payload.get("highlight_sequence")
+        )
         highlight_query = str(payload.get("highlight_query", "") or "")
 
         if not isinstance(loaded_subtitles, list):
@@ -66,6 +65,8 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
         self._replace_subtitles_and_refresh(
             loaded_subtitles, keep_history_from_subtitles=bool(loaded_subtitles)
         )
+        self._clear_destructive_undo_state()
+        self._initial_recovery_snapshot_done = False
         self._set_capture_source_metadata(
             source_url,
             committee_name,
@@ -114,6 +115,11 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     processed += 1
                 except queue.Empty:
                     break
+            remaining_budget = max(0, 50 - processed)
+            if remaining_budget > 0 and time.perf_counter() <= deadline:
+                processed += self._drain_coalesced_control_messages(
+                    max_items=remaining_budget,
+                )
             remaining_budget = max(0, 50 - processed)
             if remaining_budget > 0 and time.perf_counter() <= deadline:
                 processed += self._drain_coalesced_worker_messages(
@@ -306,8 +312,10 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     self._show_toast("줄넘김 정리 결과가 비어 있습니다.", "warning")
                     return
                 logger.info(f"스마트 리플로우: {old_count} -> {len(new_subtitles)}")
+                self._store_destructive_undo_snapshot()
                 self._replace_subtitles_and_refresh(new_subtitles)
                 self._mark_session_dirty()
+                self._notify_destructive_undo_available()
                 self._set_status(
                     f"줄넘김 정리 완료 ({old_count} -> {len(new_subtitles)})",
                     "success",

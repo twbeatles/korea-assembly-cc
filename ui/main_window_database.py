@@ -75,6 +75,88 @@ class MainWindowDatabaseMixin(MainWindowHost):
             """활성 DB 검색 다이얼로그 상태를 정리한다."""
             self._db_search_dialog_state = None
 
+    def _start_db_session_load(
+            self,
+            session_id: int | str | None,
+            *,
+            task_name: str,
+            action_name: str,
+            loading_text: str,
+            busy_message: str,
+            source_tag: str,
+            set_busy: Callable[[bool, str], None] | None = None,
+            dialog: object | None = None,
+            highlight_sequence: int = -1,
+            highlight_query: str = "",
+        ) -> bool:
+            """DB 세션 로드를 공통 보호 흐름으로 시작한다."""
+            if session_id is None:
+                self._show_toast("유효한 세션 ID가 없습니다.", "warning")
+                return False
+            if self._block_session_replacement_while_saving(action_name):
+                return False
+            if not self._confirm_dirty_session_action(action_name):
+                return False
+
+            if isinstance(session_id, int):
+                normalized_session_id = session_id
+            elif isinstance(session_id, str):
+                stripped_session_id = session_id.strip()
+                if not stripped_session_id:
+                    self._show_toast("유효한 세션 ID가 없습니다.", "warning")
+                    return False
+                try:
+                    normalized_session_id = int(stripped_session_id)
+                except ValueError:
+                    self._show_toast("유효한 세션 ID가 없습니다.", "warning")
+                    return False
+            else:
+                self._show_toast("유효한 세션 ID가 없습니다.", "warning")
+                return False
+
+            db = self.db
+            if db is None:
+                self._show_toast("데이터베이스가 초기화되지 않았습니다.", "error")
+                return False
+
+            def worker(sid: int = normalized_session_id):
+                session_data = db.load_session(sid)
+                if not session_data:
+                    return {}
+                new_subtitles, skipped = self._deserialize_subtitles(
+                    session_data.get("subtitles", []),
+                    source=f"{source_tag}:{sid}",
+                )
+                payload = {
+                    "version": session_data.get("version", "unknown"),
+                    "created_at": session_data.get("created_at", ""),
+                    "url": session_data.get("url", ""),
+                    "committee_name": session_data.get("committee_name", ""),
+                    "subtitles": new_subtitles,
+                    "skipped": skipped,
+                }
+                if highlight_sequence >= 0:
+                    payload["highlight_sequence"] = highlight_sequence
+                    payload["highlight_query"] = highlight_query
+                return payload
+
+            context: dict[str, Any] = {"session_id": normalized_session_id}
+            if dialog is not None:
+                context["dialog"] = dialog
+            if highlight_sequence >= 0:
+                context["highlight"] = True
+                context["query"] = highlight_query
+
+            started = self._run_db_task(
+                task_name,
+                worker=worker,
+                context=context,
+                loading_text=loading_text,
+            )
+            if started and set_busy is not None:
+                set_busy(True, busy_message)
+            return started
+
     def _format_db_history_item(self, session_row: dict[str, Any]) -> str:
             created = session_row.get("created_at", "")[:19] if session_row.get("created_at") else ""
             committee = session_row.get("committee_name") or "알 수 없음"
@@ -178,23 +260,19 @@ class MainWindowDatabaseMixin(MainWindowHost):
             def _work():
                 try:
                     result = worker()
-                    self.message_queue.put(
-                        (
-                            "db_task_result",
-                            {
-                                "task": task_name,
-                                "result": result,
-                                "context": payload_context,
-                            },
-                        )
+                    self._emit_control_message(
+                        "db_task_result",
+                        {
+                            "task": task_name,
+                            "result": result,
+                            "context": payload_context,
+                        },
                     )
                 except Exception as e:
                     logger.exception("DB 작업 실패 (%s)", task_name)
-                    self.message_queue.put(
-                        (
-                            "db_task_error",
-                            {"task": task_name, "error": str(e), "context": payload_context},
-                        )
+                    self._emit_control_message(
+                        "db_task_error",
+                        {"task": task_name, "error": str(e), "context": payload_context},
                     )
 
             started = self._start_background_thread(_work, f"DBTask-{task_name}")
@@ -413,41 +491,15 @@ class MainWindowDatabaseMixin(MainWindowHost):
                     return
 
                 session_id = sessions[idx].get("id")
-                if not session_id:
-                    self._show_toast("유효한 세션 ID가 없습니다.", "warning")
-                    return
-                db = self.db
-                if db is None:
-                    self._show_toast("데이터베이스가 초기화되지 않았습니다.", "error")
-                    return
-
-                def worker(sid=session_id):
-                    session_data = db.load_session(sid)
-                    if not session_data:
-                        return {}
-                    new_subtitles, skipped = self._deserialize_subtitles(
-                        session_data.get("subtitles", []),
-                        source=f"db_session:{sid}",
-                    )
-                    return {
-                        "version": session_data.get("version", "unknown"),
-                        "created_at": session_data.get("created_at", ""),
-                        "url": session_data.get("url", ""),
-                        "committee_name": session_data.get("committee_name", ""),
-                        "subtitles": new_subtitles,
-                        "skipped": skipped,
-                    }
-
-                started = self._run_db_task(
-                    "db_history_load_selected",
-                    worker=worker,
-                    context={"session_id": session_id, "row": idx},
+                self._start_db_session_load(
+                    session_id=session_id,
+                    task_name="db_history_load_selected",
+                    action_name="세션 불러오기",
                     loading_text="DB 세션 불러오는 중...",
+                    busy_message="세션을 불러오는 중입니다...",
+                    source_tag="db_session",
+                    set_busy=self._set_db_history_dialog_busy,
                 )
-                if started:
-                    self._set_db_history_dialog_busy(
-                        True, "세션을 불러오는 중입니다..."
-                    )
 
             load_btn.clicked.connect(load_selected)
             btn_layout.addWidget(load_btn)
@@ -618,51 +670,23 @@ class MainWindowDatabaseMixin(MainWindowHost):
 
                 selected = results[idx]
                 session_id = selected.get("session_id")
-                if not session_id:
-                    self._show_toast("유효한 세션 ID가 없습니다.", "warning")
-                    return
-
-                db = self.db
-                if db is None:
-                    self._show_toast("데이터베이스가 초기화되지 않았습니다.", "error")
-                    return
-
-                def worker(sid=session_id, row=selected):
-                    session_data = db.load_session(sid)
-                    if not session_data:
-                        return {}
-                    new_subtitles, skipped = self._deserialize_subtitles(
-                        session_data.get("subtitles", []),
-                        source=f"db_search_session:{sid}",
-                    )
-                    payload = {
-                        "version": session_data.get("version", "unknown"),
-                        "created_at": session_data.get("created_at", ""),
-                        "url": session_data.get("url", ""),
-                        "committee_name": session_data.get("committee_name", ""),
-                        "subtitles": new_subtitles,
-                        "skipped": skipped,
-                    }
-                    if highlight:
-                        payload["highlight_sequence"] = int(row.get("sequence", -1) or -1)
-                        payload["highlight_query"] = query
-                    return payload
-
-                started = self._run_db_task(
-                    "db_search_load_selected",
-                    worker=worker,
-                    context={
-                        "dialog": dialog,
-                        "session_id": session_id,
-                        "highlight": highlight,
-                        "query": query,
-                    },
-                    loading_text="DB 검색 결과 세션 불러오는 중...",
+                highlight_sequence = (
+                    self._coerce_highlight_sequence(selected.get("sequence"))
+                    if highlight
+                    else -1
                 )
-                if started:
-                    self._set_db_search_dialog_busy(
-                        True, "검색 결과 세션을 불러오는 중입니다..."
-                    )
+                self._start_db_session_load(
+                    session_id=session_id,
+                    task_name="db_search_load_selected",
+                    action_name="검색 결과 이동" if highlight else "세션 불러오기",
+                    loading_text="DB 검색 결과 세션 불러오는 중...",
+                    busy_message="검색 결과 세션을 불러오는 중입니다...",
+                    source_tag="db_search_session",
+                    set_busy=self._set_db_search_dialog_busy,
+                    dialog=dialog,
+                    highlight_sequence=highlight_sequence,
+                    highlight_query=query,
+                )
 
             load_btn.clicked.connect(lambda: load_selected(False))
             focus_btn.clicked.connect(lambda: load_selected(True))
@@ -854,6 +878,11 @@ class MainWindowDatabaseMixin(MainWindowHost):
                     if reply == QMessageBox.StandardButton.Yes:
                         with self.subtitle_lock:
                             existing_subtitles = list(self.subtitles)
+                    else:
+                        if self._block_session_replacement_while_saving("세션 병합"):
+                            return
+                        if not self._confirm_dirty_session_action("세션 병합"):
+                            return
 
                 merged = self._merge_sessions(
                     file_paths,
@@ -866,9 +895,11 @@ class MainWindowDatabaseMixin(MainWindowHost):
                 )
 
                 if merged:
+                    self._store_destructive_undo_snapshot()
                     self._replace_subtitles_and_refresh(merged)
                     self._set_capture_source_metadata("", "")
                     self._mark_session_dirty()
+                    self._notify_destructive_undo_available()
                     self._show_toast(f"병합 완료! {len(merged)}개 문장", "success")
                     dialog.accept()
 

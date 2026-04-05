@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from core.config import Config
@@ -13,3 +14,9 @@ def test_logger_file_handler_uses_config_log_dir():
     for handler in file_handlers:
         log_path = Path(handler.baseFilename).resolve()
         assert log_path.parent == log_dir
+
+
+def test_logger_uses_rotating_file_handler_for_long_sessions():
+    assert any(
+        isinstance(handler, TimedRotatingFileHandler) for handler in logger.handlers
+    )

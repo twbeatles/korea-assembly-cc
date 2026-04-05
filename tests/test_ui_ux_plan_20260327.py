@@ -8,7 +8,9 @@ from typing import Any
 import pytest
 
 from core.config import Config
+from core.live_capture import create_empty_live_capture_ledger
 from core.models import SubtitleEntry
+from core.subtitle_pipeline import create_empty_capture_state
 from ui.main_window_common import (
     SubtitleDialogItem,
     build_subtitle_dialog_items,
@@ -310,6 +312,171 @@ def test_session_save_done_clears_dirty_and_reports_db_warning():
     assert win._session_save_in_progress is False
     assert statuses == [("세션 저장 완료 (3개)", "success")]
     assert toasts == [("세션 저장 완료 (DB 저장은 실패)", "warning", 3500)]
+
+
+def test_structured_preview_payload_marks_dirty_only_when_commit_occurs():
+    def _build_window() -> Any:
+        win = MainWindow.__new__(MainWindow)
+        win.capture_state = create_empty_capture_state()
+        win.live_capture_ledger = create_empty_live_capture_ledger()
+        win._ensure_capture_runtime_state = lambda: None
+        win._normalize_subtitle_text_for_option = lambda text: str(text or "")
+        win._cancel_scheduled_subtitle_reset = lambda: None
+        win._current_capture_settings = lambda: {}
+        win._apply_capture_pipeline_refresh = lambda **_kwargs: None
+        return win
+
+    win = _build_window()
+    dirty_marks: list[bool] = []
+    win._mark_session_dirty = lambda: dirty_marks.append(True)
+
+    changed = MainWindow._apply_structured_preview_payload(
+        win,
+        {
+            "raw": "첫 문장",
+            "rows": [{"nodeKey": "row_1", "text": "첫 문장"}],
+            "selector": "#viewSubtit .smi_word",
+        },
+    )
+
+    assert changed is True
+    assert dirty_marks == [True]
+    assert [entry.text for entry in win.capture_state.entries] == ["첫 문장"]
+
+    win = _build_window()
+    dirty_marks = []
+    win._mark_session_dirty = lambda: dirty_marks.append(True)
+
+    changed = MainWindow._apply_structured_preview_payload(
+        win,
+        {
+            "raw": "",
+            "rows": [],
+            "selector": "#viewSubtit .smi_word",
+        },
+    )
+
+    assert changed is False
+    assert dirty_marks == []
+    assert win.capture_state.entries == []
+
+
+def test_structured_preview_payload_schedules_initial_recovery_only_on_commit():
+    def _build_window() -> Any:
+        win = MainWindow.__new__(MainWindow)
+        win.capture_state = create_empty_capture_state()
+        win.live_capture_ledger = create_empty_live_capture_ledger()
+        win._ensure_capture_runtime_state = lambda: None
+        win._normalize_subtitle_text_for_option = lambda text: str(text or "")
+        win._cancel_scheduled_subtitle_reset = lambda: None
+        win._current_capture_settings = lambda: {}
+        win._apply_capture_pipeline_refresh = lambda **_kwargs: None
+        win._mark_session_dirty = lambda: None
+        win._invalidate_destructive_undo = lambda: None
+        return win
+
+    win = _build_window()
+    scheduled: list[list[str]] = []
+    win._schedule_initial_recovery_snapshot_if_needed = (
+        lambda entries: scheduled.append([entry.text for entry in entries]) or True
+    )
+
+    MainWindow._apply_structured_preview_payload(
+        win,
+        {
+            "raw": "첫 문장",
+            "rows": [{"nodeKey": "row_1", "text": "첫 문장"}],
+            "selector": "#viewSubtit .smi_word",
+        },
+    )
+
+    assert scheduled == [["첫 문장"]]
+
+    win = _build_window()
+    scheduled = []
+    win._schedule_initial_recovery_snapshot_if_needed = (
+        lambda entries: scheduled.append([entry.text for entry in entries]) or True
+    )
+
+    MainWindow._apply_structured_preview_payload(
+        win,
+        {
+            "raw": "",
+            "rows": [],
+            "selector": "#viewSubtit .smi_word",
+        },
+    )
+
+    assert scheduled == []
+
+
+def test_restore_last_destructive_change_restores_entries_metadata_and_dirty():
+    win = MainWindow.__new__(MainWindow)
+    win.is_running = False
+    win._session_dirty = False
+    win._capture_source_url = "https://assembly.example/original"
+    win._capture_source_committee = "행정안전위원회"
+    win._capture_source_headless = True
+    win._capture_source_realtime = False
+    win.current_url = "https://assembly.example/original"
+    win.url_combo = _FakeCombo()
+    win._build_prepared_entries_snapshot = lambda: [SubtitleEntry("원래 자막")]
+    win._show_toast = lambda *_args, **_kwargs: None
+    win._mark_session_dirty = lambda: setattr(win, "_session_dirty", True)
+    win._clear_session_dirty = lambda: setattr(win, "_session_dirty", False)
+    win._set_capture_source_metadata = lambda url, committee, headless=False, realtime=False: (
+        setattr(win, "_capture_source_url", url),
+        setattr(win, "_capture_source_committee", committee),
+        setattr(win, "_capture_source_headless", headless),
+        setattr(win, "_capture_source_realtime", realtime),
+    )
+
+    def replace(
+        new_subtitles: list[SubtitleEntry],
+        keep_history_from_subtitles: bool | None = None,
+    ) -> None:
+        win.subtitles = list(new_subtitles)
+
+    win._replace_subtitles_and_refresh = replace
+
+    assert MainWindow._store_destructive_undo_snapshot(win) is True
+
+    win.subtitles = [SubtitleEntry("변경된 자막")]
+    win._capture_source_url = "https://assembly.example/changed"
+    win._capture_source_committee = "예산결산특별위원회"
+    win._capture_source_headless = False
+    win._capture_source_realtime = True
+    win.current_url = "https://assembly.example/changed"
+    win._session_dirty = True
+
+    assert MainWindow._restore_last_destructive_change(win) is True
+    assert [entry.text for entry in win.subtitles] == ["원래 자막"]
+    assert win._capture_source_url == "https://assembly.example/original"
+    assert win._capture_source_committee == "행정안전위원회"
+    assert win._capture_source_headless is True
+    assert win._capture_source_realtime is False
+    assert win.current_url == "https://assembly.example/original"
+    assert win.url_combo.current_text == "https://assembly.example/original"
+    assert win._session_dirty is False
+    assert win._destructive_undo_snapshot is None
+
+
+def test_keepalive_and_reset_messages_do_not_mark_dirty():
+    win = MainWindow.__new__(MainWindow)
+    win._is_stopping = False
+    dirty_marks: list[bool] = []
+    keepalive_calls: list[str] = []
+    reset_calls: list[str] = []
+    win._mark_session_dirty = lambda: dirty_marks.append(True)
+    win._handle_keepalive = lambda raw: keepalive_calls.append(raw)
+    win._schedule_deferred_subtitle_reset = lambda source: reset_calls.append(source)
+
+    MainWindow._handle_message(win, "keepalive", "동일 자막")
+    MainWindow._handle_message(win, "subtitle_reset", "observer_cleared")
+
+    assert dirty_marks == []
+    assert keepalive_calls == ["동일 자막"]
+    assert reset_calls == ["observer_cleared"]
 
 
 def test_append_db_history_sessions_updates_loaded_state():

@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import queue
+import threading
 from typing import Any, Callable
 
+from core.logging_utils import logger
 from ui.main_window_common import WorkerQueueMessage
 from ui.main_window_impl.contracts import PipelineQueueHost
 
@@ -28,12 +30,32 @@ COALESCED_WORKER_MESSAGE_ORDER = (
     "preview",
     "keepalive",
 )
+COALESCED_CONTROL_MESSAGE_TYPES = {
+    "db_task_error",
+    "db_task_result",
+    "hwp_save_failed",
+    "reflow_done",
+    "reflow_failed",
+    "session_load_done",
+    "session_load_failed",
+    "session_load_json_error",
+    "session_save_done",
+    "session_save_failed",
+    "toast",
+}
 
 
 PipelineQueueBase = object
 
 
 class MainWindowPipelineQueueMixin(PipelineQueueBase):
+    def _ensure_control_message_state(self) -> None:
+        state = getattr(self, "__dict__", {})
+        if state.get("_control_message_lock") is None:
+            self._control_message_lock = threading.Lock()
+        if state.get("_coalesced_control_messages") is None:
+            self._coalesced_control_messages = {}
+
     def _emit_worker_message(
         self,
         msg_type: str,
@@ -68,6 +90,71 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             msg_type, data = item
             return str(msg_type), data
         return None
+
+    def _build_control_message_key(self, msg_type: str, data: Any) -> object | None:
+        if msg_type not in COALESCED_CONTROL_MESSAGE_TYPES:
+            return None
+        if msg_type in {"db_task_result", "db_task_error"}:
+            task_name = ""
+            if isinstance(data, dict):
+                task_name = str(data.get("task", "") or "").strip()
+            return (msg_type, task_name or "db_unknown")
+        if msg_type == "toast":
+            if isinstance(data, dict):
+                toast_type = str(data.get("toast_type", "info") or "info").strip()
+                return (msg_type, toast_type or "info")
+            return (msg_type, "info")
+        return msg_type
+
+    def _emit_control_message(self, msg_type: str, data: Any) -> None:
+        normalized_type = str(msg_type)
+        item = (normalized_type, data)
+        try:
+            put_nowait = getattr(self.message_queue, "put_nowait", None)
+            if callable(put_nowait):
+                put_nowait(item)
+            else:
+                self.message_queue.put(item)
+            return
+        except queue.Full:
+            pass
+
+        control_key = self._build_control_message_key(normalized_type, data)
+        if control_key is None:
+            logger.warning("메시지 큐 포화로 nonblocking 메시지 드롭: %s", normalized_type)
+            return
+        self._ensure_control_message_state()
+        with self._control_message_lock:
+            self._coalesced_control_messages[control_key] = item
+
+    def _pop_coalesced_control_messages(self, *, max_items: int) -> list[tuple[str, Any]]:
+        if max_items <= 0:
+            return []
+        self._ensure_control_message_state()
+        collected: list[tuple[str, Any]] = []
+        with self._control_message_lock:
+            keys = list(self._coalesced_control_messages.keys())[:max_items]
+            for key in keys:
+                payload = self._coalesced_control_messages.pop(key, None)
+                if (
+                    isinstance(payload, tuple)
+                    and len(payload) == 2
+                ):
+                    collected.append((str(payload[0]), payload[1]))
+        return collected
+
+    def _drain_coalesced_control_messages(
+        self,
+        *,
+        max_items: int,
+        handler: Callable[[str, Any], None] | None = None,
+    ) -> int:
+        processed = 0
+        drain_handler = handler or self._handle_message
+        for msg_type, data in self._pop_coalesced_control_messages(max_items=max_items):
+            drain_handler(msg_type, data)
+            processed += 1
+        return processed
 
     def _pop_coalesced_worker_messages(
         self,
@@ -132,7 +219,9 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         except queue.Empty:
             pass
         lock = getattr(self, "_worker_message_lock", None)
-        if lock is None:
-            return
-        with lock:
-            getattr(self, "_coalesced_worker_messages", {}).clear()
+        if lock is not None:
+            with lock:
+                getattr(self, "_coalesced_worker_messages", {}).clear()
+        self._ensure_control_message_state()
+        with self._control_message_lock:
+            self._coalesced_control_messages.clear()

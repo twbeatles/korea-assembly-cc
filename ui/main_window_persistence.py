@@ -72,6 +72,10 @@ class MainWindowPersistenceMixin(MainWindowHost):
             if self._is_background_shutdown_active():
                 self._show_toast("종료 중이라 세션 불러오기를 시작할 수 없습니다.", "warning")
                 return False
+            if self._block_session_replacement_while_saving(
+                "세션 복구" if recovery else "세션 불러오기"
+            ):
+                return False
             if self._session_load_in_progress:
                 self._show_toast("이미 세션 불러오기가 진행 중입니다.", "info")
                 return False
@@ -86,11 +90,9 @@ class MainWindowPersistenceMixin(MainWindowHost):
                         with open(path, "r", encoding="utf-8") as f:
                             data = json.load(f)
                     except json.JSONDecodeError as json_err:
-                        self.message_queue.put(
-                            (
-                                "session_load_json_error",
-                                {"path": path, "error": str(json_err), "recovery": recovery},
-                            )
+                        self._emit_control_message(
+                            "session_load_json_error",
+                            {"path": path, "error": str(json_err), "recovery": recovery},
                         )
                         return
 
@@ -100,26 +102,25 @@ class MainWindowPersistenceMixin(MainWindowHost):
                         source=f"session:{path}",
                     )
 
-                    self.message_queue.put(
-                        (
-                            "session_load_done",
-                            {
-                                "path": path,
-                                "version": session_version,
-                                "created_at": data.get("created", ""),
-                                "url": data.get("url", ""),
-                                "committee_name": data.get("committee_name", ""),
-                                "subtitles": new_subtitles,
-                                "skipped": skipped,
-                                "mark_dirty": mark_dirty,
-                                "recovery": recovery,
-                            },
-                        )
+                    self._emit_control_message(
+                        "session_load_done",
+                        {
+                            "path": path,
+                            "version": session_version,
+                            "created_at": data.get("created", ""),
+                            "url": data.get("url", ""),
+                            "committee_name": data.get("committee_name", ""),
+                            "subtitles": new_subtitles,
+                            "skipped": skipped,
+                            "mark_dirty": mark_dirty,
+                            "recovery": recovery,
+                        },
                     )
                 except Exception as e:
                     logger.error(f"세션 불러오기 오류: {e}")
-                    self.message_queue.put(
-                        ("session_load_failed", {"path": path, "error": str(e), "recovery": recovery})
+                    self._emit_control_message(
+                        "session_load_failed",
+                        {"path": path, "error": str(e), "recovery": recovery},
                     )
 
             started = self._start_background_thread(background_load, "SessionLoadWorker")
@@ -228,75 +229,196 @@ class MainWindowPersistenceMixin(MainWindowHost):
                 "created_at": created_at,
             }
 
-    def _auto_backup(self):
-            """자동 백업 실행"""
-            prepared_entries = self._build_prepared_entries_snapshot()
+    def _prompt_write_session_snapshot(
+            self,
+            prepared_entries: list[SubtitleEntry],
+            *,
+            dialog_title: str = "세션 저장",
+        ) -> dict[str, Any] | None:
+            """준비된 세션 스냅샷을 사용자 선택 경로에 동기 저장한다."""
             if not prepared_entries:
-                return
+                QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
+                return None
 
-            # UI 스레드가 멈추지 않도록(긴 세션/대용량) 파일 I/O는 백그라운드에서 처리
+            filename = (
+                f"{Config.SESSION_DIR}/세션_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            path, _ = QFileDialog.getSaveFileName(
+                self, dialog_title, filename, "JSON (*.json)"
+            )
+            if not path:
+                return None
+
+            try:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                info = self._write_session_snapshot(
+                    path,
+                    prepared_entries,
+                    include_db=True,
+                )
+                self._clear_session_dirty()
+                db_error = str(info.get("db_error", "") or "").strip()
+                if db_error:
+                    QMessageBox.warning(
+                        self,
+                        "DB 저장 경고",
+                        "세션 JSON 저장은 완료되었지만 DB 저장은 실패했습니다.\n"
+                        f"위치: {path}\n오류: {db_error}",
+                    )
+                return info
+            except Exception as e:
+                QMessageBox.critical(self, "오류", f"세션 저장 실패: {e}")
+                return None
+
+    def _confirm_dirty_session_action(self, action_name: str) -> bool:
+            """dirty 세션이 있을 때 현재 작업을 보호하고 진행 여부를 반환한다."""
+            if not self._has_dirty_session():
+                return True
+
+            prepared_entries = self._build_prepared_entries_snapshot()
+            subtitle_count = len(prepared_entries)
+            action_label = str(action_name or "작업").strip() or "작업"
+
+            if subtitle_count > 0:
+                reply = QMessageBox.question(
+                    self,
+                    f"{action_label} 확인",
+                    f"저장하지 않은 세션 변경 {subtitle_count}개가 있습니다.\n\n"
+                    f"{action_label} 전에 세션(JSON + DB)으로 저장하시겠습니까?",
+                    QMessageBox.StandardButton.Save
+                    | QMessageBox.StandardButton.Discard
+                    | QMessageBox.StandardButton.Cancel,
+                )
+                if reply == QMessageBox.StandardButton.Cancel:
+                    return False
+                if reply == QMessageBox.StandardButton.Save:
+                    return (
+                        self._prompt_write_session_snapshot(
+                            prepared_entries,
+                            dialog_title="세션 저장",
+                        )
+                        is not None
+                    )
+                return True
+
+            reply = QMessageBox.question(
+                self,
+                f"{action_label} 확인",
+                "저장되지 않은 변경이 있습니다.\n계속하시겠습니까?",
+                QMessageBox.StandardButton.Discard
+                | QMessageBox.StandardButton.Cancel,
+            )
+            return reply != QMessageBox.StandardButton.Cancel
+
+    def _start_backup_snapshot_write(
+            self,
+            prepared_entries: list[SubtitleEntry],
+            *,
+            worker_name: str = "AutoBackupWorker",
+        ) -> bool:
+            """복구 가능한 백업 JSON 쓰기를 백그라운드에서 시작한다."""
+            if not prepared_entries or self._is_background_shutdown_active():
+                return False
             if not self._auto_backup_lock.acquire(blocking=False):
-                return  # 이미 백업 중
+                return False
 
             try:
                 backup_dir = Path(Config.BACKUP_DIR)
                 backup_dir.mkdir(exist_ok=True)
-
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_file = backup_dir / f"backup_{timestamp}.json"
-                current_url = self._get_capture_source_url(fallback_to_current=True)
-                committee_name = self._get_capture_source_committee(fallback_to_url=True)
+                source_url, committee_name, _duration = self._build_session_save_context()
                 created_at = datetime.now().isoformat()
-
+                snapshot_entries = list(prepared_entries)
             except Exception as e:
                 try:
                     self._auto_backup_lock.release()
                 except Exception:
                     pass
-                logger.error(f"자동 백업 준비 오류: {e}")
-                return
+                logger.error(f"백업 준비 오류: {e}")
+                return False
 
             def write_backup():
                 try:
+                    write_started_at = time.perf_counter()
                     utils.atomic_write_json_stream(
                         backup_file,
                         head_items=[
                             ("version", Config.VERSION),
                             ("created", created_at),
-                            ("url", current_url),
+                            ("url", source_url),
                             ("committee_name", committee_name),
                         ],
                         sequence_key="subtitles",
-                        sequence_items=utils.iter_serialized_subtitles(prepared_entries),
+                        sequence_items=utils.iter_serialized_subtitles(snapshot_entries),
                         ensure_ascii=False,
                     )
                     self._record_recovery_snapshot(
                         backup_file,
                         "backup",
                         created_at=created_at,
-                        url=current_url,
+                        url=source_url,
                         committee_name=committee_name,
                     )
-
-                    # 오래된 백업 삭제 (최대 개수 유지)
                     self._cleanup_old_backups()
-
-                    logger.info(f"자동 백업 완료: {backup_file}")
+                    logger.info(
+                        "백업 스냅샷 저장 완료: %s (%s개, %.1fms)",
+                        backup_file,
+                        len(snapshot_entries),
+                        (time.perf_counter() - write_started_at) * 1000.0,
+                    )
                 except Exception as e:
-                    logger.error(f"자동 백업 오류: {e}")
+                    logger.error(f"백업 스냅샷 저장 오류: {e}")
                 finally:
                     try:
                         self._auto_backup_lock.release()
                     except Exception:
                         pass
 
-            started = self._start_background_thread(write_backup, "AutoBackupWorker")
+            started = self._start_background_thread(write_backup, worker_name)
             if not started:
                 try:
                     self._auto_backup_lock.release()
                 except Exception:
                     pass
-                logger.info("종료 단계로 자동 백업 시작 생략")
+                return False
+            return True
+
+    def _schedule_initial_recovery_snapshot_if_needed(
+            self,
+            prepared_entries: list[SubtitleEntry] | None = None,
+        ) -> bool:
+            if not bool(self.__dict__.get("is_running", False)):
+                return False
+            if bool(self.__dict__.get("_initial_recovery_snapshot_done", False)):
+                return False
+
+            entries = (
+                prepared_entries
+                if prepared_entries is not None
+                else self._build_prepared_entries_snapshot()
+            )
+            if not entries:
+                return False
+
+            started = self._start_backup_snapshot_write(
+                entries,
+                worker_name="InitialRecoverySnapshotWorker",
+            )
+            if started:
+                self._initial_recovery_snapshot_done = True
+            return started
+
+    def _auto_backup(self):
+            """자동 백업 실행"""
+            prepared_entries = self._build_prepared_entries_snapshot()
+            if not prepared_entries:
+                return
+            if not self._start_backup_snapshot_write(
+                prepared_entries,
+                worker_name="AutoBackupWorker",
+            ):
+                logger.info("자동 백업 시작 생략")
 
 
     def _cleanup_old_backups(self):
@@ -333,20 +455,19 @@ class MainWindowPersistenceMixin(MainWindowHost):
                 try:
                     save_func(path)
                     # UI 스레드로 안전하게 전달 (Queue 기반)
-                    self.message_queue.put(
-                        ("toast", {"message": success_msg, "toast_type": "success"})
+                    self._emit_control_message(
+                        "toast",
+                        {"message": success_msg, "toast_type": "success"},
                     )
                 except Exception as e:
                     logger.error(f"{error_prefix}: {e}")
-                    self.message_queue.put(
-                        (
-                            "toast",
-                            {
-                                "message": f"{error_prefix}: {e}",
-                                "toast_type": "error",
-                                "duration": 5000,
-                            },
-                        )
+                    self._emit_control_message(
+                        "toast",
+                        {
+                            "message": f"{error_prefix}: {e}",
+                            "toast_type": "error",
+                            "duration": 5000,
+                        },
                     )
             started = self._start_background_thread(background_save, "FileSaveWorker")
             if not started:
@@ -831,7 +952,10 @@ class MainWindowPersistenceMixin(MainWindowHost):
                         time.sleep(1)
                 if last_error is None:
                     last_error = RuntimeError("HWP 저장이 완료되지 않았습니다.")
-                self.message_queue.put(("hwp_save_failed", {"error": str(last_error)}))
+                self._emit_control_message(
+                    "hwp_save_failed",
+                    {"error": str(last_error)},
+                )
                 raise last_error
 
             self._save_in_background(
@@ -880,17 +1004,36 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
 
     def _rtf_encode(self, text: str) -> str:
-            """유니코드 문자를 RTF 형식으로 인코딩 (특수문자 이스케이프)"""
+            """RTF 본문에 사용할 ASCII-safe 유니코드 문자열로 인코딩한다."""
             result = []
-            for char in text:
+            normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+            for char in normalized:
                 if char == "\\":
                     result.append("\\\\")
                 elif char == "{":
                     result.append("\\{")
                 elif char == "}":
                     result.append("\\}")
+                elif char == "\n":
+                    result.append("\\line ")
+                elif char == "\t":
+                    result.append("\\tab ")
                 else:
-                    result.append(char)
+                    codepoint = ord(char)
+                    if 0x20 <= codepoint <= 0x7E:
+                        result.append(char)
+                        continue
+
+                    utf16_units = char.encode("utf-16-le")
+                    for idx in range(0, len(utf16_units), 2):
+                        unit = int.from_bytes(
+                            utf16_units[idx : idx + 2],
+                            "little",
+                            signed=False,
+                        )
+                        if unit >= 0x8000:
+                            unit -= 0x10000
+                        result.append(f"\\u{unit}?")
             return "".join(result)
 
 
@@ -914,50 +1057,42 @@ class MainWindowPersistenceMixin(MainWindowHost):
                     return
 
                 def do_save(filepath):
-                    # RTF 내용을 메모리에서 구성한 뒤 원자적으로 저장한다.
-                    chunks = []
-                    # RTF 헤더 (유니코드 지원)
-                    chunks.append(b"{\\rtf1\\ansi\\ansicpg949\\deff0")
+                    # RTF 내용을 ASCII-safe 문자열로 구성한 뒤 원자적으로 저장한다.
+                    chunks: list[str] = []
+                    chunks.append("{\\rtf1\\ansi\\deff0")
+                    chunks.append("{\\fonttbl{\\f0\\fnil\\fcharset0 Segoe UI;}}")
                     chunks.append(
-                        b"{\\fonttbl{\\f0\\fnil\\fcharset129 \\'b8\\'c0\\'c0\\'ba \\'b0\\'ed\\'b5\\'f1;}}"
+                        "{\\colortbl;\\red0\\green0\\blue0;\\red128\\green128\\blue128;}\n"
                     )
-                    chunks.append(
-                        b"{\\colortbl;\\red0\\green0\\blue0;\\red128\\green128\\blue128;}"
-                    )
-                    chunks.append(b"\n")
 
-                    # 제목
                     title = self._rtf_encode("국회 의사중계 자막")
-                    chunks.append(b"\\pard\\qc\\b\\fs28 ")
-                    chunks.append(title.encode("cp949", errors="replace"))
-                    chunks.append(b"\\b0\\par\n")
+                    chunks.append("\\pard\\qc\\b\\fs28 ")
+                    chunks.append(title)
+                    chunks.append("\\b0\\par\n")
 
-                    # 생성 일시
                     date_str = self._rtf_encode(
                         f"생성 일시: {datetime.now().strftime('%Y년 %m월 %d일 %H:%M:%S')}"
                     )
-                    chunks.append(b"\\pard\\ql\\fs20 ")
-                    chunks.append(date_str.encode("cp949", errors="replace"))
-                    chunks.append(b"\\par\\par\n")
+                    chunks.append("\\pard\\ql\\fs20 ")
+                    chunks.append(date_str)
+                    chunks.append("\\par\\par\n")
 
-                    # 자막 내용
                     for entry in subtitles_snapshot:
                         timestamp = entry.timestamp.strftime("%H:%M:%S")
                         text = self._rtf_encode(entry.text)
-                        chunks.append(b"\\cf2[")
-                        chunks.append(timestamp.encode("cp949", errors="replace"))
-                        chunks.append(b"]\\cf1 ")
-                        chunks.append(text.encode("cp949", errors="replace"))
-                        chunks.append(b"\\par\n")
+                        chunks.append("\\cf2[")
+                        chunks.append(timestamp)
+                        chunks.append("]\\cf1 ")
+                        chunks.append(text)
+                        chunks.append("\\par\n")
 
-                    # 통계
                     total_chars = sum(len(s.text) for s in subtitles_snapshot)
                     stats = self._rtf_encode(f"총 {len(subtitles_snapshot)}문장, {total_chars:,}자")
-                    chunks.append(b"\\par\\fs18 ")
-                    chunks.append(stats.encode("cp949", errors="replace"))
-                    chunks.append(b"\\par}")
+                    chunks.append("\\par\\fs18 ")
+                    chunks.append(stats)
+                    chunks.append("\\par}")
 
-                    utils.atomic_write_bytes(filepath, b"".join(chunks))
+                    utils.atomic_write_bytes(filepath, "".join(chunks).encode("ascii"))
 
                 self._save_in_background(
                     do_save,
@@ -1008,11 +1143,12 @@ class MainWindowPersistenceMixin(MainWindowHost):
                         prepared_entries,
                         include_db=True,
                     )
-                    self.message_queue.put(("session_save_done", info))
+                    self._emit_control_message("session_save_done", info)
                 except Exception as e:
                     logger.error(f"세션 저장 오류: {e}")
-                    self.message_queue.put(
-                        ("session_save_failed", {"path": path, "error": str(e)})
+                    self._emit_control_message(
+                        "session_save_failed",
+                        {"path": path, "error": str(e)},
                     )
 
             started = self._start_background_thread(background_save, "SessionSaveWorker")
@@ -1026,6 +1162,10 @@ class MainWindowPersistenceMixin(MainWindowHost):
 
     def _load_session(self):
             if self._is_runtime_mutation_blocked("세션 불러오기"):
+                return
+            if self._block_session_replacement_while_saving("세션 불러오기"):
+                return
+            if not self._confirm_dirty_session_action("세션 불러오기"):
                 return
 
             path, _ = QFileDialog.getOpenFileName(
@@ -1099,18 +1239,16 @@ class MainWindowPersistenceMixin(MainWindowHost):
             def background_reflow():
                 try:
                     new_subtitles = utils.reflow_subtitles(prepared_entries)
-                    self.message_queue.put(
-                        (
-                            "reflow_done",
-                            {
-                                "old_count": old_count,
-                                "subtitles": new_subtitles,
-                            },
-                        )
+                    self._emit_control_message(
+                        "reflow_done",
+                        {
+                            "old_count": old_count,
+                            "subtitles": new_subtitles,
+                        },
                     )
                 except Exception as e:
                     logger.error(f"리플로우 중 오류: {e}")
-                    self.message_queue.put(("reflow_failed", {"error": str(e)}))
+                    self._emit_control_message("reflow_failed", {"error": str(e)})
 
             started = self._start_background_thread(background_reflow, "ReflowWorker")
             if not started:
