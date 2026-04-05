@@ -764,7 +764,8 @@ class MainWindowUIMixin(MainWindowHost):
                     font-size: 13px;
                 }
             """)
-            self.search_input.returnPressed.connect(self._do_search)
+            self.search_input.textChanged.connect(self._schedule_search)
+            self.search_input.returnPressed.connect(self._trigger_search_now)
             search_layout.addWidget(self.search_input, 1)
 
             self.search_count = QLabel("")
@@ -1035,8 +1036,12 @@ class MainWindowUIMixin(MainWindowHost):
             self.active_toasts.append(toast)
 
 
-    def _set_status(self, text: str, status_type: str = "info"):
+    def _set_status_now(self, text: str, status_type: str = "info"):
             """상태 표시 (아이콘 + 색상)"""
+            status_label = self.__dict__.get("status_label")
+            if status_label is None:
+                self._last_status_message = str(text or "")
+                return
             icons = {
                 "info": "ℹ️",
                 "success": "✅",
@@ -1055,21 +1060,30 @@ class MainWindowUIMixin(MainWindowHost):
             color = colors.get(status_type, "#eaeaea")
             rendered = f"{icon} {text}"[:100]
             current_style = f"color: {color};"
-            if self.status_label.text() != rendered:
-                self.status_label.setText(rendered)
-            if self.status_label.styleSheet() != current_style:
-                self.status_label.setStyleSheet(current_style)
+            if status_label.text() != rendered:
+                status_label.setText(rendered)
+            if status_label.styleSheet() != current_style:
+                status_label.setStyleSheet(current_style)
             self._last_status_message = rendered
+
+    def _set_status(self, text: str, status_type: str = "info"):
+            self._set_status_now(text, status_type)
+
+
+    def _update_count_label_now(self) -> None:
+            """자막 카운트 라벨 업데이트"""
+            count_label = self.__dict__.get("count_label")
+            if count_label is None:
+                return
+            count = self._get_global_subtitle_count()
+            chars = self._get_global_total_chars()
+            rendered = f"📝 {count}문장 | {chars:,}자"
+            if count_label.text() != rendered:
+                count_label.setText(rendered)
 
 
     def _update_count_label(self):
-            """자막 카운트 라벨 업데이트"""
-            with self.subtitle_lock:
-                count = len(self.subtitles)
-            chars = self._cached_total_chars
-            rendered = f"📝 {count}문장 | {chars:,}자"
-            if self.count_label.text() != rendered:
-                self.count_label.setText(rendered)
+            self._update_count_label_now()
 
 
     def _update_connection_status(self, status: str, latency: int | None = None):
@@ -1099,11 +1113,15 @@ class MainWindowUIMixin(MainWindowHost):
             else:
                 tooltip = f"연결 상태: {text}"
 
-            self.connection_indicator.setText(icon)
-            self.connection_indicator.setToolTip(tooltip)
-            self.connection_indicator.setStyleSheet(
+            current_style = (
                 f"background: transparent; border: none; font-size: 12px; color: {color};"
             )
+            if self.connection_indicator.text() != icon:
+                self.connection_indicator.setText(icon)
+            if self.connection_indicator.toolTip() != tooltip:
+                self.connection_indicator.setToolTip(tooltip)
+            if self.connection_indicator.styleSheet() != current_style:
+                self.connection_indicator.setStyleSheet(current_style)
 
 
     def _set_font_size(self, size: int):

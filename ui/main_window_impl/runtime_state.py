@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import queue
 import threading
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -125,6 +126,15 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._last_render_show_ts = None
         self._last_render_chunk_specs: list[tuple[str, str, str]] = []
         self._rendered_entry_text_spans: dict[int, tuple[int, int]] = {}
+        self._pending_ui_refresh_flags = 0
+        self._pending_ui_refresh_force_full = False
+        self._ui_refresh_scheduled = False
+        self._use_async_ui_refresh = True
+        self._pending_status_text = ""
+        self._pending_status_type = "info"
+        self._pending_search_count_index: int | None = None
+        self._queue_drain_scheduled = False
+        self._use_async_queue_drain = True
         self._runtime_sensitive_controls: list[Any] = []
         self._search_focus_entry_index: int | None = None
         self._pending_search_focus_query = ""
@@ -136,6 +146,42 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._realtime_save_status = "inactive"
         self._realtime_save_path = ""
         self._realtime_save_active = False
+        self._runtime_session_root: Path | None = None
+        self._runtime_manifest_path: Path | None = None
+        self._runtime_segment_manifest: list[dict[str, Any]] = []
+        self._runtime_next_segment_index = 1
+        self._runtime_archived_count = 0
+        self._runtime_archived_chars = 0
+        self._runtime_archived_words = 0
+        self._runtime_segment_flush_in_progress = False
+        self._runtime_segment_cache_key = ""
+        self._runtime_segment_cache_entries: list[SubtitleEntry] = []
+        self._runtime_segment_cache_keys: list[str] = []
+        self._runtime_segment_cache_entries_by_key: dict[str, list[SubtitleEntry]] = {}
+        self._runtime_segment_locator_starts: list[int] = []
+        self._runtime_segment_locator_ends: list[int] = []
+        self._runtime_segment_locator_items: list[dict[str, Any]] = []
+        self._runtime_render_window_cache_key: tuple[int, int, int, int] | None = None
+        self._runtime_render_window_cache_entries: list[SubtitleEntry] = []
+        self._runtime_segment_search_text_cache: dict[str, list[str]] = {}
+        self._runtime_search_in_progress = False
+        self._runtime_search_revision = 0
+        self._runtime_search_query = ""
+        self._runtime_search_truncated = False
+        self._runtime_search_requested_query = ""
+        self._runtime_tail_revision = 0
+        self._runtime_tail_checkpoint_revision = -1
+        self._db_history_request_token = 0
+        self._db_search_request_token = 0
+        self._overflow_passthrough_messages: list[Any] = []
+        self._overflow_passthrough_lock = threading.Lock()
+        self._db_worker_thread: threading.Thread | None = None
+        self._db_worker_queue: queue.Queue[Any] = queue.Queue()
+        self._db_worker_lock = threading.Lock()
+        self._db_worker_shutdown = False
+        self._db_worker_current_task = ""
+        self._last_exit_escalation_at = 0.0
+        self._exit_escalation_active = False
 
         self.capture_state: CaptureSessionState = create_empty_capture_state()
         self.subtitles: list[SubtitleEntry] = self.capture_state.entries
@@ -145,6 +191,11 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._pending_subtitle_reset_timer.setSingleShot(True)
         self._pending_subtitle_reset_timer.timeout.connect(
             self._commit_scheduled_subtitle_reset
+        )
+        self._runtime_search_debounce_timer = QTimer(self)
+        self._runtime_search_debounce_timer.setSingleShot(True)
+        self._runtime_search_debounce_timer.timeout.connect(
+            self._run_scheduled_search
         )
         self._detached_drivers: list[Any] = []
         self._detached_drivers_lock = threading.Lock()
@@ -216,6 +267,7 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         Path(Config.SESSION_DIR).mkdir(exist_ok=True)
         Path(Config.REALTIME_DIR).mkdir(exist_ok=True)
         Path(Config.BACKUP_DIR).mkdir(exist_ok=True)
+        Path(Config.RUNTIME_SESSION_DIR).mkdir(parents=True, exist_ok=True)
 
         self.db: DatabaseProtocol | None = None
         self._db_tasks_inflight: set[str] = set()
@@ -225,6 +277,11 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
                 self.db = db_factory(Config.DATABASE_PATH)
             except Exception as e:
                 logger.error(f"데이터베이스 초기화 실패: {e}")
+
+        try:
+            self._cleanup_orphan_runtime_archives()
+        except Exception:
+            logger.debug("runtime archive 정리 실패", exc_info=True)
 
         geometry = self.settings.value("geometry")
         if geometry:

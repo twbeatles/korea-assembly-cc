@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Iterable, Sequence
 from xml.sax.saxutils import escape
 from zipfile import ZIP_STORED, ZipFile
 
@@ -72,12 +72,18 @@ _PARAGRAPH_TEMPLATE = (
 )
 
 
-def build_hwpx_lines(subtitles_snapshot: Sequence[tuple[datetime, str]], generated_at: datetime) -> list[str]:
-    total_chars = sum(len(text) for _, text in subtitles_snapshot)
+def build_hwpx_lines(
+    subtitles_snapshot: Iterable[tuple[datetime, str]],
+    generated_at: datetime,
+) -> list[str]:
+    total_chars = 0
+    total_count = 0
     lines = [_TITLE, f"생성 일시: {generated_at.strftime('%Y년 %m월 %d일 %H:%M:%S')}", ""]
 
     last_printed_ts: datetime | None = None
     for timestamp, text in subtitles_snapshot:
+        total_count += 1
+        total_chars += len(text)
         should_print_ts = False
         if last_printed_ts is None:
             should_print_ts = True
@@ -98,7 +104,7 @@ def build_hwpx_lines(subtitles_snapshot: Sequence[tuple[datetime, str]], generat
         else:
             lines.append(f"{prefix}{first_part}")
 
-    lines.extend(["", f"총 {len(subtitles_snapshot)}문장, {total_chars:,}자"])
+    lines.extend(["", f"총 {total_count}문장, {total_chars:,}자"])
     return lines
 
 
@@ -170,7 +176,10 @@ def build_content_hpf(generated_at: datetime) -> str:
     )
 
 
-def build_hwpx_bytes(subtitles_snapshot: Sequence[tuple[datetime, str]], generated_at: datetime | None = None) -> bytes:
+def build_hwpx_bytes(
+    subtitles_snapshot: Iterable[tuple[datetime, str]],
+    generated_at: datetime | None = None,
+) -> bytes:
     generated = generated_at or datetime.now().astimezone()
     header_xml = _HEADER_TEMPLATE_PATH.read_text(encoding="utf-8")
     lines = build_hwpx_lines(subtitles_snapshot, generated)
@@ -222,5 +231,9 @@ def build_hwpx_bytes(subtitles_snapshot: Sequence[tuple[datetime, str]], generat
     return buffer.getvalue()
 
 
-def save_hwpx_document(filepath: str | Path, subtitles_snapshot: Sequence[tuple[datetime, str]], generated_at: datetime | None = None) -> None:
+def save_hwpx_document(
+    filepath: str | Path,
+    subtitles_snapshot: Iterable[tuple[datetime, str]],
+    generated_at: datetime | None = None,
+) -> None:
     atomic_write_bytes(filepath, build_hwpx_bytes(subtitles_snapshot, generated_at))

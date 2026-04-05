@@ -83,7 +83,7 @@
 | `MainWindowHost` | ui/main_window_types.py | 분할된 MainWindow mixin의 공통 `self` 타입 계약 |
 | `MainWindowCaptureMixin` | ui/main_window_capture.py | Selenium 수집/재연결/observer 처리 |
 | `MainWindowPipelineMixin` | ui/main_window_pipeline.py | live row ledger + subtitle pipeline 연동 |
-| `MainWindowPersistenceMixin` | ui/main_window_persistence.py | 저장/세션/자동백업/export 처리 |
+| `MainWindowPersistenceMixin` | ui/main_window_persistence.py | 공개 facade, 실제 구현은 `ui/main_window_impl/persistence_*`로 분리 |
 | `DatabaseManager` | core/database_manager.py | SQLite CRUD (#26) |
 
 추가 메모
@@ -416,6 +416,19 @@ pip install -r requirements-dev.txt
 ### 📦 빌드 / 문서 / ignore
 - `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장
 - `.gitignore`는 루트 `*.manifest`, `*.pyz` 산출물까지 무시
+
+## 9.9.5 v16.14.7 장시간 세션 성능 최적화 (2026-04-05)
+- UI 갱신은 `render/count/stats/status/search-count` 단위의 coalescing scheduler로 모아 같은 event-loop tick 안의 중복 repaint를 1회로 줄인다.
+- runtime archive는 bisect 가능한 segment locator, render window cache, small segment LRU cache를 사용해 archived window 재렌더와 segment 재파싱 비용을 줄인다.
+- inline search는 debounce + revision stale-drop으로 최신 query만 반영하고, segment-local normalized text cache를 재사용해 장시간 세션 검색 비용을 줄인다.
+- 세션 저장과 TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 export는 archived segment + active tail iterator를 직접 사용해 full-session hydrate를 피한다.
+- DB 히스토리/검색 결과 append는 기존 항목 전체 재구성 대신 신규 row만 추가하는 방향으로 유지한다.
+
+## 9.9.6 v16.14.7 코드 분할 리팩토링 정합화 (2026-04-05)
+- `ui/main_window_database.py`는 공개 facade만 남기고 실제 DB worker/task/result 처리 책임은 `ui/main_window_impl/database_worker.py`, dialog/UI 책임은 `ui/main_window_impl/database_dialogs.py`로 이동했다.
+- `ui/main_window_persistence.py`는 facade만 유지하고 runtime archive는 `persistence_runtime.py`, 세션/복구는 `persistence_session.py`, export는 `persistence_exports.py`, 유틸은 `persistence_tools.py`로 재분리했다.
+- `subtitle_extractor.spec` hidden import에는 `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`를 추가해 frozen 빌드에서도 facade 뒤 구현이 누락되지 않도록 맞췄다.
+- `pyinstaller --clean subtitle_extractor.spec`로 `dist/국회의사중계자막추출기 v16.14.7.exe` 빌드를 다시 검증했다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

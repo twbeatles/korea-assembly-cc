@@ -57,6 +57,18 @@ class DatabaseManager:
             self._thread_connections.clear()
             logger.info("모든 DB 연결이 종료되었습니다.")
 
+    def checkpoint(self, mode: str = "PASSIVE") -> bool:
+        """WAL checkpoint를 수행한다."""
+        checkpoint_mode = str(mode or "PASSIVE").strip().upper() or "PASSIVE"
+        with self.lock:
+            conn = self._get_connection()
+            try:
+                conn.execute(f"PRAGMA wal_checkpoint({checkpoint_mode})")
+                return True
+            except Exception as e:
+                logger.debug("DB checkpoint 오류 (%s): %s", checkpoint_mode, e)
+                return False
+
     @staticmethod
     def _sanitize_limit(limit: Any, default: int) -> int:
         """LIMIT 값을 안전한 범위로 정규화"""

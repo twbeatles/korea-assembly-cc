@@ -6,6 +6,7 @@ from __future__ import annotations
 import time
 from datetime import datetime
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
 
 from core import utils
@@ -16,8 +17,97 @@ from ui.main_window_impl.contracts import ViewRenderHost
 
 ViewRenderBase = object
 
+UI_REFRESH_RENDER = 1
+UI_REFRESH_COUNT = 2
+UI_REFRESH_STATS = 4
+UI_REFRESH_STATUS = 8
+UI_REFRESH_SEARCH_COUNT = 16
+
 
 class MainWindowViewRenderMixin(ViewRenderBase):
+    def _ensure_ui_refresh_state(self) -> None:
+        state = getattr(self, "__dict__", {})
+        if "_pending_ui_refresh_flags" not in state:
+            self._pending_ui_refresh_flags = 0
+        if "_pending_ui_refresh_force_full" not in state:
+            self._pending_ui_refresh_force_full = False
+        if "_ui_refresh_scheduled" not in state:
+            self._ui_refresh_scheduled = False
+        if "_pending_status_text" not in state:
+            self._pending_status_text = ""
+        if "_pending_status_type" not in state:
+            self._pending_status_type = "info"
+        if "_pending_search_count_index" not in state:
+            self._pending_search_count_index = None
+
+    def _schedule_ui_refresh(
+        self,
+        *,
+        render: bool = False,
+        force_full: bool = False,
+        count: bool = False,
+        stats: bool = False,
+        status: bool = False,
+        search_count: bool = False,
+        search_index: int | None = None,
+    ) -> None:
+        self._ensure_ui_refresh_state()
+        flags = int(self.__dict__.get("_pending_ui_refresh_flags", 0) or 0)
+        if render:
+            flags |= UI_REFRESH_RENDER
+        if count:
+            flags |= UI_REFRESH_COUNT
+        if stats:
+            flags |= UI_REFRESH_STATS
+        if status:
+            flags |= UI_REFRESH_STATUS
+        if search_count:
+            flags |= UI_REFRESH_SEARCH_COUNT
+            self._pending_search_count_index = search_index
+        self._pending_ui_refresh_flags = flags
+        if force_full:
+            self._pending_ui_refresh_force_full = True
+        if not bool(self.__dict__.get("_use_async_ui_refresh", True)):
+            self._flush_scheduled_ui_refresh()
+            return
+        if bool(self.__dict__.get("_ui_refresh_scheduled", False)):
+            return
+        self._ui_refresh_scheduled = True
+        try:
+            QTimer.singleShot(0, self._flush_scheduled_ui_refresh)
+        except Exception:
+            self._ui_refresh_scheduled = False
+            return
+
+    def _flush_scheduled_ui_refresh(self) -> None:
+        self._ensure_ui_refresh_state()
+        flags = int(self.__dict__.get("_pending_ui_refresh_flags", 0) or 0)
+        force_full = bool(self.__dict__.get("_pending_ui_refresh_force_full", False))
+        search_index = self.__dict__.get("_pending_search_count_index")
+        self._pending_ui_refresh_flags = 0
+        self._pending_ui_refresh_force_full = False
+        self._pending_search_count_index = None
+        self._ui_refresh_scheduled = False
+        if flags & UI_REFRESH_STATUS:
+            self._set_status_now(
+                str(self.__dict__.get("_pending_status_text", "") or ""),
+                str(self.__dict__.get("_pending_status_type", "info") or "info"),
+            )
+        if flags & UI_REFRESH_COUNT:
+            self._update_count_label_now()
+        if flags & UI_REFRESH_SEARCH_COUNT:
+            self._update_search_count_label_now(search_index)
+        if flags & UI_REFRESH_RENDER:
+            self._render_subtitles(force_full=force_full)
+        if flags & UI_REFRESH_STATS:
+            self._update_stats_now()
+
+    def _schedule_status_update(self, text: str, status_type: str = "info") -> None:
+        self._ensure_ui_refresh_state()
+        self._pending_status_text = str(text or "")
+        self._pending_status_type = str(status_type or "info")
+        self._schedule_ui_refresh(status=True)
+
     def _rebuild_stats_cache(self) -> None:
         with self.subtitle_lock:
             self._cached_total_chars = sum(s.char_count for s in self.subtitles)
@@ -151,13 +241,7 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         char_start = None
         char_length = None
         normalized_query = str(query or "").strip()
-        with self.subtitle_lock:
-            if 0 <= entry_index < len(self.subtitles):
-                entry_text = self._normalize_subtitle_text_for_option(
-                    self.subtitles[entry_index].text
-                )
-            else:
-                entry_text = ""
+        entry_text = self._get_global_entry_text(entry_index)
 
         if normalized_query and entry_text:
             lowered_text = entry_text.lower()
@@ -197,20 +281,23 @@ class MainWindowViewRenderMixin(ViewRenderBase):
             focus_entry_index = getattr(self, "_search_focus_entry_index", None)
             if focus_entry_index is not None:
                 anchor_index = int(focus_entry_index)
-        with self.subtitle_lock:
-            total_count = len(self.subtitles)
-            if total_count > Config.MAX_RENDER_ENTRIES:
-                if anchor_index is None:
-                    render_offset = total_count - Config.MAX_RENDER_ENTRIES
-                else:
-                    max_offset = max(0, total_count - Config.MAX_RENDER_ENTRIES)
-                    render_offset = min(
-                        max(0, anchor_index - (Config.MAX_RENDER_ENTRIES // 2)),
-                        max_offset,
-                    )
-            subtitles_copy = [
-                entry.clone() for entry in self.subtitles[render_offset:]
-            ]
+        total_count = self._get_global_subtitle_count()
+        render_end = total_count
+        if total_count > Config.MAX_RENDER_ENTRIES:
+            if anchor_index is None:
+                render_offset = total_count - Config.MAX_RENDER_ENTRIES
+            else:
+                max_offset = max(0, total_count - Config.MAX_RENDER_ENTRIES)
+                render_offset = min(
+                    max(0, anchor_index - (Config.MAX_RENDER_ENTRIES // 2)),
+                    max_offset,
+                )
+            render_end = min(total_count, render_offset + Config.MAX_RENDER_ENTRIES)
+        subtitles_copy = self._read_global_entries_window(
+            render_offset,
+            render_end,
+            clone_entries=False,
+        )
 
         visible_count = len(subtitles_copy)
         last_text = subtitles_copy[-1].text if subtitles_copy else ""
@@ -354,6 +441,9 @@ class MainWindowViewRenderMixin(ViewRenderBase):
     def _refresh_text_full(self, *_args) -> None:
         self._refresh_text(force_full=True)
 
+    def _update_stats(self) -> None:
+        self._update_stats_now()
+
     def _finalize_subtitle(self, text):
         if not text:
             return
@@ -419,18 +509,21 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         if hasattr(self, "theme_toggle_btn"):
             self.theme_toggle_btn.setText("🌙" if self.is_dark_theme else "☀️")
 
-    def _update_stats(self):
+    def _update_stats_now(self) -> None:
+        if any(
+            self.__dict__.get(name) is None
+            for name in ("stat_time", "stat_chars", "stat_words", "stat_sents", "stat_cpm")
+        ):
+            return
         if self.start_time:
             elapsed = int(time.time() - self.start_time)
             h, r = divmod(elapsed, 3600)
             m, s = divmod(r, 60)
             self.stat_time.setText(f"⏱️ 실행 시간: {h:02d}:{m:02d}:{s:02d}")
 
-            with self.subtitle_lock:
-                subtitle_count = len(self.subtitles)
-
-            total_chars = self._cached_total_chars
-            total_words = self._cached_total_words
+            subtitle_count = self._get_global_subtitle_count()
+            total_chars = self._get_global_total_chars()
+            total_words = self._get_global_total_words()
 
             self.stat_chars.setText(f"📝 글자 수: {total_chars:,}")
             self.stat_words.setText(f"📖 공백 기준 단어 수: {total_words:,}")

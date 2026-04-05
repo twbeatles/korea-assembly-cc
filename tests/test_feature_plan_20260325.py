@@ -305,6 +305,7 @@ def test_search_spans_full_subtitle_list_and_restores_tail_render():
     assert win.subtitle_text.textCursor().selectedText() == "키워드"
 
     MainWindow._hide_search(win)
+    MainWindow._flush_scheduled_ui_refresh(win)
 
     assert win.search_count.text() == ""
     assert win._last_render_offset == len(win.subtitles) - Config.MAX_RENDER_ENTRIES
@@ -325,7 +326,7 @@ def test_render_subtitles_clones_only_visible_window(monkeypatch):
 
     MainWindow._render_subtitles(win)
 
-    assert _CloneCountingEntry.clone_calls == 10
+    assert _CloneCountingEntry.clone_calls == 0
     assert win._last_render_offset == 90
 
 

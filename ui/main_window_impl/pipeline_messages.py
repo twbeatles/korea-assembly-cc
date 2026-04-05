@@ -9,6 +9,8 @@ import time
 from datetime import datetime
 from importlib import import_module
 
+from PyQt6.QtCore import QTimer
+
 from core.config import Config
 from core.logging_utils import logger
 from core.subtitle_pipeline import finalize_session
@@ -23,6 +25,37 @@ PipelineMessagesBase = object
 
 
 class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
+    def _has_pending_message_backlog(self) -> bool:
+        try:
+            if bool(self.__dict__.get("_overflow_passthrough_messages", [])):
+                return True
+            if bool(self.__dict__.get("_coalesced_control_messages", {})):
+                return True
+            if bool(self.__dict__.get("_coalesced_worker_messages", {})):
+                return True
+            qsize = getattr(self.message_queue, "qsize", None)
+            if callable(qsize):
+                return int(qsize()) > 0
+        except Exception:
+            return False
+        return False
+
+    def _schedule_followup_message_queue_drain(self) -> None:
+        if not bool(self.__dict__.get("_use_async_queue_drain", False)):
+            return
+        if bool(self.__dict__.get("_queue_drain_scheduled", False)):
+            return
+        self._queue_drain_scheduled = True
+
+        def drain_again() -> None:
+            self._queue_drain_scheduled = False
+            self._process_message_queue()
+
+        try:
+            QTimer.singleShot(0, drain_again)
+        except Exception:
+            self._queue_drain_scheduled = False
+
     def _complete_loaded_session(self, payload: dict[str, object]) -> bool:
         pipeline_mod = _pipeline_public()
         if not isinstance(payload, dict):
@@ -65,6 +98,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
         self._replace_subtitles_and_refresh(
             loaded_subtitles, keep_history_from_subtitles=bool(loaded_subtitles)
         )
+        self._cleanup_runtime_session_archive(remove_files=True)
         self._clear_destructive_undo_state()
         self._initial_recovery_snapshot_done = False
         self._set_capture_source_metadata(
@@ -78,8 +112,11 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             self._add_to_history(source_url, committee_name)
             self.current_url = source_url
 
+        if recovery:
+            self._clear_recovery_state()
+
         summary_prefix = "세션 복구 완료!" if recovery else "세션 불러오기 완료!"
-        summary = f"{summary_prefix} {len(self.subtitles)}개 문장"
+        summary = f"{summary_prefix} {self._get_global_subtitle_count()}개 문장"
         if skipped_items > 0:
             summary += f" (손상 항목 {skipped_items}개 제외)"
         self._set_status(summary, "success")
@@ -101,8 +138,13 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
     def _process_message_queue(self):
         """메시지 큐 처리 (100ms마다 호출) - 예외 처리 강화"""
         try:
+            self._queue_drain_scheduled = False
             deadline = time.perf_counter() + 0.008
             processed = 0
+            if time.perf_counter() <= deadline:
+                processed += self._drain_overflow_passthrough_items(
+                    max_items=50,
+                )
             while processed < 50 and time.perf_counter() <= deadline:
                 try:
                     raw_item = self.message_queue.get_nowait()
@@ -125,6 +167,8 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 processed += self._drain_coalesced_worker_messages(
                     max_items=remaining_budget,
                 )
+            if self._has_pending_message_backlog():
+                self._schedule_followup_message_queue_drain()
         except Exception as e:
             logger.error(f"큐 처리 오류: {e}")
 
@@ -154,8 +198,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             if msg_type == "status":
                 status_text = str(data)[:200]
                 if status_text != self._last_status_message:
-                    self.status_label.setText(status_text)
-                    self._last_status_message = status_text
+                    self._schedule_status_update(status_text, "info")
 
             elif msg_type == "resolved_url":
                 resolved_url = str(data or "").strip()
@@ -233,14 +276,15 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     self.last_subtitle = ""
                     self._stream_start_time = None
                 self._clear_preview()
-                self._refresh_text()
                 self._reset_ui()
                 self._update_tray_status("⚪ 대기 중")
                 self._update_connection_status("disconnected")
-                with self.subtitle_lock:
-                    subtitle_count = len(self.subtitles)
-                total_chars = self._cached_total_chars
-                self.status_label.setText(f"완료 - {subtitle_count}문장, {total_chars:,}자")
+                subtitle_count = self._get_global_subtitle_count()
+                total_chars = self._get_global_total_chars()
+                self._schedule_status_update(
+                    f"완료 - {subtitle_count}문장, {total_chars:,}자",
+                    "success",
+                )
 
             elif msg_type == "session_save_done":
                 self._session_save_in_progress = False
@@ -248,6 +292,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 saved_count = int(info.get("saved_count", 0) or 0)
                 db_saved = bool(info.get("db_saved", False))
                 db_error = str(info.get("db_error", "") or "").strip()
+                self._cleanup_runtime_session_archive(remove_files=True)
                 self._clear_session_dirty()
                 if db_saved:
                     self._set_status(
@@ -400,6 +445,22 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 context = data.get("context") if isinstance(data, dict) else {}
                 self._db_tasks_inflight.discard(task_name)
                 self._handle_db_task_error(task_name, error, context or {})
+
+            elif msg_type == "runtime_segment_flush_done":
+                payload = data if isinstance(data, dict) else {}
+                self._handle_runtime_segment_flush_done(payload)
+
+            elif msg_type == "runtime_segment_flush_failed":
+                payload = data if isinstance(data, dict) else {}
+                self._handle_runtime_segment_flush_failed(payload)
+
+            elif msg_type == "runtime_search_done":
+                payload = data if isinstance(data, dict) else {}
+                self._handle_runtime_search_done(payload)
+
+            elif msg_type == "runtime_search_failed":
+                payload = data if isinstance(data, dict) else {}
+                self._handle_runtime_search_failed(payload)
 
         except Exception as e:
             logger.error(f"메시지 처리 오류 ({msg_type}): {e}")

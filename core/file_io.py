@@ -6,7 +6,7 @@ import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Iterator, List, Mapping, Optional, Union
+from typing import BinaryIO, Callable, Iterable, Iterator, List, Mapping, Optional, TextIO, Union
 from core.config import Config
 from core.models import SubtitleEntry
 
@@ -137,6 +137,35 @@ def atomic_write_text(
             pass
         raise
 
+
+def atomic_write_text_via_writer(
+    path: Union[str, Path],
+    writer: Callable[[TextIO], None],
+    *,
+    encoding: str = "utf-8",
+    newline: Optional[str] = None,
+) -> None:
+    """?띿뒪?몃? ?щ컮???곗꽌 ?앹꽦???먯옄?곸쑝濡???ν븳??"""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+    )
+    temp_file = Path(temp_path)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline=newline) as f:
+            writer(f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(temp_file), str(target))
+    except Exception:
+        try:
+            temp_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
 def atomic_write_bytes(path: Union[str, Path], content: bytes) -> None:
     """바이너리 파일을 원자적으로 저장한다."""
     target = Path(path)
@@ -149,6 +178,32 @@ def atomic_write_bytes(path: Union[str, Path], content: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(str(temp_file), str(target))
+    except Exception:
+        try:
+            temp_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+
+
+def atomic_write_bytes_via_writer(
+    path: Union[str, Path],
+    writer: Callable[[BinaryIO], None],
+) -> None:
+    """諛붿씠?덈━瑜? ?щ컮???곗꽌 ?앹꽦???먯옄?곸쑝濡???ν븳??"""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+    )
+    temp_file = Path(temp_path)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            writer(f)
             f.flush()
             os.fsync(f.fileno())
         os.replace(str(temp_file), str(target))

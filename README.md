@@ -44,11 +44,12 @@
 ### 🧩 내부 구현 구조 정리
 - 공개 import 경로(`ui.main_window`, `ui.main_window_capture`, `ui.main_window_pipeline`, `ui.main_window_view`, `core.live_capture`)는 그대로 유지하고, 실제 구현은 `ui/main_window_impl/`와 `core/live_capture_impl/`로 분리했습니다.
 - `ui/main_window_impl/`는 capture/browser/dom/observer, pipeline/state/queue/stream/messages, runtime/state/lifecycle/driver, view/render/search/editing 책임을 나눠 `MainWindow`의 직접 의존을 줄였습니다.
+- `ui/main_window_database.py`와 `ui/main_window_persistence.py`는 공개 facade 겸 조합 레이어만 유지하고, 실제 DB worker/dialog 책임은 `ui/main_window_impl/database_*.py`, runtime/session/export 책임은 `ui/main_window_impl/persistence_*.py`로 재배치했습니다.
 - `core/live_capture.py`는 호환 facade로 유지하고, ledger/model/reconcile 구현은 `core/live_capture_impl/`로 이동했습니다.
 - `ui/main_window_ui.py`는 이번 배치에서 공개 UI mixin 경로를 유지하며 shell/preset/help 계층은 후속 분리 대상으로 남깁니다.
 
 ### 📦 문서 / 빌드 / 저장소 정합성
-- `subtitle_extractor.spec`는 `ui.main_window_impl.*`와 `core.live_capture_impl.*` hidden import를 명시해 frozen 빌드에서 내부 모듈 누락 가능성을 줄였습니다.
+- `subtitle_extractor.spec`는 `ui.main_window_impl.*`, `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`, `core.live_capture_impl.*` hidden import를 명시해 frozen 빌드에서 facade 뒤 구현 모듈이 누락되지 않도록 맞췄습니다.
 - `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`를 현재 구조와 버전(`v16.14.7`) 기준으로 동기화했습니다.
 - `.gitignore`는 PyInstaller 빌드 중 루트에 남을 수 있는 보조 산출물(`*.manifest`, `*.pyz`)까지 무시하도록 보강했습니다.
 
@@ -56,6 +57,24 @@
 - `pytest -q tests/test_review_20260323_regressions.py tests/test_live_capture.py tests/test_worker_stability.py tests/test_worker_probe_payload.py tests/test_feature_plan_20260325.py tests/test_ui_ux_plan_20260327.py tests/test_lossless_session_plan_20260401.py tests/test_compat_imports.py tests/test_pyright_regression.py`: `51 passed`
 - import smoke: `MainWindow`, `reconcile_live_capture` 공개 경로 확인
 - `pyinstaller --clean subtitle_extractor.spec`: 빌드 성공 (`dist/국회의사중계자막추출기 v16.14.7.exe`)
+
+### ⏱️ 장시간 세션 안정성 후속 보강 (2026-04-05)
+- `backups/runtime_sessions/<run_id>/manifest.json` + `segment_*.json` + `tail_checkpoint.json` 기반 runtime archive를 추가해 장시간 캡처에서도 메모리에는 최근 tail만 유지합니다.
+- 실행 중 inline search와 render는 archived segment + active tail 전체 세션을 기준으로 동작하고, 중지 후 편집/복사/리플로우가 필요하면 한 번 full hydrate 후 기존 편집 경로를 그대로 사용합니다.
+- DB 비동기 작업은 요청마다 임시 스레드를 만들지 않고 앱 런타임 전용 `DBWorker`가 직렬 처리하며, 검색/더보기 결과는 request token으로 stale-drop 됩니다.
+- `closeEvent` 장기 대기 시 `계속 기다리기 / 진단 저장 / 강제 종료` escalation modal을 띄우고, 진단은 `logs/shutdown_diagnostic_<timestamp>.json`에 저장합니다.
+- `LiveBroadcastDialog`는 daemon fetch thread 대신 `QNetworkAccessManager` + single active reply 구조를 사용하고, `subtitle_extractor.spec`도 `PyQt6.QtNetwork`를 포함하도록 갱신했습니다.
+- UI 갱신은 `render/count/stats/status/search-count` 단위의 coalescing scheduler로 묶여 같은 이벤트 루프 tick 안의 중복 repaint를 1회로 합칩니다.
+- runtime archive는 segment locator + render window cache + small segment LRU cache를 사용해 장시간 세션에서 동일 window 재렌더와 archived 검색 비용을 줄입니다.
+- inline search는 debounce + revision stale-drop을 사용하고, archived segment별 normalized text cache를 재사용해 연속 검색 입력 비용을 줄입니다.
+- 세션 저장/TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 export는 archived segment + active tail iterator를 직접 사용해 full-session hydrate 없이 스트리밍 처리합니다.
+- 최신 기준선: `pytest -q` `146 passed`, `pyright` `0 errors`.
+
+### 🧱 코드 분할 리팩토링 정합화 (2026-04-05)
+- `ui/main_window_database.py`는 facade만 남기고 `database_worker.py` / `database_dialogs.py` 조합으로 분리해 DB 실행 경로와 다이얼로그 UI 경로를 분리했습니다.
+- `ui/main_window_persistence.py`는 facade만 남기고 `persistence_runtime.py` / `persistence_session.py` / `persistence_exports.py` / `persistence_tools.py`로 나눠 runtime archive, 세션/복구, export, 유틸 책임을 구분했습니다.
+- 공개 import 경로와 테스트의 monkeypatch 경로는 유지해 외부 호출 지점을 깨지 않으면서 긴 파일을 줄였습니다.
+- `pyinstaller --clean subtitle_extractor.spec`를 다시 검증했고, `dist/국회의사중계자막추출기 v16.14.7.exe` 빌드가 성공했습니다.
 
 ## ✨ v16.14.6 자막 유실 방지 배치 (2026-04-01)
 
@@ -608,7 +627,7 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
-- `python-docx`, `pywin32`, `core.subtitle_processor`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `core.live_capture_impl.*` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
+- `python-docx`, `pywin32`, `core.subtitle_processor`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
 - `typings/`는 정적 분석 전용 로컬 stub이므로 frozen 번들에는 포함하지 않습니다.
 - 빌드 산출물은 기존 `.gitignore`의 `build/`, `dist/` 규칙으로 계속 관리됩니다.
 
@@ -619,6 +638,7 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 ### v16.14.7 (2026-04-01)
 - 브라우저 헬스체크, Chrome 세션 자동 재기동, `reconnected` 상태 반영으로 장시간 수집 중 창 종료 복구를 보강
 - `ui/main_window_impl/`와 `core/live_capture_impl/`로 capture/pipeline/view/runtime/live capture 내부 구현을 재배치하고 공개 facade import 경로는 유지
+- `ui/main_window_database.py`, `ui/main_window_persistence.py`는 facade 조합 레이어로 축소하고 실제 DB/persistence 구현은 `ui/main_window_impl/database_*`, `ui/main_window_impl/persistence_*`로 재분리
 - `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장하고, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 현재 구조 기준으로 재동기화
 
 ### v16.14.6 (2026-04-01)

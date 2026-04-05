@@ -36,6 +36,10 @@ COALESCED_CONTROL_MESSAGE_TYPES = {
     "hwp_save_failed",
     "reflow_done",
     "reflow_failed",
+    "runtime_search_done",
+    "runtime_search_failed",
+    "runtime_segment_flush_done",
+    "runtime_segment_flush_failed",
     "session_load_done",
     "session_load_failed",
     "session_load_json_error",
@@ -49,6 +53,21 @@ PipelineQueueBase = object
 
 
 class MainWindowPipelineQueueMixin(PipelineQueueBase):
+    def _ensure_overflow_passthrough_state(self) -> None:
+        state = getattr(self, "__dict__", {})
+        if state.get("_overflow_passthrough_lock") is None:
+            self._overflow_passthrough_lock = threading.Lock()
+        if state.get("_overflow_passthrough_messages") is None:
+            self._overflow_passthrough_messages = []
+
+    def _stash_overflow_passthrough_item(self, item: object) -> None:
+        self._ensure_overflow_passthrough_state()
+        with self._overflow_passthrough_lock:
+            messages = self._overflow_passthrough_messages
+            messages.append(item)
+            if len(messages) > 64:
+                del messages[:-64]
+
     def _ensure_control_message_state(self) -> None:
         state = getattr(self, "__dict__", {})
         if state.get("_control_message_lock") is None:
@@ -126,6 +145,60 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         self._ensure_control_message_state()
         with self._control_message_lock:
             self._coalesced_control_messages[control_key] = item
+
+    def _requeue_message_item(self, item: object) -> None:
+        try:
+            self.message_queue.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+
+        if isinstance(item, WorkerQueueMessage):
+            if item.msg_type in COALESCED_WORKER_MESSAGE_TYPES:
+                lock = getattr(self, "_worker_message_lock", None)
+                if lock is not None:
+                    with lock:
+                        self._coalesced_worker_messages[(int(item.run_id), str(item.msg_type))] = item.payload
+                    return
+            self._stash_overflow_passthrough_item(item)
+            return
+
+        if isinstance(item, tuple) and len(item) == 2:
+            msg_type, data = item
+            control_key = self._build_control_message_key(str(msg_type), data)
+            if control_key is not None:
+                self._ensure_control_message_state()
+                with self._control_message_lock:
+                    self._coalesced_control_messages[control_key] = (str(msg_type), data)
+                return
+
+        self._stash_overflow_passthrough_item(item)
+
+    def _pop_overflow_passthrough_items(self, *, max_items: int) -> list[object]:
+        if max_items <= 0:
+            return []
+        self._ensure_overflow_passthrough_state()
+        with self._overflow_passthrough_lock:
+            items = list(self._overflow_passthrough_messages[:max_items])
+            del self._overflow_passthrough_messages[:max_items]
+        return items
+
+    def _drain_overflow_passthrough_items(
+        self,
+        *,
+        max_items: int,
+        handler: Callable[[str, Any], None] | None = None,
+    ) -> int:
+        processed = 0
+        drain_handler = handler or self._handle_message
+        for raw_item in self._pop_overflow_passthrough_items(max_items=max_items):
+            decoded = self._unwrap_message_item(raw_item)
+            if decoded is None:
+                continue
+            msg_type, data = decoded
+            drain_handler(msg_type, data)
+            processed += 1
+        return processed
 
     def _pop_coalesced_control_messages(self, *, max_items: int) -> list[tuple[str, Any]]:
         if max_items <= 0:
@@ -225,3 +298,6 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         self._ensure_control_message_state()
         with self._control_message_lock:
             self._coalesced_control_messages.clear()
+        self._ensure_overflow_passthrough_state()
+        with self._overflow_passthrough_lock:
+            self._overflow_passthrough_messages.clear()

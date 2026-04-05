@@ -17,6 +17,7 @@
 > **v16.14.5(2026-03-27) UI/UX 정합성 반영**: run-source 스냅샷 고정, live 목록의 수동/자동 경로 분리, DB/편집 목록의 점진 로드, dirty-session 종료 프롬프트, 단축키/문서 정렬이 추가되었지만, 이 역시 코어 추출 알고리즘이 아닌 UI/상태 관리 레이어 변경입니다.
 > **v16.14.6(2026-04-01) 세션 복구 정합성 반영**: recovery state(`session_recovery.json`), prepared snapshot 기반 수동 reflow, lossless DB metadata round-trip, DOCX/HWPX multiline export 정리가 추가되었지만, 이 역시 저장/복구 레이어 변경이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
 > **v16.14.7(2026-04-01) 브라우저 자동 복구 + 구조 분리 정합성 반영**: Chrome 세션 헬스체크와 자동 재기동, recoverable WebDriver 오류 승격, `ui/main_window_impl/` 및 `core/live_capture_impl/` 기반 내부 구조 분리가 반영되었지만, 이는 driver lifecycle 및 모듈 경계 정리이며 글로벌 히스토리 + suffix 코어 의미론은 유지됩니다.
+> **v16.14.7(2026-04-05) facade 세분화 정합성 반영**: `ui/main_window_database.py`와 `ui/main_window_persistence.py`는 공개 facade만 남기고 실제 구현을 `ui/main_window_impl/database_*`, `ui/main_window_impl/persistence_*`로 재분리했지만, 이는 책임 경계와 패키징 정합화 변경이며 이 문서가 다루는 글로벌 히스토리 + suffix 코어 의미론은 그대로입니다.
 > 후속 Pylance/인코딩 위생 보강(`ui/main_window_types.py`, 로컬 `typings/`, `pytest.ini --basetemp=.pytest_tmp`, 확장된 `tests/test_encoding_hygiene.py`)과 HWP 저장의 missing-dependency fallback 정렬은 이 문서가 분석하는 자막 추출 알고리즘 자체를 바꾸지 않습니다.
 
 ---

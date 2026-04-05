@@ -8,6 +8,7 @@ import re
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QInputDialog
 
+from core.config import Config
 from core.logging_utils import logger
 from ui.main_window_common import SearchMatch
 from ui.main_window_impl.contracts import ViewSearchHost
@@ -17,6 +18,141 @@ ViewSearchBase = object
 
 
 class MainWindowViewSearchMixin(ViewSearchBase):
+    def _update_search_count_label_now(self, current_index: int | None = None) -> None:
+        search_count = self.__dict__.get("search_count")
+        if search_count is None:
+            return
+
+        if bool(self.__dict__.get("_runtime_search_in_progress", False)):
+            search_count.setText("검색 중...")
+            return
+
+        total_matches = len(getattr(self, "search_matches", []))
+        if total_matches <= 0:
+            rendered = ""
+            if str(self.__dict__.get("_runtime_search_query", "") or "").strip():
+                rendered = "0건"
+            search_count.setText(rendered)
+            return
+
+        total_label = (
+            f"{total_matches}+건"
+            if bool(self.__dict__.get("_runtime_search_truncated", False))
+            else f"{total_matches}건"
+        )
+        if current_index is None:
+            search_count.setText(total_label)
+            return
+        if not bool(self.__dict__.get("_runtime_search_truncated", False)):
+            search_count.setText(f"{current_index + 1}/{total_matches}")
+            return
+        search_count.setText(f"{current_index + 1}/{total_label}")
+
+    def _update_search_count_label(self, current_index: int | None = None) -> None:
+        self._update_search_count_label_now(current_index)
+
+    def _search_full_session_entries(self, query: str) -> tuple[list[SearchMatch], bool]:
+        query_l = str(query or "").lower()
+        if not query_l:
+            return [], False
+
+        matches: list[SearchMatch] = []
+        limit = max(1, int(Config.RUNTIME_SEARCH_MATCH_LIMIT))
+        for segment_info in list(self.__dict__.get("_runtime_segment_manifest", [])):
+            start_index = int(segment_info.get("start_index", 0) or 0)
+            lowered_texts = self._get_runtime_segment_search_texts(segment_info)
+            for offset, lowered_text in enumerate(lowered_texts):
+                start = 0
+                while True:
+                    idx = lowered_text.find(query_l, start)
+                    if idx == -1:
+                        break
+                    matches.append(
+                        SearchMatch(start_index + offset, idx, len(query))
+                    )
+                    if len(matches) >= limit:
+                        return matches, True
+                    start = idx + 1
+
+        subtitle_lock = self.__dict__.get("subtitle_lock")
+        subtitles = getattr(self, "subtitles", [])
+        if subtitle_lock is not None:
+            with subtitle_lock:
+                tail_entries = list(subtitles)
+        else:
+            tail_entries = list(subtitles)
+        tail_start_index = int(self.__dict__.get("_runtime_archived_count", 0) or 0)
+        for offset, entry in enumerate(tail_entries):
+            lowered_text = self._normalize_subtitle_text_for_option(entry.text).lower()
+            start = 0
+            while True:
+                idx = lowered_text.find(query_l, start)
+                if idx == -1:
+                    break
+                matches.append(
+                    SearchMatch(tail_start_index + offset, idx, len(query))
+                )
+                if len(matches) >= limit:
+                    return matches, True
+                start = idx + 1
+        return matches, False
+
+    def _handle_runtime_search_done(self, payload: dict[str, object]) -> None:
+        if not isinstance(payload, dict):
+            return
+
+        payload_revision = int(payload.get("revision", -1) or -1)
+        if payload_revision != int(self.__dict__.get("_runtime_search_revision", 0)):
+            return
+
+        query = str(payload.get("query", "") or "").strip()
+        if query != str(self.__dict__.get("_runtime_search_query", "") or "").strip():
+            return
+
+        matches: list[SearchMatch] = []
+        raw_matches = payload.get("matches", [])
+        if isinstance(raw_matches, list):
+            for item in raw_matches:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    matches.append(
+                        SearchMatch(
+                            int(item.get("entry_index", -1) or -1),
+                            int(item.get("char_start", 0) or 0),
+                            int(item.get("char_length", 0) or 0),
+                        )
+                    )
+                except Exception:
+                    continue
+
+        self._runtime_search_in_progress = False
+        self._runtime_search_truncated = bool(payload.get("truncated", False))
+        self.search_matches = matches
+        self.search_idx = 0
+
+        if self.search_matches:
+            self._highlight_search(0)
+            return
+
+        self._schedule_ui_refresh(search_count=True)
+        self._schedule_ui_refresh(render=True, force_full=True)
+
+    def _handle_runtime_search_failed(self, payload: dict[str, object]) -> None:
+        if not isinstance(payload, dict):
+            return
+
+        payload_revision = int(payload.get("revision", -1) or -1)
+        if payload_revision != int(self.__dict__.get("_runtime_search_revision", 0)):
+            return
+
+        self._runtime_search_in_progress = False
+        self.search_matches = []
+        self.search_idx = 0
+        self._schedule_ui_refresh(search_count=True, render=True, force_full=True)
+        err = str(payload.get("error", "") or "알 수 없는 오류")
+        self._show_toast(f"검색 실패: {err}", "warning", 3000)
+
     def _rebuild_keyword_cache(
         self, keywords: list, update_settings: bool = True, refresh: bool = True
     ) -> None:
@@ -37,7 +173,7 @@ class MainWindowViewSearchMixin(ViewSearchBase):
             self.settings.setValue("highlight_keywords", ", ".join(self.keywords))
 
         if refresh and hasattr(self, "subtitle_text"):
-            self._refresh_text(force_full=True)
+            self._schedule_ui_refresh(render=True, force_full=True)
 
     def _update_keyword_cache(self):
         if (
@@ -66,6 +202,28 @@ class MainWindowViewSearchMixin(ViewSearchBase):
         except Exception as e:
             logger.error(f"키워드 캐시 업데이트 오류: {e}")
 
+    def _schedule_search(self) -> None:
+        search_frame = self.__dict__.get("search_frame")
+        if search_frame is not None and not search_frame.isVisible():
+            return
+        timer = self.__dict__.get("_runtime_search_debounce_timer")
+        self._runtime_search_requested_query = self.search_input.text().strip()
+        if timer is None:
+            self._do_search()
+            return
+        timer.start(180)
+
+    def _run_scheduled_search(self) -> None:
+        self._runtime_search_requested_query = self.search_input.text().strip()
+        self._do_search()
+
+    def _trigger_search_now(self) -> None:
+        timer = self.__dict__.get("_runtime_search_debounce_timer")
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._runtime_search_requested_query = self.search_input.text().strip()
+        self._do_search()
+
     def _show_search(self):
         self.search_frame.show()
         self.search_input.setFocus()
@@ -74,51 +232,85 @@ class MainWindowViewSearchMixin(ViewSearchBase):
     def _hide_search(self):
         self.search_matches = []
         self.search_idx = 0
-        search_count = self.__dict__.get("search_count")
-        if search_count is not None:
-            search_count.setText("")
+        self._runtime_search_in_progress = False
+        self._runtime_search_query = ""
+        self._runtime_search_truncated = False
+        self._schedule_ui_refresh(search_count=True)
         self._search_focus_entry_index = None
         self._pending_search_focus_query = ""
         self.search_frame.hide()
-        self._refresh_text(force_full=True)
+        self._schedule_ui_refresh(render=True, force_full=True)
 
     def _do_search(self):
         query = self.search_input.text().strip()
         if not query:
             self.search_matches = []
             self.search_idx = 0
-            search_count = self.__dict__.get("search_count")
-            if search_count is not None:
-                search_count.setText("")
-            self._refresh_text(force_full=True)
+            self._runtime_search_in_progress = False
+            self._runtime_search_query = ""
+            self._runtime_search_truncated = False
+            self._schedule_ui_refresh(search_count=True, render=True, force_full=True)
             return
 
-        query_l = query.lower()
+        self._runtime_search_query = query
+        self._runtime_search_truncated = False
         self.search_matches = []
-
-        with self.subtitle_lock:
-            entry_texts = [
-                self._normalize_subtitle_text_for_option(entry.text)
-                for entry in self.subtitles
-            ]
-
-        for entry_index, entry_text in enumerate(entry_texts):
-            lowered_text = entry_text.lower()
-            start = 0
-            while True:
-                idx = lowered_text.find(query_l, start)
-                if idx == -1:
-                    break
-                self.search_matches.append(SearchMatch(entry_index, idx, len(query)))
-                start = idx + 1
-
         self.search_idx = 0
-        search_count = self.__dict__.get("search_count")
-        if search_count is not None:
-            search_count.setText(f"{len(self.search_matches)}개")
+
+        if self._has_runtime_archived_segments():
+            self._runtime_search_revision += 1
+            self._runtime_search_in_progress = True
+            search_revision = int(self._runtime_search_revision)
+            self._schedule_ui_refresh(search_count=True)
+
+            def background_search() -> None:
+                try:
+                    matches, truncated = self._search_full_session_entries(query)
+                    self._emit_control_message(
+                        "runtime_search_done",
+                        {
+                            "query": query,
+                            "revision": search_revision,
+                            "truncated": truncated,
+                            "matches": [
+                                {
+                                    "entry_index": match.entry_index,
+                                    "char_start": match.char_start,
+                                    "char_length": match.char_length,
+                                }
+                                for match in matches
+                            ],
+                        },
+                    )
+                except Exception as e:
+                    logger.error("runtime search failed: %s", e)
+                    self._emit_control_message(
+                        "runtime_search_failed",
+                        {
+                            "query": query,
+                            "revision": search_revision,
+                            "error": str(e),
+                        },
+                    )
+
+            started = self._start_background_thread(
+                background_search,
+                "RuntimeSearchWorker",
+            )
+            if started:
+                self._schedule_ui_refresh(render=True, force_full=True)
+                return
+            self._runtime_search_in_progress = False
+
+        matches, truncated = self._search_full_session_entries(query)
+        self.search_matches = matches
+        self._runtime_search_truncated = truncated
 
         if self.search_matches:
             self._highlight_search(0)
+            return
+
+        self._schedule_ui_refresh(search_count=True, render=True, force_full=True)
 
     def _nav_search(self, delta):
         if not self.search_matches:
@@ -141,9 +333,7 @@ class MainWindowViewSearchMixin(ViewSearchBase):
             match.char_length,
         )
 
-        search_count = self.__dict__.get("search_count")
-        if search_count is not None:
-            search_count.setText(f"{idx + 1}/{len(self.search_matches)}")
+        self._update_search_count_label(current_index=idx)
 
     def _set_keywords(self):
         current = ", ".join(self.keywords)

@@ -91,8 +91,11 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
         self._ensure_capture_runtime_state()
         self._bind_subtitles_to_capture_state()
         self._rebuild_stats_cache()
-        self._update_count_label()
-        self._refresh_text(force_full=force_refresh)
+        self._schedule_ui_refresh(
+            count=True,
+            render=True,
+            force_full=force_refresh,
+        )
         preview_text = (
             getattr(self.live_capture_ledger, "preview_text", "")
             or self.capture_state.preview_text
@@ -118,8 +121,14 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             self._rebuild_stats_cache()
 
         if appended_entries or updated_existing:
-            self._update_count_label()
-            self._refresh_text(force_full=force_refresh)
+            self._mark_runtime_tail_dirty()
+            self._schedule_ui_refresh(
+                count=True,
+                render=True,
+                force_full=force_refresh,
+            )
+            if appended_entries:
+                self._maybe_schedule_runtime_segment_flush()
 
         self._set_preview_text(preview_text)
 

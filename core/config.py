@@ -69,7 +69,13 @@ class Config:
     AUTO_BACKUP_INTERVAL = 300000      # 5분 (ms)
     MAX_BACKUP_COUNT = 10
     MAX_URL_HISTORY = 50               # URL 히스토리 최대 개수
-    
+    RUNTIME_SESSION_DIR = str(APP_BASE_DIR / "backups" / "runtime_sessions")
+    RUNTIME_SEGMENT_FLUSH_THRESHOLD = 2000
+    RUNTIME_ACTIVE_TAIL_ENTRIES = 1000
+    RUNTIME_SEARCH_MATCH_LIMIT = 5000
+    EXIT_ESCALATION_AFTER_SECONDS = 30.0
+    EXIT_ESCALATION_REPEAT_SECONDS = 30.0
+
     # 성능 최적화 상수 (#4, #1)
     MAX_RENDER_ENTRIES = 500           # 한 번에 렌더링할 최대 자막 수
     MAX_WORD_DIFF_OVERLAP = 200        # get_word_diff 최대 겹침 탐색 길이

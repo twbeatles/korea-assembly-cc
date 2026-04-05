@@ -102,24 +102,46 @@ class MainWindowViewEditingMixin(ViewEditingBase):
         self._load_more_subtitle_dialog_items(list_widget, state, reset=True)
 
     def _copy_to_clipboard(self) -> None:
+        if self.is_running and self._has_runtime_archived_segments():
+            with self.subtitle_lock:
+                if not self.subtitles:
+                    self._show_toast("복사할 자막이 없습니다", "warning")
+                    return
+                text = "\n".join(s.text for s in self.subtitles)
+                copied_count = len(self.subtitles)
+
+            clipboard = QApplication.clipboard()
+            if clipboard is None:
+                self._show_toast("클립보드를 사용할 수 없습니다", "error")
+                return
+            clipboard.setText(text)
+            self._show_toast(
+                f"실행 중에는 최근 {copied_count}개 자막만 복사했습니다.",
+                "info",
+                3500,
+            )
+            return
+
+        self._ensure_full_session_hydrated("클립보드 복사")
         with self.subtitle_lock:
             if not self.subtitles:
                 self._show_toast("복사할 자막이 없습니다", "warning")
                 return
             text = "\n".join(s.text for s in self.subtitles)
+            copied_count = len(self.subtitles)
 
         clipboard = QApplication.clipboard()
         if clipboard is None:
             self._show_toast("클립보드를 사용할 수 없습니다", "error")
             return
         clipboard.setText(text)
-        self._show_toast(f"📋 {len(self.subtitles)}개 자막 복사됨", "success")
+        self._show_toast(f"📋 {copied_count}개 자막 복사됨", "success")
 
     def _clear_subtitles(self) -> None:
         if self._is_runtime_mutation_blocked("전체 자막 삭제"):
             return
-        with self.subtitle_lock:
-            count = len(self.subtitles)
+        self._ensure_full_session_hydrated("전체 자막 삭제")
+        count = self._get_global_subtitle_count()
         if not count:
             self._show_toast("지울 자막이 없습니다", "warning")
             return
@@ -146,6 +168,7 @@ class MainWindowViewEditingMixin(ViewEditingBase):
     def _clear_text(self):
         if self._is_runtime_mutation_blocked("내용 지우기"):
             return
+        self._ensure_full_session_hydrated("내용 지우기")
         if not self.subtitles:
             return
 
@@ -168,6 +191,7 @@ class MainWindowViewEditingMixin(ViewEditingBase):
     def _edit_subtitle(self):
         if self._is_runtime_mutation_blocked("자막 편집"):
             return
+        self._ensure_full_session_hydrated("자막 편집")
         if not self.subtitles:
             self._show_toast("편집할 자막이 없습니다.", "warning")
             return
@@ -275,6 +299,7 @@ class MainWindowViewEditingMixin(ViewEditingBase):
     def _delete_subtitle(self):
         if self._is_runtime_mutation_blocked("자막 삭제"):
             return
+        self._ensure_full_session_hydrated("자막 삭제")
         if not self.subtitles:
             self._show_toast("삭제할 자막이 없습니다.", "warning")
             return

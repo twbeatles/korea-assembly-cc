@@ -173,7 +173,7 @@ korea-assembly-cc/
 | `MainWindowHost` | ui/main_window_types.py | 분할된 MainWindow mixin의 공통 `self` 타입 계약 |
 | `MainWindowCaptureMixin` | ui/main_window_capture.py | Selenium 수집/재연결/observer 처리 |
 | `MainWindowPipelineMixin` | ui/main_window_pipeline.py | live row ledger + subtitle pipeline 연동 |
-| `MainWindowPersistenceMixin` | ui/main_window_persistence.py | 저장/세션/자동백업/export 처리 |
+| `MainWindowPersistenceMixin` | ui/main_window_persistence.py | 공개 facade, 실제 구현은 `ui/main_window_impl/persistence_*`로 분리 |
 | `DatabaseManager` | core/database_manager.py | SQLite CRUD 작업 (#26) |
 
 추가 메모
@@ -219,6 +219,24 @@ korea-assembly-cc/
 - **코어 분리 고도화**: `core/live_capture.py`는 호환 facade로 유지하고, ledger/model/reconcile 구현은 `core/live_capture_impl/`로 이동
 - **빌드/문서 동기화**: `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장하고, `.gitignore`는 루트 `*.manifest`, `*.pyz` 산출물까지 무시
 - **주의점**: `ui/main_window_ui.py`는 이번 배치에서 공개 UI mixin 경로를 유지하며 shell/preset/help 책임은 후속 분리 대상으로 남음
+
+### v16.14.7 장시간 세션 안정성 후속 보강 메모 (2026-04-05)
+- **runtime segmented session**: 장시간 캡처는 `backups/runtime_sessions/<run_id>/manifest.json` + `segment_*.json` + `tail_checkpoint.json`으로 내부 보관하고, 메모리에는 최근 tail만 유지한다.
+- **full-session search/render**: inline search와 render는 archived segment + active tail 전체 세션을 기준으로 동작하며, 실행 중 복사는 active tail만 허용하고 중지 후 편집/복사/리플로우는 1회 hydrate 후 기존 경로를 사용한다.
+- **single DB worker**: DB history/search/stats/session-save DB write는 요청마다 임시 스레드를 만들지 않고 앱 런타임 전용 `DBWorker`가 직렬 처리하며, 검색/더보기는 request token으로 stale-drop 한다.
+- **shutdown diagnostics**: `closeEvent` 장기 대기 시 `계속 기다리기 / 진단 저장 / 강제 종료` modal로 escalation 하고, 진단은 `logs/shutdown_diagnostic_<timestamp>.json`에 background thread/DB worker/runtime archive/message queue/driver/session state를 기록한다.
+- **coalesced UI refresh**: `render/count/stats/status/search-count` 요청은 단일 scheduler에 모아 같은 event-loop tick 안에서 한 번만 반영한다.
+- **segment locator/cache**: runtime archive는 bisect 가능한 segment locator, render window cache, small segment LRU cache를 사용해 장시간 세션의 archived 접근 비용을 줄인다.
+- **debounced full-session search**: inline search는 debounce + revision stale-drop으로 최신 query만 반영하고, segment-local normalized text cache를 재사용한다.
+- **streaming save/export**: 세션 저장과 TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 export는 archived segment + active tail iterator를 직접 사용해 full hydrate를 피한다.
+- **LiveBroadcastDialog 네트워크 경로**: daemon fetch thread를 제거하고 `QNetworkAccessManager` + single active reply 구조로 전환했으며, frozen build에서는 `PyQt6.QtNetwork`를 포함하도록 `subtitle_extractor.spec`를 갱신했다.
+- **회귀 기준선**: `pytest -q` 146 pass, `pyright` 0 errors.
+
+### v16.14.7 코드 분할 리팩토링 정합화 메모 (2026-04-05)
+- **Database facade 슬림화**: `ui/main_window_database.py`는 공개 facade만 남기고 실제 DB worker/task/result 처리 책임은 `ui/main_window_impl/database_worker.py`, dialog/UI 책임은 `ui/main_window_impl/database_dialogs.py`로 이동했다.
+- **Persistence facade 슬림화**: `ui/main_window_persistence.py`는 공개 facade만 유지하고 runtime archive는 `persistence_runtime.py`, 세션/복구는 `persistence_session.py`, export는 `persistence_exports.py`, 유틸은 `persistence_tools.py`로 재분리했다.
+- **패키징 정합화**: `subtitle_extractor.spec` hidden import에 `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`를 반영해 frozen 빌드에서도 facade 뒤 구현이 누락되지 않도록 맞췄다.
+- **빌드 재검증**: `pyinstaller --clean subtitle_extractor.spec`로 `dist/국회의사중계자막추출기 v16.14.7.exe` 빌드를 다시 확인했다.
 
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록

@@ -142,15 +142,18 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
 
         if check_alert:
             self._check_keyword_alert(new_text)
+        self._mark_runtime_tail_dirty()
         self._mark_session_dirty()
         self._invalidate_destructive_undo()
         self._schedule_initial_recovery_snapshot_if_needed(
             self._build_prepared_entries_snapshot()
         )
-        self._update_count_label()
+        self._schedule_ui_refresh(count=True)
         if refresh:
-            self._refresh_text(force_full=False)
+            self._schedule_ui_refresh(render=True, force_full=False)
         self._write_realtime_line(realtime_line)
+        if str(result.get("action", "")) == "append":
+            self._maybe_schedule_runtime_segment_flush()
         return result
 
     def _process_subtitle_segments(self, data) -> None:
@@ -307,7 +310,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
 
         if requeue_others and pending:
             for item in pending:
-                self.message_queue.put_nowait(item)
+                self._requeue_message_item(item)
 
     def _finalize_pending_subtitle(self) -> None:
         if self.last_subtitle:
@@ -365,14 +368,25 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         )
         self.search_matches = []
         self.search_idx = 0
+        self._runtime_search_revision += 1
+        self._runtime_search_in_progress = False
+        self._runtime_search_query = ""
+        self._runtime_search_truncated = False
+        self._runtime_search_requested_query = ""
+        self._invalidate_runtime_segment_caches()
+        self._mark_runtime_tail_dirty()
         search_count = self.__dict__.get("search_count")
         if search_count is not None:
             search_count.setText("")
         self._search_focus_entry_index = None
         self._pending_search_focus_query = ""
         self._rebuild_stats_cache()
-        self._refresh_text(force_full=True)
-        self._update_count_label()
+        self._schedule_ui_refresh(
+            search_count=True,
+            render=True,
+            force_full=True,
+            count=True,
+        )
 
     def _should_merge_entry(
         self, last_entry: SubtitleEntry, new_text: str, now: datetime
