@@ -34,6 +34,7 @@
 - `ui/main_window.py`/`ui/main_window_capture.py`/`ui/main_window_pipeline.py`/`ui/main_window_view.py`/`core/live_capture.py`: 공개 facade는 유지하고 실제 구현을 `ui/main_window_impl/`, `core/live_capture_impl/`로 재배치했다. 책임 경계와 import 구조만 바뀌며 코어 자막 의미론은 바뀌지 않는다.
 - `ui/main_window_database.py`/`ui/main_window_persistence.py`/`subtitle_extractor.spec`: 공개 facade는 유지하되 실제 구현을 `ui/main_window_impl/database_worker.py`, `database_dialogs.py`, `persistence_runtime.py`, `persistence_session.py`, `persistence_exports.py`, `persistence_tools.py`로 재분리했고, PyInstaller hidden import도 같은 경계에 맞춰 갱신했다. 이 변경은 책임 분리와 패키징 정합화이며 코어 의미론은 바뀌지 않는다.
 - `ui/main_window.py`/`ui/main_window_persistence.py`/`ui/main_window_pipeline.py`/`core/config.py`: 수동 세션 저장, 종료 저장, 자동 백업이 공통 recovery state(`session_recovery.json`)를 기록하고, 시작 시 최신 복구 가능 스냅샷을 제안하는 흐름을 추가
+- `ui/main_window_impl/persistence_runtime.py`/`ui/main_window_impl/persistence_session.py`/`ui/main_window_impl/pipeline_messages.py`: 수동 세션 저장은 실행 중 runtime archive를 더 이상 정리하지 않고, runtime flush/checkpoint/recovery write는 `archive_token` + `run_id` + captured path context를 사용해 stale completion을 무시한다. runtime manifest 복구는 sibling `segment_*.json` + `tail_checkpoint.json` 기준 best-effort salvage를 허용하고, 빈 URL 세션 로드와 recovery pointer 수명주기 hygiene도 같이 정리했다.
 - `core/database_manager.py`: `subtitles` 테이블을 additive migration으로 확장해 `entry_id`/`source_*`/`speaker_*`/`speaker_changed`를 lossless round-trip으로 저장하고, 기본 검색을 FTS raw query가 아닌 literal substring 검색으로 고정
 - `core/reflow.py`/`ui/main_window_persistence.py`: 수동 reflow를 prepared snapshot 기반 백그라운드 작업으로 이동하고, `SubtitleEntry` 메타데이터 및 timing 정책을 유지하도록 재작성
 - `core/hwpx_export.py`/`ui/main_window_persistence.py`: DOCX/HWPX multiline export를 한 `SubtitleEntry = 한 문단/블록` 의미로 통일하고, 내부 개행은 line break로 표현
@@ -52,6 +53,7 @@
 - `ui/main_window_pipeline.py`/`ui/main_window_view.py`: `capture_state.entries`를 단일 source of truth로 고정하고, append/tail update는 delta 기반 갱신 + tail patch render 사용
 - `ui/main_window_persistence.py`/`core/file_io.py`/`core/database_manager.py`: streaming JSON 저장, `SubtitleEntry` 직접 DB 저장, stale thread connection cleanup cadence 완화
 - `typings/`/`pytest.ini`/`.gitignore`: 로컬 PyQt6·selenium·pytest stub, workspace basetemp(`.pytest_tmp`), 루트 `.hwpx` ignore 규칙으로 저장소 검증 경로를 고정
+- `pyrightconfig.json`/`.vscode/settings.json`/`typings/PyQt6/QtNetwork.pyi`/`tests/test_encoding_hygiene.py`: `typings/`를 `stubPath`/`extraPaths`로 명시하고 `.pytest_tmp`를 정적 분석·인코딩 검사에서 제외하며, 로컬 stub 경로의 `reportMissingModuleSource` 경고를 끈다. `QNetworkAccessManager` 경로용 QtNetwork stub을 추가해 CLI `pyright`와 Pylance 결과를 일치시킨다.
 - `ui/main_window_persistence.py`/`tests/test_review_20260323_regressions.py`: `pywin32` 미설치 시 HWP 저장은 즉시 HWPX로 대체되고, 저장 실패 후 사용자 선택 다이얼로그는 별도 경로로 유지
 - `core/subtitle_pipeline.py`: `auto_clean_newlines` 런타임 옵션 도입, preview/live-row/flush 정규화 경로 통일
 - `ui/main_window.py`/`ui/main_window_ui.py`: `✨ 자동 줄넘김 정리` 체크박스 추가, 기본 활성화 + `QSettings` 영속화
@@ -333,6 +335,8 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 - `pyrightconfig.json`: 저장소 공통 타입 체크 기준(`standard`, Python 3.10)
 - `.vscode/settings.json`: Pylance 워크스페이스 설정
 - `.editorconfig`, `.gitattributes`: UTF-8 without BOM + CRLF 기준 유지
+- `typings/`: 글로벌 인터프리터 편차를 흡수하는 로컬 PyQt6/selenium/pytest stub
+- `pytest.ini`: 워크스페이스 내부 basetemp(`.pytest_tmp`) 강제
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
 - `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
 - `tests/test_encoding_hygiene.py`: repo tracked 텍스트 파일의 UTF-8/BOM/U+FFFD 위생 및 핵심 한글 문자열 round-trip 검증

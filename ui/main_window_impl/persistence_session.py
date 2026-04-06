@@ -81,6 +81,22 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                         with open(path, "r", encoding="utf-8") as f:
                             data = json.load(f)
                     except json.JSONDecodeError as json_err:
+                        if recovery:
+                            try:
+                                payload = self._load_runtime_manifest_payload(
+                                    path,
+                                    allow_salvage=True,
+                                )
+                                payload["mark_dirty"] = mark_dirty
+                                payload["recovery"] = recovery
+                                self._emit_control_message("session_load_done", payload)
+                                return
+                            except Exception:
+                                logger.debug(
+                                    "손상된 recovery snapshot salvage 실패: %s",
+                                    path,
+                                    exc_info=True,
+                                )
                         self._emit_control_message(
                             "session_load_json_error",
                             {"path": path, "error": str(json_err), "recovery": recovery},
@@ -88,7 +104,10 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                         return
 
                     if str(data.get("format", "") or "") == "runtime_session_manifest_v1":
-                        payload = self._load_runtime_manifest_payload(path)
+                        payload = self._load_runtime_manifest_payload(
+                            path,
+                            allow_salvage=recovery,
+                        )
                         payload["mark_dirty"] = mark_dirty
                         payload["recovery"] = recovery
                         self._emit_control_message("session_load_done", payload)
@@ -166,7 +185,6 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
-                self._clear_recovery_state()
                 return
             self._start_session_load_from_path(
                 snapshot_path,
@@ -306,6 +324,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                         include_db=True,
                     )
                 self._clear_session_dirty()
+                self._clear_recovery_state()
                 db_error = str(info.get("db_error", "") or "").strip()
                 if db_error:
                     QMessageBox.warning(

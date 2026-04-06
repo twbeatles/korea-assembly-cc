@@ -25,6 +25,7 @@ EXCLUDED_DIRS = {
     ".mypy_cache",
     ".nox",
     ".pytest_cache",
+    ".pytest_tmp",
     ".ruff_cache",
     ".tox",
     "__pycache__",
@@ -88,3 +89,25 @@ def test_critical_utf8_files_round_trip_expected_korean_and_config_text():
 
     config = json.loads((PROJECT_ROOT / "pyrightconfig.json").read_text(encoding="utf-8"))
     assert "국회의사중계 자막.py" in config["include"]
+
+
+def test_pyright_and_pylance_configs_use_local_typings_and_ignore_temp_outputs():
+    pyright_config = json.loads((PROJECT_ROOT / "pyrightconfig.json").read_text(encoding="utf-8"))
+    vscode_settings = json.loads(
+        (PROJECT_ROOT / ".vscode" / "settings.json").read_text(encoding="utf-8")
+    )
+
+    assert pyright_config["stubPath"] == "typings"
+    assert ".pytest_tmp" in pyright_config["exclude"]
+    assert pyright_config["reportMissingModuleSource"] == "none"
+    assert pyright_config["executionEnvironments"][0]["extraPaths"] == ["typings"]
+
+    assert vscode_settings["python.analysis.stubPath"] == "./typings"
+    assert "./typings" in vscode_settings["python.analysis.extraPaths"]
+    assert "**/.pytest_tmp" in vscode_settings["python.analysis.exclude"]
+    assert (
+        vscode_settings["python.analysis.diagnosticSeverityOverrides"][
+            "reportMissingModuleSource"
+        ]
+        == "none"
+    )

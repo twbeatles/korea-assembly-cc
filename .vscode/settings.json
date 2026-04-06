@@ -1,5 +1,28 @@
 {
   "files.encoding": "utf8",
+  "files.autoGuessEncoding": false,
+  "files.eol": "\r\n",
   "python.analysis.diagnosticMode": "workspace",
-  "python.analysis.typeCheckingMode": "standard"
+  "python.analysis.typeCheckingMode": "standard",
+  "python.analysis.stubPath": "./typings",
+  "python.analysis.extraPaths": [
+    "./typings"
+  ],
+  "python.analysis.exclude": [
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/.pytest_tmp",
+    "**/.ruff_cache",
+    "**/.mypy_cache",
+    "**/backups",
+    "**/build",
+    "**/dist",
+    "**/logs",
+    "**/realtime_output",
+    "**/sessions",
+    "**/tmp_extension_unpacked"
+  ],
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingModuleSource": "none"
+  }
 }

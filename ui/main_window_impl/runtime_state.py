@@ -148,6 +148,8 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._realtime_save_active = False
         self._runtime_session_root: Path | None = None
         self._runtime_manifest_path: Path | None = None
+        self._runtime_archive_token = ""
+        self._runtime_archive_run_id: int | None = None
         self._runtime_segment_manifest: list[dict[str, Any]] = []
         self._runtime_next_segment_index = 1
         self._runtime_archived_count = 0

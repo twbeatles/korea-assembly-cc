@@ -3,6 +3,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable
 
 import pytest
 
@@ -61,6 +62,190 @@ def test_runtime_segment_flush_removes_prefix_only_after_done(tmp_path, monkeypa
     assert len(win.subtitles) == 2
     assert win._runtime_archived_count == 4
     assert len(win._runtime_segment_manifest) == 1
+
+
+def test_session_save_done_preserves_runtime_archive_and_allows_followup_flush(
+    tmp_path, monkeypatch
+):
+    win = MainWindow.__new__(MainWindow)
+    monkeypatch.setattr(mw_mod.Config, "RUNTIME_SEGMENT_FLUSH_THRESHOLD", 5)
+    monkeypatch.setattr(mw_mod.Config, "RUNTIME_ACTIVE_TAIL_ENTRIES", 2)
+    monkeypatch.setattr(
+        mw_mod.utils,
+        "atomic_write_json_stream",
+        lambda *_args, **_kwargs: None,
+    )
+
+    win._is_stopping = False
+    win._session_dirty = True
+    win._session_save_in_progress = True
+    win.is_running = True
+    win._runtime_session_root = tmp_path
+    win._runtime_manifest_path = tmp_path / "manifest.json"
+    win._runtime_segment_manifest = []
+    win._runtime_next_segment_index = 1
+    win._runtime_archived_count = 0
+    win._runtime_archived_chars = 0
+    win._runtime_archived_words = 0
+    win._runtime_archive_token = "archive-current"
+    win._runtime_archive_run_id = 17
+    win._runtime_segment_flush_in_progress = False
+    win._runtime_search_revision = 0
+    win._runtime_search_query = ""
+    win._runtime_search_truncated = False
+    win._cached_total_chars = 0
+    win._cached_total_words = 0
+    win.subtitle_lock = threading.Lock()
+    win.subtitles = [SubtitleEntry(f"문장 {index}") for index in range(6)]
+    win._build_session_save_context = lambda: ("https://assembly.example/live", "행안위", 0)
+    win._is_background_shutdown_active = lambda: False
+    win._clear_session_dirty = lambda: setattr(win, "_session_dirty", False)
+    recovery_cleared: list[bool] = []
+    win._clear_recovery_state = lambda: recovery_cleared.append(True)
+    emitted: list[tuple[str, dict]] = []
+    win._emit_control_message = lambda msg_type, data: emitted.append((msg_type, data))
+    win._start_background_thread = lambda target, _name: target() or True
+    win._write_runtime_manifest = lambda: None
+    win._write_runtime_tail_checkpoint = lambda *_args, **_kwargs: None
+    win._schedule_ui_refresh = lambda **_kwargs: None
+    win._set_status = lambda *_args, **_kwargs: None
+    win._show_toast = lambda *_args, **_kwargs: None
+
+    MainWindow._handle_message(win, "session_save_done", {"saved_count": 6})
+
+    assert win._session_save_in_progress is False
+    assert win._session_dirty is False
+    assert recovery_cleared == [True]
+    assert win._runtime_session_root == tmp_path
+    assert win._runtime_manifest_path == tmp_path / "manifest.json"
+    assert win._runtime_archive_token == "archive-current"
+    assert win._runtime_archive_run_id == 17
+
+    assert MainWindow._maybe_schedule_runtime_segment_flush(win) is True
+    assert emitted and emitted[0][0] == "runtime_segment_flush_done"
+    assert emitted[0][1]["archive_token"] == "archive-current"
+    assert emitted[0][1]["run_id"] == 17
+
+    MainWindow._handle_runtime_segment_flush_done(win, emitted[0][1])
+
+    assert len(win.subtitles) == 2
+    assert win._runtime_archived_count == 4
+    assert len(win._runtime_segment_manifest) == 1
+
+
+def test_runtime_segment_flush_done_ignores_stale_run_identity():
+    win = MainWindow.__new__(MainWindow)
+    win._runtime_archive_token = "archive-current"
+    win._runtime_archive_run_id = 22
+    win._runtime_segment_flush_in_progress = True
+    win.subtitle_lock = threading.Lock()
+    win.subtitles = [SubtitleEntry("현재 자막 1"), SubtitleEntry("현재 자막 2")]
+    win._cached_total_chars = 10
+    win._cached_total_words = 4
+    win._runtime_archived_count = 7
+    win._runtime_archived_chars = 70
+    win._runtime_archived_words = 20
+    win._runtime_segment_manifest = [{"path": "segment_000001.json", "entry_count": 7}]
+
+    manifest_writes: list[bool] = []
+    checkpoint_writes: list[bool] = []
+    refresh_calls: list[bool] = []
+    win._write_runtime_manifest = lambda: manifest_writes.append(True)
+    win._write_runtime_tail_checkpoint = lambda *_args, **_kwargs: checkpoint_writes.append(
+        True
+    )
+    win._schedule_ui_refresh = lambda **_kwargs: refresh_calls.append(True)
+
+    MainWindow._handle_runtime_segment_flush_done(
+        win,
+        {
+            "run_id": 99,
+            "archive_token": "archive-current",
+            "segment_index": 2,
+            "path": "segment_000002.json",
+            "entry_count": 1,
+            "char_count": 3,
+            "word_count": 1,
+            "start_index": 7,
+        },
+    )
+
+    assert [entry.text for entry in win.subtitles] == ["현재 자막 1", "현재 자막 2"]
+    assert win._runtime_segment_flush_in_progress is True
+    assert win._runtime_archived_count == 7
+    assert manifest_writes == []
+    assert checkpoint_writes == []
+    assert refresh_calls == []
+
+
+def test_runtime_segment_flush_failed_ignores_stale_archive_token():
+    win = MainWindow.__new__(MainWindow)
+    win._runtime_archive_token = "archive-current"
+    win._runtime_archive_run_id = 22
+    win._runtime_segment_flush_in_progress = True
+    toasts: list[tuple[str, str, int]] = []
+    win._show_toast = lambda message, level, duration: toasts.append(
+        (str(message), str(level), int(duration))
+    )
+
+    MainWindow._handle_runtime_segment_flush_failed(
+        win,
+        {
+            "run_id": 22,
+            "archive_token": "archive-stale",
+            "path": "segment_000002.json",
+            "error": "stale flush error",
+        },
+    )
+
+    assert win._runtime_segment_flush_in_progress is True
+    assert toasts == []
+
+
+def test_runtime_recovery_snapshot_worker_ignores_stale_archive_context(tmp_path):
+    win = MainWindow.__new__(MainWindow)
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+
+    win._auto_backup_lock = threading.Lock()
+    win._runtime_session_root = runtime_root
+    win._runtime_manifest_path = runtime_root / "manifest.json"
+    win._runtime_segment_manifest = []
+    win._runtime_archived_count = 0
+    win._runtime_archived_chars = 0
+    win._runtime_archived_words = 0
+    win._runtime_tail_revision = 1
+    win._runtime_tail_checkpoint_revision = 0
+    win._runtime_archive_token = "archive-current"
+    win._runtime_archive_run_id = 31
+    win._build_session_save_context = lambda: ("https://assembly.example/live", "행안위", 0)
+    win._is_background_shutdown_active = lambda: False
+
+    worker_targets: list[Callable[[], None]] = []
+
+    def fake_start_background_thread(target: Callable[[], None], _name: str) -> bool:
+        worker_targets.append(target)
+        return True
+
+    win._start_background_thread = fake_start_background_thread
+    recovery_records: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    win._record_recovery_snapshot = lambda *args, **kwargs: recovery_records.append(
+        (args, kwargs)
+    )
+
+    assert MainWindow._start_runtime_recovery_snapshot_write(
+        win,
+        [SubtitleEntry("복구 자막")],
+    )
+    assert len(worker_targets) == 1
+
+    win._runtime_archive_token = "archive-next"
+    worker_targets[0]()
+
+    assert recovery_records == []
+    assert (runtime_root / "tail_checkpoint.json").exists() is False
+    assert win._auto_backup_lock.acquire(blocking=False) is True
+    win._auto_backup_lock.release()
 
 
 def test_db_worker_serializes_async_and_sync_tasks():

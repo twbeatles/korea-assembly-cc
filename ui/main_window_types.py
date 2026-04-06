@@ -145,6 +145,8 @@ if TYPE_CHECKING:
         _pending_search_focus_query: str
         _runtime_session_root: Path | None
         _runtime_manifest_path: Path | None
+        _runtime_archive_token: str
+        _runtime_archive_run_id: int | None
         _runtime_segment_manifest: list[dict[str, Any]]
         _runtime_next_segment_index: int
         _runtime_archived_count: int

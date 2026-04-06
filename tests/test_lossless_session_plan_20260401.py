@@ -217,6 +217,7 @@ def test_confirm_dirty_session_action_save_uses_json_and_db_snapshot(monkeypatch
         {"path": path, "count": len(entries), "include_db": include_db}
     ) or {"db_error": ""}
     win._clear_session_dirty = lambda: setattr(win, "_session_dirty", False)
+    win._clear_recovery_state = lambda: captured.setdefault("recovery_cleared", True)
 
     monkeypatch.setattr(
         persistence_mod.QMessageBox,
@@ -232,7 +233,71 @@ def test_confirm_dirty_session_action_save_uses_json_and_db_snapshot(monkeypatch
     assert MainWindow._confirm_dirty_session_action(win, "세션 불러오기") is True
     assert captured["include_db"] is True
     assert captured["count"] == 1
+    assert captured["recovery_cleared"] is True
     assert win._session_dirty is False
+
+
+def test_prompt_session_recovery_no_keeps_recovery_state_file(tmp_path, monkeypatch):
+    session_file = tmp_path / "recover.json"
+    session_file.write_text(
+        json.dumps(
+            {
+                "version": Config.VERSION,
+                "created": "2026-04-01T09:00:00",
+                "url": "https://assembly.example/recover",
+                "committee_name": "운영위",
+                "subtitles": [{"text": "복구 자막", "timestamp": "2026-04-01T09:00:00"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    recovery_file = tmp_path / "recovery.json"
+    original_state = {
+        "path": str(session_file.resolve()),
+        "snapshot_type": "runtime_manifest",
+        "created_at": "2026-04-01T09:00:00",
+    }
+    recovery_file.write_text(
+        json.dumps(original_state, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Config, "RECOVERY_STATE_FILE", str(recovery_file), raising=False)
+    monkeypatch.setattr(
+        persistence_mod.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: persistence_mod.QMessageBox.StandardButton.No,
+    )
+
+    started: list[str] = []
+    win = MainWindow.__new__(MainWindow)
+    win._startup_recovery_prompted = False
+    win._session_load_in_progress = False
+    win.is_running = False
+    win._start_session_load_from_path = lambda path, **_kwargs: started.append(path) or True
+
+    MainWindow._prompt_session_recovery_if_available(win)
+
+    assert started == []
+    assert recovery_file.exists() is True
+    assert json.loads(recovery_file.read_text(encoding="utf-8")) == original_state
+
+
+def test_complete_loaded_recovery_keeps_recovery_state_pointer():
+    win = _build_loaded_session_window()
+    recovery_cleared: list[bool] = []
+    win._clear_recovery_state = lambda: recovery_cleared.append(True)
+
+    payload = {
+        "version": Config.VERSION,
+        "subtitles": [SubtitleEntry("복구된 자막")],
+        "mark_dirty": True,
+        "recovery": True,
+    }
+
+    assert MainWindow._complete_loaded_session(win, payload) is True
+    assert win._session_dirty is True
+    assert recovery_cleared == []
 
 
 def test_load_session_stops_when_dirty_confirmation_is_cancelled(monkeypatch):
@@ -568,6 +633,191 @@ def test_start_db_session_load_enqueues_highlight_payload_and_busy_state():
     assert captured["payload"]["highlight_sequence"] == 3
     assert captured["payload"]["highlight_query"] == "예산"
     assert busy_calls == [(True, "검색 결과 세션을 불러오는 중입니다...")]
+
+
+def _write_runtime_entries_file(
+    path: Path,
+    *,
+    format_name: str,
+    subtitles: list[object],
+    extra: dict[str, object] | None = None,
+) -> None:
+    payload: dict[str, object] = {
+        "format": format_name,
+        "version": Config.VERSION,
+        "created": "2026-04-06T09:00:00",
+        "url": "https://assembly.example/runtime",
+        "committee_name": "행정안전위원회",
+        "subtitles": [
+            item.to_dict() if isinstance(item, SubtitleEntry) else item for item in subtitles
+        ],
+    }
+    if extra:
+        payload.update(extra)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _build_runtime_manifest_loader_window() -> Any:
+    win = MainWindow.__new__(MainWindow)
+    win._runtime_segment_cache_entries_by_key = {}
+    win._runtime_segment_cache_keys = []
+    win._runtime_segment_search_text_cache = {}
+    return win
+
+
+def test_load_runtime_manifest_payload_salvages_missing_segment_file(tmp_path):
+    runtime_root = tmp_path / "runtime_missing"
+    runtime_root.mkdir()
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=[SubtitleEntry("첫 세그먼트")],
+    )
+    _write_runtime_entries_file(
+        runtime_root / "tail_checkpoint.json",
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=[SubtitleEntry("tail 자막")],
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "created": "2026-04-06T09:00:00",
+                "url": "https://assembly.example/runtime",
+                "committee_name": "행정안전위원회",
+                "tail_checkpoint": "tail_checkpoint.json",
+                "segments": [
+                    {"path": "segment_000001.json"},
+                    {"path": "segment_000002.json"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = MainWindow._load_runtime_manifest_payload(
+        _build_runtime_manifest_loader_window(),
+        manifest_path,
+        allow_salvage=True,
+    )
+
+    assert [entry.text for entry in payload["subtitles"]] == ["첫 세그먼트", "tail 자막"]
+    assert payload["skipped_files"] == 1
+    assert any("segment_000002.json" in item for item in payload["recovery_warnings"])
+
+
+def test_load_runtime_manifest_payload_salvages_corrupt_segment_file(tmp_path):
+    runtime_root = tmp_path / "runtime_corrupt_segment"
+    runtime_root.mkdir()
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=[SubtitleEntry("정상 세그먼트")],
+    )
+    (runtime_root / "segment_000002.json").write_text("{broken", encoding="utf-8")
+    _write_runtime_entries_file(
+        runtime_root / "tail_checkpoint.json",
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=[SubtitleEntry("tail 자막")],
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "created": "2026-04-06T09:00:00",
+                "url": "https://assembly.example/runtime",
+                "committee_name": "행정안전위원회",
+                "tail_checkpoint": "tail_checkpoint.json",
+                "segments": [
+                    {"path": "segment_000001.json"},
+                    {"path": "segment_000002.json"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = MainWindow._load_runtime_manifest_payload(
+        _build_runtime_manifest_loader_window(),
+        manifest_path,
+        allow_salvage=True,
+    )
+
+    assert [entry.text for entry in payload["subtitles"]] == ["정상 세그먼트", "tail 자막"]
+    assert payload["skipped_files"] == 1
+    assert any("segment_000002.json" in item for item in payload["recovery_warnings"])
+
+
+def test_load_runtime_manifest_payload_salvages_corrupt_tail_checkpoint(tmp_path):
+    runtime_root = tmp_path / "runtime_corrupt_tail"
+    runtime_root.mkdir()
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=[SubtitleEntry("세그먼트 자막")],
+    )
+    (runtime_root / "tail_checkpoint.json").write_text("{broken", encoding="utf-8")
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "created": "2026-04-06T09:00:00",
+                "url": "https://assembly.example/runtime",
+                "committee_name": "행정안전위원회",
+                "tail_checkpoint": "tail_checkpoint.json",
+                "segments": [{"path": "segment_000001.json"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = MainWindow._load_runtime_manifest_payload(
+        _build_runtime_manifest_loader_window(),
+        manifest_path,
+        allow_salvage=True,
+    )
+
+    assert [entry.text for entry in payload["subtitles"]] == ["세그먼트 자막"]
+    assert payload["skipped_files"] == 1
+    assert any("tail_checkpoint.json" in item for item in payload["recovery_warnings"])
+
+
+def test_load_runtime_manifest_payload_salvages_from_sibling_files_when_manifest_is_corrupt(
+    tmp_path,
+):
+    runtime_root = tmp_path / "runtime_manifest_salvage"
+    runtime_root.mkdir()
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=[SubtitleEntry("세그먼트 자막")],
+    )
+    _write_runtime_entries_file(
+        runtime_root / "tail_checkpoint.json",
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=[SubtitleEntry("tail 자막")],
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text("{broken", encoding="utf-8")
+
+    payload = MainWindow._load_runtime_manifest_payload(
+        _build_runtime_manifest_loader_window(),
+        manifest_path,
+        allow_salvage=True,
+    )
+
+    assert [entry.text for entry in payload["subtitles"]] == ["세그먼트 자막", "tail 자막"]
+    assert payload["skipped_files"] == 1
+    assert any("manifest 복구 전환" in item for item in payload["recovery_warnings"])
 
 
 def test_clean_newlines_uses_prepared_snapshot_and_applies_result(monkeypatch):

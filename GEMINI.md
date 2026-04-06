@@ -198,12 +198,16 @@ pip install -r requirements-dev.txt
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
+- `pyrightconfig.json`은 `stubPath=typings`, `executionEnvironments[].extraPaths=["typings"]`, `.pytest_tmp` exclude, `reportMissingModuleSource=none`를 공통 기준으로 사용
+- `tests/test_encoding_hygiene.py`는 repo tracked 파일만 검사하고, BOM이 허용되는 `.pytest_tmp` workspace temp 산출물은 제외한다
 - Windows PowerShell 5.x 콘솔에서는 UTF-8 without BOM이 깨져 보일 수 있으나 파일 자체는 UTF-8 유지
 
 ### 8.2 저장소 기준 파일
 - `pyrightconfig.json`: 저장소 공통 타입 체크 기준
 - `.vscode/settings.json`: 워크스페이스 Pylance/UTF-8 설정
 - `.editorconfig`, `.gitattributes`: 텍스트 파일 인코딩/라인엔딩 기준
+- `typings/`: 글로벌 인터프리터 편차를 흡수하는 로컬 PyQt6/selenium/pytest stub
+- `pytest.ini`: 워크스페이스 내부 basetemp(`.pytest_tmp`) 강제
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
 - `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
 - `tests/test_encoding_hygiene.py`: UTF-8 without BOM, U+FFFD 금지, 핵심 한글 문자열 round-trip 검증
@@ -429,6 +433,15 @@ pip install -r requirements-dev.txt
 - `ui/main_window_persistence.py`는 facade만 유지하고 runtime archive는 `persistence_runtime.py`, 세션/복구는 `persistence_session.py`, export는 `persistence_exports.py`, 유틸은 `persistence_tools.py`로 재분리했다.
 - `subtitle_extractor.spec` hidden import에는 `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`를 추가해 frozen 빌드에서도 facade 뒤 구현이 누락되지 않도록 맞췄다.
 - `pyinstaller --clean subtitle_extractor.spec`로 `dist/국회의사중계자막추출기 v16.14.7.exe` 빌드를 다시 검증했다.
+
+## 9.9.7 v16.14.7 세션 안정성 / 도구 체인 정합화 (2026-04-06)
+- 실행 중 수동 `세션 저장`은 runtime archive를 정리하지 않고 snapshot-only로 처리되며, 이후 segment flush/search/render/export는 같은 archive를 계속 사용한다.
+- runtime flush/checkpoint/recovery write는 `archive_token` + `run_id` + captured path context를 함께 유지하고, stale completion은 무시한다.
+- runtime manifest 복구는 best-effort salvage로 동작하며, manifest JSON 손상 시 sibling `segment_*.json` + `tail_checkpoint.json`에서 복구를 시도하고 제외된 파일/항목 수를 사용자 요약에 노출한다.
+- 빈 URL 세션 로드 시 stale `current_url`을 비우고, recovery pointer는 복구 거절/복구 성공 시 즉시 지우지 않으며 성공한 JSON 저장 또는 정상 종료에서만 정리한다.
+- `pyrightconfig.json` / `.vscode/settings.json`은 `typings/`를 `stubPath`/`extraPaths`로 명시하고 `.pytest_tmp`를 분석 범위에서 제외하며, 로컬 stub 환경의 `reportMissingModuleSource` 경고를 끈다.
+- `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance에서 동일하게 해석된다.
+- 최신 기준선은 `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings 이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

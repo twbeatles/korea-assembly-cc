@@ -71,12 +71,19 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             skipped_items = int(payload.get("skipped", 0) or 0)
         except Exception:
             skipped_items = 0
+        try:
+            skipped_files = int(payload.get("skipped_files", 0) or 0)
+        except Exception:
+            skipped_files = 0
         mark_dirty = bool(payload.get("mark_dirty", False))
         recovery = bool(payload.get("recovery", False))
         highlight_sequence = self._coerce_highlight_sequence(
             payload.get("highlight_sequence")
         )
         highlight_query = str(payload.get("highlight_query", "") or "")
+        recovery_warnings = payload.get("recovery_warnings", [])
+        if not isinstance(recovery_warnings, list):
+            recovery_warnings = []
 
         if not isinstance(loaded_subtitles, list):
             return False
@@ -98,7 +105,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
         self._replace_subtitles_and_refresh(
             loaded_subtitles, keep_history_from_subtitles=bool(loaded_subtitles)
         )
-        self._cleanup_runtime_session_archive(remove_files=True)
+        self._cleanup_runtime_session_archive(remove_files=False)
         self._clear_destructive_undo_state()
         self._initial_recovery_snapshot_done = False
         self._set_capture_source_metadata(
@@ -111,16 +118,29 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             self.url_combo.setCurrentText(source_url)
             self._add_to_history(source_url, committee_name)
             self.current_url = source_url
-
-        if recovery:
-            self._clear_recovery_state()
+        else:
+            try:
+                self.url_combo.setCurrentText("")
+            except Exception:
+                try:
+                    self.url_combo.setEditText("")
+                except Exception:
+                    pass
+            self.current_url = ""
 
         summary_prefix = "세션 복구 완료!" if recovery else "세션 불러오기 완료!"
         summary = f"{summary_prefix} {self._get_global_subtitle_count()}개 문장"
+        exclusions: list[str] = []
         if skipped_items > 0:
-            summary += f" (손상 항목 {skipped_items}개 제외)"
+            exclusions.append(f"손상 항목 {skipped_items}개 제외")
+        if skipped_files > 0:
+            exclusions.append(f"손상 파일 {skipped_files}개 제외")
+        if exclusions:
+            summary += f" ({', '.join(exclusions)})"
         self._set_status(summary, "success")
         self._show_toast(summary, "success")
+        if recovery_warnings:
+            logger.warning("세션 복구 경고: %s", " / ".join(str(item) for item in recovery_warnings))
         if mark_dirty:
             self._mark_session_dirty()
         else:
@@ -292,8 +312,8 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 saved_count = int(info.get("saved_count", 0) or 0)
                 db_saved = bool(info.get("db_saved", False))
                 db_error = str(info.get("db_error", "") or "").strip()
-                self._cleanup_runtime_session_archive(remove_files=True)
                 self._clear_session_dirty()
+                self._clear_recovery_state()
                 if db_saved:
                     self._set_status(
                         f"세션 저장 완료 ({saved_count}개, DB 저장 포함)", "success"
@@ -325,8 +345,6 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 info = data if isinstance(data, dict) else {}
                 path = str(info.get("path", ""))
                 err = str(info.get("error", "JSON 파싱 오류"))
-                if bool(info.get("recovery", False)):
-                    self._clear_recovery_state()
                 reply = pipeline_mod.QMessageBox.question(
                     self,
                     "파일 손상",

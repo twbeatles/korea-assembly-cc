@@ -76,6 +76,15 @@
 - 공개 import 경로와 테스트의 monkeypatch 경로는 유지해 외부 호출 지점을 깨지 않으면서 긴 파일을 줄였습니다.
 - `pyinstaller --clean subtitle_extractor.spec`를 다시 검증했고, `dist/국회의사중계자막추출기 v16.14.7.exe` 빌드가 성공했습니다.
 
+### 🧱 세션 안정성 / 타입·인코딩 위생 보강 (2026-04-06)
+- 실행 중 수동 `세션 저장`은 더 이상 현재 run의 runtime archive를 정리하지 않으며, 같은 archive가 이후 segment flush/search/render/export까지 계속 이어집니다.
+- runtime archive background 작업은 `archive_token` + `run_id`를 함께 캡처해, `stop -> start` 경계에서 늦게 도착한 flush 완료/실패와 recovery snapshot write가 새 run 상태를 오염시키지 않도록 고정했습니다.
+- runtime manifest 복구는 file-level best-effort salvage로 바뀌어 segment/checkpoint 일부 손상이나 manifest JSON 손상 시에도 sibling `segment_*.json` + `tail_checkpoint.json` 기준으로 복구를 시도하고, 제외된 손상 파일/항목 수를 사용자 요약에 표시합니다.
+- 빈 URL 세션 로드 시 stale `current_url`과 URL 입력 UI를 명시적으로 비우고, recovery pointer는 복구 거절/복구 성공 시 즉시 지우지 않으며 성공한 JSON 세션 저장 또는 정상 종료에서만 정리합니다.
+- `pyrightconfig.json`과 `.vscode/settings.json`은 `typings/`를 `stubPath`/`extraPaths`로 명시하고 `.pytest_tmp`를 분석 범위에서 제외하며, 로컬 stub 환경의 `reportMissingModuleSource` 경고를 끄도록 동기화했습니다.
+- `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance에서 동일하게 해석됩니다.
+- 최신 기준선: `pytest -q` `158 passed`, `pyright --outputjson` `0 errors / 0 warnings`.
+
 ## ✨ v16.14.6 자막 유실 방지 배치 (2026-04-01)
 
 ### 🛡️ 세션 / 복구
@@ -595,7 +604,9 @@ python -c "import ui.main_window as m; print(m.MainWindow.__name__)"
 - 소스 코드, 문서(`.md`), 빌드 스펙(`subtitle_extractor.spec`)은 **UTF-8 without BOM**을 유지합니다.
 - 사용자 내보내기 텍스트 중 일부 경로(TXT 실시간 저장/일반 TXT 저장)는 Windows 메모장 호환을 위해 `utf-8-sig`를 사용합니다.
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 같은 진단 기준을 사용합니다.
+- `pyrightconfig.json`은 `stubPath=typings`, `executionEnvironments[].extraPaths=["typings"]`, `.pytest_tmp` exclude, `reportMissingModuleSource=none`를 공통 기준으로 사용합니다.
 - `pytest.ini`는 `--basetemp=.pytest_tmp`를 사용해 Windows 사용자 TEMP 권한 이슈와 한글 사용자명 경로 영향을 줄입니다.
+- `tests/test_encoding_hygiene.py`는 repo tracked 파일만 검사하며, Windows 메모장 호환용 BOM이 허용되는 `.pytest_tmp` 같은 workspace temp 산출물은 검사에서 제외합니다.
 - Windows PowerShell 5.x 기본 출력 인코딩에서는 UTF-8 without BOM 파일이 콘솔에 깨져 보일 수 있습니다. 저장소 기준 파일 자체는 UTF-8입니다.
 
 ### 저장소 기준 파일
@@ -627,8 +638,8 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
-- `python-docx`, `pywin32`, `core.subtitle_processor`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
-- `typings/`는 정적 분석 전용 로컬 stub이므로 frozen 번들에는 포함하지 않습니다.
+- `python-docx`, `pywin32`, `core.subtitle_processor`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
+- `typings/`, `.pytest_tmp`, `session_recovery.json`, `backups/runtime_sessions/` 같은 정적 분석/워크스페이스 temp/런타임 archive 산출물은 frozen 번들에 포함하지 않습니다.
 - 빌드 산출물은 기존 `.gitignore`의 `build/`, `dist/` 규칙으로 계속 관리됩니다.
 
 ---
@@ -640,6 +651,9 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - `ui/main_window_impl/`와 `core/live_capture_impl/`로 capture/pipeline/view/runtime/live capture 내부 구현을 재배치하고 공개 facade import 경로는 유지
 - `ui/main_window_database.py`, `ui/main_window_persistence.py`는 facade 조합 레이어로 축소하고 실제 DB/persistence 구현은 `ui/main_window_impl/database_*`, `ui/main_window_impl/persistence_*`로 재분리
 - `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장하고, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 현재 구조 기준으로 재동기화
+- `archive_token` + `run_id` 기반 runtime archive identity, best-effort runtime manifest salvage, blank-URL 세션 로드 hygiene, recovery pointer 유지 정책을 추가해 장시간 세션 안정성을 보강
+- `pyrightconfig.json` / `.vscode/settings.json` / `typings/PyQt6/QtNetwork.pyi` / `tests/test_encoding_hygiene.py`를 갱신해 Pylance/CLI `pyright`와 UTF-8 위생 기준을 현재 코드에 맞게 고정
+- 검증 기준선: `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings
 
 ### v16.14.6 (2026-04-01)
 - recovery state(`session_recovery.json`) 기반 최신 복구 가능 세션 제안, 종료 직전 저장/자동 백업 메타데이터 정리

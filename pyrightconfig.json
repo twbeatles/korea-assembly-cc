@@ -1,6 +1,8 @@
 {
   "typeCheckingMode": "standard",
   "pythonVersion": "3.10",
+  "stubPath": "typings",
+  "reportMissingModuleSource": "none",
   "include": [
     "core",
     "ui",
@@ -11,6 +13,7 @@
   "exclude": [
     "**/__pycache__",
     ".pytest_cache",
+    ".pytest_tmp",
     ".ruff_cache",
     ".mypy_cache",
     ".tox",
@@ -26,5 +29,13 @@
     "realtime_output",
     "sessions",
     "tmp_extension_unpacked"
+  ],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": [
+        "typings"
+      ]
+    }
   ]
 }

@@ -299,8 +299,10 @@ def test_session_save_done_clears_dirty_and_reports_db_warning():
 
     statuses: list[tuple[str, str]] = []
     toasts: list[tuple[Any, ...]] = []
+    recovery_cleared: list[bool] = []
     win._set_status = lambda message, level: statuses.append((message, level))
     win._show_toast = lambda *args, **_kwargs: toasts.append(args)
+    win._clear_recovery_state = lambda: recovery_cleared.append(True)
 
     MainWindow._handle_message(
         win,
@@ -310,8 +312,30 @@ def test_session_save_done_clears_dirty_and_reports_db_warning():
 
     assert MainWindow._has_dirty_session(win) is False
     assert win._session_save_in_progress is False
+    assert recovery_cleared == [True]
     assert statuses == [("세션 저장 완료 (3개)", "success")]
     assert toasts == [("세션 저장 완료 (DB 저장은 실패)", "warning", 3500)]
+
+
+def test_complete_loaded_session_clears_stale_current_url_when_payload_url_blank():
+    win, history = _build_session_window()
+    win.current_url = "https://assembly.example/old"
+    win.url_combo.current_text = "https://assembly.example/old"
+    payload = {
+        "version": Config.VERSION,
+        "url": "",
+        "committee_name": "행안위",
+        "subtitles": [SubtitleEntry("불러온 자막", datetime(2026, 3, 27, 9, 0, 0))],
+        "skipped": 0,
+    }
+
+    loaded = MainWindow._complete_loaded_session(win, payload)
+
+    assert loaded is True
+    assert history == []
+    assert win.current_url == ""
+    assert win.url_combo.current_text == ""
+    assert MainWindow._get_capture_source_url(win, fallback_to_current=False) == ""
 
 
 def test_structured_preview_payload_marks_dirty_only_when_commit_occurs():

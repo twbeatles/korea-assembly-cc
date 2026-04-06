@@ -2,12 +2,34 @@
 
 import bisect
 import shutil
+from typing import Iterable, cast
+from uuid import uuid4
 
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 
 
 class MainWindowPersistenceRuntimeMixin(MainWindowHost):
+
+    def _coerce_runtime_run_id(self, value: object) -> int | None:
+            if value is None:
+                return None
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not stripped:
+                    return None
+                try:
+                    return int(stripped)
+                except ValueError:
+                    return None
+            try:
+                return int(cast(Any, value))
+            except Exception:
+                return None
 
     def _build_session_save_context(self) -> tuple[str, str, int]:
             """세션/백업 저장에 사용할 메타데이터를 계산한다."""
@@ -20,6 +42,143 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             return bool(self.__dict__.get("_runtime_segment_manifest", [])) and int(
                 self.__dict__.get("_runtime_archived_count", 0) or 0
             ) > 0
+
+    def _is_runtime_archive_identity_current(
+            self,
+            run_id: object = None,
+            archive_token: object = None,
+        ) -> bool:
+            expected_token = str(self.__dict__.get("_runtime_archive_token", "") or "")
+            normalized_token = str(archive_token or "").strip()
+            if not expected_token or not normalized_token or normalized_token != expected_token:
+                return False
+            current_run_id = self._coerce_runtime_run_id(
+                self.__dict__.get("_runtime_archive_run_id")
+            )
+            candidate_run_id = self._coerce_runtime_run_id(run_id)
+            if current_run_id is None or candidate_run_id is None:
+                return False
+            return current_run_id == candidate_run_id
+
+    def _build_runtime_archive_snapshot(self) -> dict[str, Any] | None:
+            runtime_root = self.__dict__.get("_runtime_session_root")
+            manifest_path = self.__dict__.get("_runtime_manifest_path")
+            if runtime_root is None or manifest_path is None:
+                return None
+            current_url, committee_name, _duration = self._build_session_save_context()
+            return {
+                "runtime_root": Path(runtime_root),
+                "manifest_path": Path(manifest_path),
+                "tail_checkpoint_name": "tail_checkpoint.json",
+                "manifest_items": [
+                    dict(item)
+                    for item in list(self.__dict__.get("_runtime_segment_manifest", []))
+                ],
+                "archived_count": int(self.__dict__.get("_runtime_archived_count", 0) or 0),
+                "archived_chars": int(self.__dict__.get("_runtime_archived_chars", 0) or 0),
+                "archived_words": int(self.__dict__.get("_runtime_archived_words", 0) or 0),
+                "tail_revision": int(self.__dict__.get("_runtime_tail_revision", 0) or 0),
+                "archive_token": str(self.__dict__.get("_runtime_archive_token", "") or ""),
+                "run_id": self.__dict__.get("_runtime_archive_run_id"),
+                "url": current_url,
+                "committee_name": committee_name,
+            }
+
+    def _serialize_runtime_manifest_payload(
+            self,
+            *,
+            current_url: str,
+            committee_name: str,
+            archived_count: int,
+            archived_chars: int,
+            archived_words: int,
+            manifest_items: list[dict[str, Any]],
+            tail_checkpoint_name: str = "tail_checkpoint.json",
+            archive_token: str = "",
+            run_id: int | None = None,
+        ) -> dict[str, Any]:
+            payload = {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "created": datetime.now().isoformat(),
+                "url": current_url,
+                "committee_name": committee_name,
+                "archived_count": int(archived_count),
+                "archived_chars": int(archived_chars),
+                "archived_words": int(archived_words),
+                "tail_checkpoint": str(tail_checkpoint_name or "tail_checkpoint.json"),
+                "segments": [dict(item) for item in manifest_items],
+            }
+            if archive_token:
+                payload["archive_token"] = archive_token
+            if run_id is not None:
+                payload["run_id"] = int(run_id)
+            return payload
+
+    def _write_runtime_manifest_to_path(
+            self,
+            manifest_path: Path,
+            *,
+            current_url: str,
+            committee_name: str,
+            archived_count: int,
+            archived_chars: int,
+            archived_words: int,
+            manifest_items: list[dict[str, Any]],
+            tail_checkpoint_name: str = "tail_checkpoint.json",
+            archive_token: str = "",
+            run_id: int | None = None,
+        ) -> None:
+            utils.atomic_write_json(
+                manifest_path,
+                self._serialize_runtime_manifest_payload(
+                    current_url=current_url,
+                    committee_name=committee_name,
+                    archived_count=archived_count,
+                    archived_chars=archived_chars,
+                    archived_words=archived_words,
+                    manifest_items=manifest_items,
+                    tail_checkpoint_name=tail_checkpoint_name,
+                    archive_token=archive_token,
+                    run_id=run_id,
+                ),
+                ensure_ascii=False,
+            )
+
+    def _write_runtime_tail_checkpoint_to_path(
+            self,
+            checkpoint_path: Path,
+            entries: list[SubtitleEntry],
+            *,
+            current_url: str,
+            committee_name: str,
+            archived_count: int,
+            archived_chars: int,
+            archived_words: int,
+            archive_token: str = "",
+            run_id: int | None = None,
+        ) -> None:
+            head_items: list[tuple[str, object]] = [
+                ("format", "runtime_tail_checkpoint_v1"),
+                ("version", Config.VERSION),
+                ("created", datetime.now().isoformat()),
+                ("url", current_url),
+                ("committee_name", committee_name),
+                ("archived_count", int(archived_count)),
+                ("archived_chars", int(archived_chars)),
+                ("archived_words", int(archived_words)),
+            ]
+            if archive_token:
+                head_items.append(("archive_token", archive_token))
+            if run_id is not None:
+                head_items.append(("run_id", int(run_id)))
+            utils.atomic_write_json_stream(
+                checkpoint_path,
+                head_items=head_items,
+                sequence_key="subtitles",
+                sequence_items=utils.iter_serialized_subtitles(entries),
+                ensure_ascii=False,
+            )
 
     def _invalidate_runtime_segment_caches(self) -> None:
             self._runtime_segment_cache_key = ""
@@ -99,6 +258,8 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             self._runtime_archived_count = 0
             self._runtime_archived_chars = 0
             self._runtime_archived_words = 0
+            self._runtime_archive_token = ""
+            self._runtime_archive_run_id = None
             self._runtime_segment_flush_in_progress = False
             self._invalidate_runtime_segment_caches()
             self._runtime_search_revision = int(
@@ -115,14 +276,18 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
 
     def _cleanup_runtime_session_archive(self, *, remove_files: bool = True) -> None:
             runtime_root = self.__dict__.get("_runtime_session_root")
-            self._reset_runtime_session_archive_state(keep_root=not remove_files)
+            self._reset_runtime_session_archive_state(keep_root=False)
             if remove_files and runtime_root is not None:
                 try:
                     shutil.rmtree(runtime_root, ignore_errors=True)
                 except Exception:
                     logger.debug("runtime session archive 정리 실패: %s", runtime_root, exc_info=True)
 
-    def _cleanup_orphan_runtime_archives(self) -> None:
+    def _cleanup_orphan_runtime_archives(
+            self,
+            *,
+            extra_preserved_dirs: Iterable[Path] | None = None,
+        ) -> None:
             runtime_root = Path(Config.RUNTIME_SESSION_DIR)
             runtime_root.mkdir(parents=True, exist_ok=True)
             recovery_state = None
@@ -134,6 +299,11 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             preserved_dirs: set[Path] = set()
             if self._runtime_session_root is not None:
                 preserved_dirs.add(self._runtime_session_root.resolve())
+            for extra_dir in list(extra_preserved_dirs or []):
+                try:
+                    preserved_dirs.add(Path(extra_dir).resolve())
+                except Exception:
+                    continue
             if isinstance(recovery_state, dict):
                 recovery_path = Path(str(recovery_state.get("path", "") or "")).resolve()
                 for parent in [recovery_path, recovery_path.parent]:
@@ -158,8 +328,8 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                     logger.debug("orphan runtime archive 정리 실패: %s", child, exc_info=True)
 
     def _start_runtime_session_archive(self, run_id: int | None = None) -> None:
-            self._cleanup_runtime_session_archive(remove_files=True)
-            self._cleanup_orphan_runtime_archives()
+            previous_root = self.__dict__.get("_runtime_session_root")
+            self._cleanup_runtime_session_archive(remove_files=False)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             suffix = f"{int(run_id)}" if run_id is not None else "manual"
             runtime_root = Path(Config.RUNTIME_SESSION_DIR) / f"run_{timestamp}_{suffix}"
@@ -167,7 +337,16 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             self._runtime_session_root = runtime_root
             self._runtime_manifest_path = runtime_root / "manifest.json"
             self._reset_runtime_session_archive_state(keep_root=True)
+            self._runtime_archive_run_id = int(run_id) if run_id is not None else None
+            self._runtime_archive_token = uuid4().hex
             self._write_runtime_manifest()
+            preserved_dirs: set[Path] = set()
+            if previous_root is not None:
+                try:
+                    preserved_dirs.add(Path(previous_root).resolve())
+                except Exception:
+                    pass
+            self._cleanup_orphan_runtime_archives(extra_preserved_dirs=preserved_dirs)
 
     def _runtime_tail_checkpoint_path(self) -> Path | None:
             runtime_root = self.__dict__.get("_runtime_session_root")
@@ -185,27 +364,34 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
 
     def _serialize_runtime_manifest(self) -> dict[str, Any]:
             current_url, committee_name, _duration = self._build_session_save_context()
-            return {
-                "format": "runtime_session_manifest_v1",
-                "version": Config.VERSION,
-                "created": datetime.now().isoformat(),
-                "url": current_url,
-                "committee_name": committee_name,
-                "archived_count": int(self._runtime_archived_count),
-                "archived_chars": int(self._runtime_archived_chars),
-                "archived_words": int(self._runtime_archived_words),
-                "tail_checkpoint": "tail_checkpoint.json",
-                "segments": [dict(item) for item in self._runtime_segment_manifest],
-            }
+            return self._serialize_runtime_manifest_payload(
+                current_url=current_url,
+                committee_name=committee_name,
+                archived_count=int(self._runtime_archived_count),
+                archived_chars=int(self._runtime_archived_chars),
+                archived_words=int(self._runtime_archived_words),
+                manifest_items=[dict(item) for item in self._runtime_segment_manifest],
+                tail_checkpoint_name="tail_checkpoint.json",
+                archive_token=str(self.__dict__.get("_runtime_archive_token", "") or ""),
+                run_id=self.__dict__.get("_runtime_archive_run_id"),
+            )
 
     def _write_runtime_manifest(self) -> None:
             manifest_path = self._runtime_manifest_path
             if manifest_path is None:
                 return
-            utils.atomic_write_json(
-                manifest_path,
-                self._serialize_runtime_manifest(),
-                ensure_ascii=False,
+            current_url, committee_name, _duration = self._build_session_save_context()
+            self._write_runtime_manifest_to_path(
+                Path(manifest_path),
+                current_url=current_url,
+                committee_name=committee_name,
+                archived_count=int(self._runtime_archived_count),
+                archived_chars=int(self._runtime_archived_chars),
+                archived_words=int(self._runtime_archived_words),
+                manifest_items=[dict(item) for item in self._runtime_segment_manifest],
+                tail_checkpoint_name="tail_checkpoint.json",
+                archive_token=str(self.__dict__.get("_runtime_archive_token", "") or ""),
+                run_id=self.__dict__.get("_runtime_archive_run_id"),
             )
 
     def _write_runtime_tail_checkpoint(
@@ -217,48 +403,122 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                 return None
             tail_revision = int(self.__dict__.get("_runtime_tail_revision", 0) or 0)
             current_url, committee_name, _duration = self._build_session_save_context()
-            created_at = datetime.now().isoformat()
             entries = prepared_entries if prepared_entries is not None else list(self.subtitles)
-            saved_count = int(self.__dict__.get("_runtime_archived_count", 0) or 0) + len(
-                entries
-            )
-            utils.atomic_write_json_stream(
-                checkpoint_path,
-                head_items=[
-                    ("format", "runtime_tail_checkpoint_v1"),
-                    ("version", Config.VERSION),
-                    ("created", created_at),
-                    ("url", current_url),
-                    ("committee_name", committee_name),
-                    ("archived_count", int(self._runtime_archived_count)),
-                    ("archived_chars", int(self._runtime_archived_chars)),
-                    ("archived_words", int(self._runtime_archived_words)),
-                ],
-                sequence_key="subtitles",
-                sequence_items=utils.iter_serialized_subtitles(entries),
-                ensure_ascii=False,
+            self._write_runtime_tail_checkpoint_to_path(
+                Path(checkpoint_path),
+                list(entries),
+                current_url=current_url,
+                committee_name=committee_name,
+                archived_count=int(self.__dict__.get("_runtime_archived_count", 0) or 0),
+                archived_chars=int(self.__dict__.get("_runtime_archived_chars", 0) or 0),
+                archived_words=int(self.__dict__.get("_runtime_archived_words", 0) or 0),
+                archive_token=str(self.__dict__.get("_runtime_archive_token", "") or ""),
+                run_id=self.__dict__.get("_runtime_archive_run_id"),
             )
             self._runtime_tail_checkpoint_revision = tail_revision
             return checkpoint_path
 
-    def _record_runtime_recovery_snapshot(
+    def _record_runtime_recovery_snapshot_from_context(
             self,
-            prepared_entries: list[SubtitleEntry] | None = None,
+            prepared_entries: list[SubtitleEntry],
+            *,
+            context: dict[str, Any],
         ) -> bool:
-            manifest_path = self._runtime_manifest_path
-            if manifest_path is None:
+            runtime_root = context.get("runtime_root")
+            manifest_path = context.get("manifest_path")
+            archive_token = str(context.get("archive_token", "") or "")
+            run_id = context.get("run_id")
+            if runtime_root is None or manifest_path is None:
                 return False
-            self._write_runtime_tail_checkpoint(prepared_entries)
-            self._write_runtime_manifest()
-            current_url, committee_name, _duration = self._build_session_save_context()
+            if archive_token and not self._is_runtime_archive_identity_current(run_id, archive_token):
+                return False
+
+            captured_archived_count = int(context.get("archived_count", 0) or 0)
+            captured_tail_revision = int(context.get("tail_revision", 0) or 0)
+            captured_manifest_items = [
+                dict(item)
+                for item in list(context.get("manifest_items", []))
+                if isinstance(item, dict)
+            ]
+            current_archived_count = int(self.__dict__.get("_runtime_archived_count", 0) or 0)
+            current_tail_revision = int(self.__dict__.get("_runtime_tail_revision", 0) or 0)
+            if archive_token and (
+                current_archived_count != captured_archived_count
+                or current_tail_revision != captured_tail_revision
+            ):
+                return False
+
+            runtime_root_path = Path(runtime_root)
+            manifest_file_path = Path(manifest_path)
+            checkpoint_path = runtime_root_path / str(
+                context.get("tail_checkpoint_name", "tail_checkpoint.json")
+                or "tail_checkpoint.json"
+            )
+            current_url = str(context.get("url", "") or "")
+            committee_name = str(context.get("committee_name", "") or "")
+            self._write_runtime_tail_checkpoint_to_path(
+                checkpoint_path,
+                list(prepared_entries),
+                current_url=current_url,
+                committee_name=committee_name,
+                archived_count=captured_archived_count,
+                archived_chars=int(context.get("archived_chars", 0) or 0),
+                archived_words=int(context.get("archived_words", 0) or 0),
+                archive_token=archive_token,
+                run_id=(int(run_id) if run_id is not None else None),
+            )
+            self._write_runtime_manifest_to_path(
+                manifest_file_path,
+                current_url=current_url,
+                committee_name=committee_name,
+                archived_count=captured_archived_count,
+                archived_chars=int(context.get("archived_chars", 0) or 0),
+                archived_words=int(context.get("archived_words", 0) or 0),
+                manifest_items=captured_manifest_items,
+                tail_checkpoint_name=str(
+                    context.get("tail_checkpoint_name", "tail_checkpoint.json")
+                    or "tail_checkpoint.json"
+                ),
+                archive_token=archive_token,
+                run_id=(int(run_id) if run_id is not None else None),
+            )
+
+            if archive_token and not self._is_runtime_archive_identity_current(run_id, archive_token):
+                return False
+            if archive_token and (
+                int(self.__dict__.get("_runtime_archived_count", 0) or 0) != captured_archived_count
+                or int(self.__dict__.get("_runtime_tail_revision", 0) or 0) != captured_tail_revision
+            ):
+                self._write_runtime_manifest()
+                self._write_runtime_tail_checkpoint(list(self.subtitles))
+                return False
+
+            self._runtime_tail_checkpoint_revision = captured_tail_revision
             self._record_recovery_snapshot(
-                manifest_path,
+                manifest_file_path,
                 "runtime_manifest",
                 created_at=datetime.now().isoformat(),
                 url=current_url,
                 committee_name=committee_name,
             )
             return True
+
+    def _record_runtime_recovery_snapshot(
+            self,
+            prepared_entries: list[SubtitleEntry] | None = None,
+        ) -> bool:
+            archive_context = self._build_runtime_archive_snapshot()
+            if archive_context is None:
+                return False
+            entries = (
+                list(prepared_entries)
+                if prepared_entries is not None
+                else list(self.subtitles)
+            )
+            return self._record_runtime_recovery_snapshot_from_context(
+                entries,
+                context=archive_context,
+            )
 
     def _maybe_schedule_runtime_segment_flush(self) -> bool:
             if not bool(self.__dict__.get("is_running", False)):
@@ -294,21 +554,28 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             word_count = sum(entry.word_count for entry in flush_entries)
             current_url, committee_name, _duration = self._build_session_save_context()
             created_at = datetime.now().isoformat()
+            archive_token = str(self.__dict__.get("_runtime_archive_token", "") or "")
+            run_id = self.__dict__.get("_runtime_archive_run_id")
 
             def write_segment() -> None:
                 try:
+                    head_items: list[tuple[str, object]] = [
+                        ("format", "runtime_session_segment_v1"),
+                        ("version", Config.VERSION),
+                        ("created", created_at),
+                        ("url", current_url),
+                        ("committee_name", committee_name),
+                        ("segment_index", segment_index),
+                        ("start_index", start_index),
+                        ("entry_count", flush_count),
+                    ]
+                    if archive_token:
+                        head_items.append(("archive_token", archive_token))
+                    if run_id is not None:
+                        head_items.append(("run_id", int(run_id)))
                     utils.atomic_write_json_stream(
                         segment_path,
-                        head_items=[
-                            ("format", "runtime_session_segment_v1"),
-                            ("version", Config.VERSION),
-                            ("created", created_at),
-                            ("url", current_url),
-                            ("committee_name", committee_name),
-                            ("segment_index", segment_index),
-                            ("start_index", start_index),
-                            ("entry_count", flush_count),
-                        ],
+                        head_items=head_items,
                         sequence_key="subtitles",
                         sequence_items=utils.iter_serialized_subtitles(flush_entries),
                         ensure_ascii=False,
@@ -316,6 +583,8 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                     self._emit_control_message(
                         "runtime_segment_flush_done",
                         {
+                            "run_id": run_id,
+                            "archive_token": archive_token,
                             "segment_index": segment_index,
                             "path": relative_path,
                             "entry_count": flush_count,
@@ -328,7 +597,12 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                     logger.error("runtime segment flush 실패: %s", e)
                     self._emit_control_message(
                         "runtime_segment_flush_failed",
-                        {"path": relative_path, "error": str(e)},
+                        {
+                            "run_id": run_id,
+                            "archive_token": archive_token,
+                            "path": relative_path,
+                            "error": str(e),
+                        },
                     )
 
             started = self._start_background_thread(
@@ -341,6 +615,18 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             return False
 
     def _handle_runtime_segment_flush_done(self, payload: dict[str, Any]) -> None:
+            payload_token = str(payload.get("archive_token", "") or "")
+            payload_run_id = payload.get("run_id")
+            if payload_token and not self._is_runtime_archive_identity_current(
+                payload_run_id,
+                payload_token,
+            ):
+                logger.info(
+                    "stale runtime segment flush 무시: run_id=%s token=%s",
+                    payload_run_id,
+                    payload_token,
+                )
+                return
             flush_count = int(payload.get("entry_count", 0) or 0)
             char_count = int(payload.get("char_count", 0) or 0)
             word_count = int(payload.get("word_count", 0) or 0)
@@ -383,6 +669,18 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             self._maybe_schedule_runtime_segment_flush()
 
     def _handle_runtime_segment_flush_failed(self, payload: dict[str, Any]) -> None:
+            payload_token = str(payload.get("archive_token", "") or "")
+            payload_run_id = payload.get("run_id")
+            if payload_token and not self._is_runtime_archive_identity_current(
+                payload_run_id,
+                payload_token,
+            ):
+                logger.info(
+                    "stale runtime segment flush 실패 메시지 무시: run_id=%s token=%s",
+                    payload_run_id,
+                    payload_token,
+                )
+                return
             self._runtime_segment_flush_in_progress = False
             err = str(payload.get("error", "") or "알 수 없는 오류")
             logger.warning("runtime segment flush 실패: %s", err)
@@ -407,10 +705,20 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                 return False
 
             snapshot_entries = list(prepared_entries)
+            archive_context = self._build_runtime_archive_snapshot()
+            if archive_context is None:
+                try:
+                    self._auto_backup_lock.release()
+                except Exception:
+                    pass
+                return False
 
             def write_snapshot() -> None:
                 try:
-                    self._record_runtime_recovery_snapshot(snapshot_entries)
+                    self._record_runtime_recovery_snapshot_from_context(
+                        snapshot_entries,
+                        context=archive_context,
+                    )
                 except Exception as e:
                     logger.error("runtime recovery snapshot 저장 오류: %s", e)
                 finally:
@@ -448,12 +756,18 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                 self._runtime_segment_cache_entries = entries
                 return entries
 
-            with open(segment_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            entries, _skipped = self._deserialize_subtitles(
-                data.get("subtitles", []),
+            _data, entries, _skipped = self._read_runtime_entries_file(
+                segment_path,
                 source=source or cache_key,
             )
+            self._cache_runtime_segment_entries(cache_key, entries)
+            return entries
+
+    def _cache_runtime_segment_entries(
+            self,
+            cache_key: str,
+            entries: list[SubtitleEntry],
+        ) -> None:
             cache_map = dict(self.__dict__.get("_runtime_segment_cache_entries_by_key", {}))
             cache_keys = [
                 key
@@ -473,7 +787,53 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             self._runtime_segment_cache_entries_by_key = cache_map
             self._runtime_segment_cache_key = cache_key
             self._runtime_segment_cache_entries = entries
-            return entries
+
+    def _read_runtime_entries_file(
+            self,
+            path: str | Path,
+            *,
+            source: str = "",
+        ) -> tuple[dict[str, Any], list[SubtitleEntry], int]:
+            file_path = Path(path)
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError(f"지원하지 않는 JSON 구조: {file_path.name}")
+            entries, skipped = self._deserialize_subtitles(
+                data.get("subtitles", []),
+                source=source or str(file_path),
+            )
+            return data, entries, skipped
+
+    def _try_load_runtime_entries_file(
+            self,
+            path: str | Path,
+            *,
+            source: str = "",
+            cache_result: bool = False,
+        ) -> tuple[dict[str, Any] | None, list[SubtitleEntry], int, str | None]:
+            file_path = Path(path)
+            try:
+                data, entries, skipped = self._read_runtime_entries_file(
+                    file_path,
+                    source=source or str(file_path),
+                )
+            except Exception as exc:
+                return None, [], 0, f"{file_path.name} 로드 실패: {exc}"
+            if cache_result:
+                try:
+                    self._cache_runtime_segment_entries(str(file_path.resolve()), entries)
+                except Exception:
+                    logger.debug("runtime segment cache 반영 실패: %s", file_path, exc_info=True)
+            return data, entries, skipped, None
+
+    def _build_salvaged_runtime_segments(self, runtime_root: Path) -> list[dict[str, Any]]:
+            segment_paths = sorted(runtime_root.glob("segment_*.json"))
+            return [
+                {"path": segment_path.name}
+                for segment_path in segment_paths
+                if segment_path.is_file()
+            ]
 
     def _load_runtime_segment_entries(
             self,
@@ -725,8 +1085,7 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                 full_entries,
                 keep_history_from_subtitles=bool(full_entries),
             )
-            self._clear_recovery_state()
-            self._cleanup_runtime_session_archive(remove_files=True)
+            self._cleanup_runtime_session_archive(remove_files=False)
             if reason:
                 self._show_toast(
                     f"장시간 세션 전체를 메모리로 불러왔습니다. ({reason})",
@@ -735,39 +1094,119 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                 )
             return True
 
-    def _load_runtime_manifest_payload(self, path: str | Path) -> dict[str, Any]:
+    def _load_runtime_manifest_payload(
+            self,
+            path: str | Path,
+            *,
+            allow_salvage: bool = False,
+        ) -> dict[str, Any]:
             manifest_path = Path(path)
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-            if str(manifest.get("format", "") or "") != "runtime_session_manifest_v1":
-                raise ValueError("지원하지 않는 runtime manifest 형식입니다.")
-
             runtime_root = manifest_path.parent
-            segments = manifest.get("segments", [])
             all_entries: list[SubtitleEntry] = []
             skipped = 0
+            skipped_files = 0
+            warnings: list[str] = []
+            manifest: dict[str, Any] = {}
+            manifest_loaded = False
+
+            try:
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    loaded_manifest = json.load(f)
+                if not isinstance(loaded_manifest, dict):
+                    raise ValueError("지원하지 않는 runtime manifest 구조입니다.")
+                if str(loaded_manifest.get("format", "") or "") != "runtime_session_manifest_v1":
+                    raise ValueError("지원하지 않는 runtime manifest 형식입니다.")
+                manifest = loaded_manifest
+                manifest_loaded = True
+            except Exception as exc:
+                if not allow_salvage:
+                    raise
+                skipped_files += 1
+                warnings.append(f"manifest 복구 전환: {exc}")
+
+            def adopt_meta(raw_data: dict[str, Any] | None) -> None:
+                nonlocal manifest
+                if not isinstance(raw_data, dict):
+                    return
+                if not str(manifest.get("created", "") or "").strip():
+                    manifest["created"] = str(raw_data.get("created", "") or "")
+                if not str(manifest.get("url", "") or "").strip():
+                    manifest["url"] = str(raw_data.get("url", "") or "")
+                if not str(manifest.get("committee_name", "") or "").strip():
+                    manifest["committee_name"] = str(raw_data.get("committee_name", "") or "")
+                if not str(manifest.get("version", "") or "").strip():
+                    manifest["version"] = str(raw_data.get("version", "") or "unknown")
+
+            segments = manifest.get("segments", [])
+            if manifest_loaded and not isinstance(segments, list):
+                if not allow_salvage:
+                    raise ValueError("runtime manifest segments 구조가 올바르지 않습니다.")
+                skipped_files += 1
+                warnings.append("manifest segments 구조가 손상되어 sibling scan으로 대체합니다.")
+                segments = self._build_salvaged_runtime_segments(runtime_root)
+            elif not manifest_loaded:
+                segments = self._build_salvaged_runtime_segments(runtime_root)
+
             for segment in segments if isinstance(segments, list) else []:
-                relative_path = str(getattr(segment, "get", lambda *_args, **_kwargs: "")("path", "") or "")
-                if not relative_path:
-                    continue
-                segment_entries = self._load_segment_file_entries(
-                    runtime_root / relative_path,
-                    source=f"runtime_manifest:{relative_path}",
+                relative_path = str(
+                    getattr(segment, "get", lambda *_args, **_kwargs: "")("path", "") or ""
                 )
+                if not relative_path:
+                    if allow_salvage:
+                        skipped_files += 1
+                        warnings.append("path가 없는 runtime segment를 건너뜁니다.")
+                    continue
+                raw_data, segment_entries, segment_skipped, segment_error = (
+                    self._try_load_runtime_entries_file(
+                        runtime_root / relative_path,
+                        source=f"runtime_manifest:{relative_path}",
+                        cache_result=True,
+                    )
+                )
+                if segment_error:
+                    if not allow_salvage:
+                        raise ValueError(segment_error)
+                    skipped_files += 1
+                    warnings.append(segment_error)
+                    continue
+                adopt_meta(raw_data)
+                skipped += segment_skipped
                 all_entries.extend(entry.clone() for entry in segment_entries)
 
-            checkpoint_path = runtime_root / str(manifest.get("tail_checkpoint", "tail_checkpoint.json") or "tail_checkpoint.json")
+            checkpoint_relative = str(
+                manifest.get("tail_checkpoint", "tail_checkpoint.json")
+                or "tail_checkpoint.json"
+            )
+            checkpoint_path = runtime_root / checkpoint_relative
             if checkpoint_path.exists():
-                with open(checkpoint_path, "r", encoding="utf-8") as f:
-                    checkpoint_data = json.load(f)
-                tail_entries, tail_skipped = self._deserialize_subtitles(
-                    checkpoint_data.get("subtitles", []),
-                    source=f"runtime_tail:{checkpoint_path}",
+                checkpoint_data, tail_entries, tail_skipped, checkpoint_error = (
+                    self._try_load_runtime_entries_file(
+                        checkpoint_path,
+                        source=f"runtime_tail:{checkpoint_path}",
+                    )
                 )
-                skipped += tail_skipped
-                all_entries.extend(tail_entries)
+                if checkpoint_error:
+                    if not allow_salvage:
+                        raise ValueError(checkpoint_error)
+                    skipped_files += 1
+                    warnings.append(checkpoint_error)
+                else:
+                    adopt_meta(checkpoint_data)
+                    skipped += tail_skipped
+                    all_entries.extend(tail_entries)
+            elif allow_salvage:
+                skipped_files += 1
+                warnings.append(f"{checkpoint_relative} 이(가) 없어 tail 복구를 건너뜁니다.")
+            elif manifest_loaded:
+                raise ValueError(f"{checkpoint_relative} 이(가) 없습니다.")
 
-            return {
+            if not all_entries:
+                warning_text = " / ".join(warnings)
+                if warning_text:
+                    raise ValueError(f"복구 가능한 runtime 자막이 없습니다. ({warning_text})")
+                raise ValueError("복구 가능한 runtime 자막이 없습니다.")
+
+            payload = {
                 "version": manifest.get("version", "unknown"),
                 "created_at": manifest.get("created", ""),
                 "url": manifest.get("url", ""),
@@ -777,3 +1216,8 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                 "runtime_manifest": True,
                 "path": str(manifest_path),
             }
+            if skipped_files > 0:
+                payload["skipped_files"] = skipped_files
+            if warnings:
+                payload["recovery_warnings"] = warnings
+            return payload

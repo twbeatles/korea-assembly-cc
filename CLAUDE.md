@@ -238,6 +238,15 @@ korea-assembly-cc/
 - **패키징 정합화**: `subtitle_extractor.spec` hidden import에 `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`를 반영해 frozen 빌드에서도 facade 뒤 구현이 누락되지 않도록 맞췄다.
 - **빌드 재검증**: `pyinstaller --clean subtitle_extractor.spec`로 `dist/국회의사중계자막추출기 v16.14.7.exe` 빌드를 다시 확인했다.
 
+### v16.14.7 세션 안정성 / 도구 체인 정합화 메모 (2026-04-06)
+- **runtime archive lifetime 고정**: 실행 중 수동 `세션 저장`은 runtime archive를 끊지 않고 snapshot-only로 처리한다. 이후 segment flush/search/render/export는 같은 archive를 계속 사용한다.
+- **run-scoped background isolation**: runtime flush/checkpoint/recovery write는 `archive_token` + `run_id` + captured path context를 함께 들고 가며, stale completion은 no-op으로 버린다.
+- **best-effort recovery salvage**: runtime manifest JSON이 손상돼도 sibling `segment_*.json` + `tail_checkpoint.json`를 스캔해 salvage를 시도하고, 제외된 손상 파일/항목 수를 payload와 UI 요약에 함께 노출한다.
+- **metadata / recovery hygiene**: 빈 URL 세션 로드 시 stale `current_url`을 비우고, recovery pointer는 복구 거절/복구 성공 시 즉시 삭제하지 않으며 성공한 JSON 저장 또는 정상 종료에서만 정리한다.
+- **Pylance/Pyright 고정**: `pyrightconfig.json`은 `stubPath=typings`, `executionEnvironments[].extraPaths=["typings"]`, `.pytest_tmp` exclude, `reportMissingModuleSource=none`를 사용하고, `.vscode/settings.json`도 같은 기준으로 맞췄다.
+- **로컬 stub 보강**: `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance가 같은 결과를 낸다.
+- **회귀 기준선**: `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings.
+
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
 - **실행 중 옵션 잠금 확대**: URL, 프리셋, 생중계 목록, 태그 편집, 실시간 저장, 헤드리스 모드를 `_sync_runtime_action_state()`로 함께 disable
@@ -401,12 +410,16 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
+- `pyrightconfig.json`은 `stubPath=typings`, `executionEnvironments[].extraPaths=["typings"]`, `.pytest_tmp` exclude, `reportMissingModuleSource=none`를 공통 기준으로 사용
+- `tests/test_encoding_hygiene.py`는 repo tracked 파일만 검사하고, BOM이 허용되는 `.pytest_tmp` workspace temp 산출물은 제외한다
 - Windows PowerShell 5.x 콘솔에서는 UTF-8 without BOM이 깨져 보일 수 있으나 파일 자체는 UTF-8 유지
 
 ### 8.6 저장소 기준 파일
 - `pyrightconfig.json`: 저장소 공통 타입 체크 기준
 - `.vscode/settings.json`: 워크스페이스 Pylance/UTF-8 설정
 - `.editorconfig`, `.gitattributes`: 텍스트 파일 인코딩/라인엔딩 기준
+- `typings/`: 글로벌 인터프리터 편차를 흡수하는 로컬 PyQt6/selenium/pytest stub
+- `pytest.ini`: 워크스페이스 내부 basetemp(`.pytest_tmp`) 강제
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
 - `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
 - `tests/test_encoding_hygiene.py`: UTF-8 without BOM, U+FFFD 금지, 핵심 한글 문자열 round-trip 검증
