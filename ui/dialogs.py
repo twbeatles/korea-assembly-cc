@@ -21,13 +21,66 @@ from PyQt6.QtWidgets import (
 from core.config import Config
 
 
+def _normalize_live_list_row(item: object) -> dict[str, str] | None:
+    if not isinstance(item, dict):
+        return None
+    xcgcd = str(item.get("xcgcd", "") or "").strip()
+    if not xcgcd:
+        return None
+    return {
+        "xstat": str(item.get("xstat", "") or "").strip(),
+        "xcgcd": xcgcd,
+        "xcode": str(item.get("xcode", "") or "").strip(),
+        "xname": str(item.get("xname", "이름 없음") or "이름 없음").strip() or "이름 없음",
+        "time": str(item.get("time", "") or "").strip(),
+    }
+
+
 def _parse_live_list_payload(payload: bytes) -> dict[str, object]:
     try:
         decoded = payload.decode("utf-8", errors="replace")
         data = json.loads(decoded)
-        return {"ok": True, "result": data.get("xlist", [])}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e), "error_type": "invalid_json"}
+
+    if not isinstance(data, dict):
+        return {
+            "ok": False,
+            "error": "응답 루트가 객체(dict)가 아닙니다.",
+            "error_type": "invalid_schema",
+        }
+
+    rows = data.get("xlist")
+    if not isinstance(rows, list):
+        return {
+            "ok": False,
+            "error": "응답의 xlist가 목록(list)이 아닙니다.",
+            "error_type": "invalid_schema",
+        }
+
+    valid_rows: list[dict[str, str]] = []
+    dropped_rows = 0
+    for item in rows:
+        normalized = _normalize_live_list_row(item)
+        if normalized is None:
+            dropped_rows += 1
+            continue
+        valid_rows.append(normalized)
+
+    if not valid_rows and rows:
+        return {
+            "ok": False,
+            "error": f"유효한 방송 항목이 없습니다. (손상 항목 {dropped_rows}개)",
+            "error_type": "invalid_schema",
+            "dropped_rows": dropped_rows,
+        }
+
+    return {
+        "ok": True,
+        "result": valid_rows,
+        "dropped_rows": dropped_rows,
+        "error_type": "none",
+    }
 
 
 class LiveBroadcastDialog(QDialog):
@@ -44,6 +97,7 @@ class LiveBroadcastDialog(QDialog):
         self._fetch_request_token = 0
         self._network_manager = QNetworkAccessManager(self)
         self._active_reply: QNetworkReply | None = None
+        self._active_timeout_timer: QTimer | None = None
 
         layout = QVBoxLayout(self)
 
@@ -91,6 +145,11 @@ class LiveBroadcastDialog(QDialog):
         QTimer.singleShot(100, self.load_broadcasts)
 
     def _abort_active_reply(self) -> None:
+        timeout_timer = self._active_timeout_timer
+        self._active_timeout_timer = None
+        if timeout_timer is not None:
+            timeout_timer.stop()
+            timeout_timer.deleteLater()
         reply = self._active_reply
         if reply is None:
             return
@@ -125,21 +184,62 @@ class LiveBroadcastDialog(QDialog):
         request.setRawHeader(b"User-Agent", b"Mozilla/5.0")
         reply = self._network_manager.get(request)
         self._active_reply = reply
+        completion = {"done": False}
 
-        def handle_finished() -> None:
-            payload: dict[str, object]
-            if self._is_closing or reply is not self._active_reply:
-                reply.deleteLater()
+        timeout_timer = QTimer(self)
+        timeout_timer.setSingleShot(True)
+        self._active_timeout_timer = timeout_timer
+
+        def finalize(payload: dict[str, object]) -> None:
+            if completion["done"]:
                 return
-            if reply.error() != QNetworkReply.NetworkError.NoError:
-                payload = {"ok": False, "error": reply.errorString()}
-            else:
-                payload = _parse_live_list_payload(bytes(reply.readAll()))
-            self._active_reply = None
+            completion["done"] = True
+            if self._active_timeout_timer is timeout_timer:
+                self._active_timeout_timer = None
+            timeout_timer.stop()
+            timeout_timer.deleteLater()
+            if reply is self._active_reply:
+                self._active_reply = None
+            try:
+                reply.finished.disconnect()
+            except Exception:
+                pass
             reply.deleteLater()
             self.sig_fetch_done.emit(request_token, payload)
 
+        def handle_timeout() -> None:
+            if self._is_closing or reply is not self._active_reply:
+                return
+            if reply.isRunning():
+                reply.abort()
+            finalize(
+                {
+                    "ok": False,
+                    "error": f"응답 시간 초과 ({Config.LIVE_LIST_REQUEST_TIMEOUT_MS}ms)",
+                    "error_type": "timeout",
+                }
+            )
+
+        def handle_finished() -> None:
+            if completion["done"]:
+                return
+            payload: dict[str, object]
+            if self._is_closing or reply is not self._active_reply:
+                finalize({"ok": False, "error": "stale reply", "error_type": "stale"})
+                return
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                payload = {
+                    "ok": False,
+                    "error": reply.errorString(),
+                    "error_type": "network",
+                }
+            else:
+                payload = _parse_live_list_payload(bytes(reply.readAll()))
+            finalize(payload)
+
         reply.finished.connect(handle_finished)
+        timeout_timer.timeout.connect(handle_timeout)
+        timeout_timer.start(Config.LIVE_LIST_REQUEST_TIMEOUT_MS)
 
     def _on_fetch_done(self, request_token: int, payload):
         """live_list fetch 완료 콜백 (UI 스레드)."""
@@ -153,7 +253,17 @@ class LiveBroadcastDialog(QDialog):
                 if isinstance(payload, dict)
                 else "알 수 없는 오류"
             )
-            self.msg_label.setText(f"조회 실패: {err}")
+            error_type = (
+                str(payload.get("error_type", "") or "")
+                if isinstance(payload, dict)
+                else ""
+            )
+            if error_type == "invalid_schema":
+                self.msg_label.setText(f"응답 구조 오류: {err}")
+            elif error_type == "timeout":
+                self.msg_label.setText(f"조회 시간 초과: {err}")
+            else:
+                self.msg_label.setText(f"조회 실패: {err}")
             return
 
         result = payload.get("result") or []
@@ -161,7 +271,12 @@ class LiveBroadcastDialog(QDialog):
             self.msg_label.setText("표시할 생중계 항목이 없습니다.")
             return
 
-        self.msg_label.hide()
+        dropped_rows = int(payload.get("dropped_rows", 0) or 0)
+        if dropped_rows > 0:
+            self.msg_label.setText(f"일부 손상 항목 {dropped_rows}개를 제외했습니다.")
+            self.msg_label.show()
+        else:
+            self.msg_label.hide()
         sorted_list = sorted(result, key=lambda x: str(x.get("xstat", "")) != "1")
 
         added = 0

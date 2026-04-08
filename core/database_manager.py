@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from uuid import uuid4
 
 from core.config import Config
 from core.models import SubtitleEntry
@@ -333,9 +334,13 @@ class DatabaseManager:
                         total_characters INTEGER DEFAULT 0,
                         duration_seconds INTEGER DEFAULT 0,
                         version TEXT,
-                        notes TEXT
+                        notes TEXT,
+                        lineage_id TEXT,
+                        parent_session_id INTEGER NULL,
+                        is_latest_in_lineage INTEGER DEFAULT 1
                     )
                 """)
+                self._ensure_session_table_columns(cursor)
                 
                 # 자막 테이블
                 cursor.execute("""
@@ -408,6 +413,10 @@ class DatabaseManager:
                     CREATE INDEX IF NOT EXISTS idx_sessions_committee 
                     ON sessions(committee_name)
                 """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_sessions_lineage_latest
+                    ON sessions(lineage_id, is_latest_in_lineage, created_at DESC, id DESC)
+                """)
                 
                 conn.commit()
                 try:
@@ -436,6 +445,31 @@ class DatabaseManager:
             if column_name in existing_columns:
                 continue
             cursor.execute(f"ALTER TABLE subtitles ADD COLUMN {column_name} {sql_type}")
+
+    def _ensure_session_table_columns(self, cursor: sqlite3.Cursor) -> None:
+        column_rows = cursor.execute("PRAGMA table_info(sessions)").fetchall()
+        existing_columns = {str(row[1]) for row in column_rows}
+        required_columns = {
+            "lineage_id": "TEXT",
+            "parent_session_id": "INTEGER NULL",
+            "is_latest_in_lineage": "INTEGER DEFAULT 1",
+        }
+        for column_name, sql_type in required_columns.items():
+            if column_name in existing_columns:
+                continue
+            cursor.execute(f"ALTER TABLE sessions ADD COLUMN {column_name} {sql_type}")
+
+        cursor.execute(
+            """
+            UPDATE sessions
+            SET lineage_id = COALESCE(NULLIF(lineage_id, ''), 'legacy-' || id),
+                parent_session_id = NULL,
+                is_latest_in_lineage = COALESCE(is_latest_in_lineage, 1)
+            WHERE lineage_id IS NULL
+               OR lineage_id = ''
+               OR is_latest_in_lineage IS NULL
+            """
+        )
     
     def save_session(self, session_data: object) -> int:
         """세션 저장
@@ -482,13 +516,27 @@ class DatabaseManager:
                 duration_seconds = self._sanitize_duration(
                     session_data.get("duration_seconds", 0)
                 )
+                lineage_id = str(session_data.get("lineage_id", "") or "").strip()
+                if not lineage_id:
+                    lineage_id = f"session-{uuid4().hex}"
+                parent_session_id = self._sanitize_positive_id(
+                    session_data.get("parent_session_id")
+                )
+                cursor.execute(
+                    """
+                    UPDATE sessions
+                    SET is_latest_in_lineage = 0
+                    WHERE lineage_id = ?
+                    """,
+                    (lineage_id,),
+                )
                 
                 # 세션 삽입
                 cursor.execute("""
                     INSERT INTO sessions 
                     (url, committee_name, total_subtitles, total_characters, 
-                     duration_seconds, version, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                     duration_seconds, version, notes, lineage_id, parent_session_id, is_latest_in_lineage)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                 """, (
                     session_data.get("url", ""),
                     session_data.get("committee_name", ""),
@@ -496,7 +544,9 @@ class DatabaseManager:
                     total_chars,
                     duration_seconds,
                     session_data.get("version", ""),
-                    session_data.get("notes", "")
+                    session_data.get("notes", ""),
+                    lineage_id,
+                    parent_session_id,
                 ))
                 
                 session_id = cursor.lastrowid
@@ -582,6 +632,9 @@ class DatabaseManager:
                     "duration_seconds": session_row["duration_seconds"],
                     "version": session_row["version"],
                     "notes": session_row["notes"],
+                    "lineage_id": session_row["lineage_id"],
+                    "parent_session_id": session_row["parent_session_id"],
+                    "is_latest_in_lineage": int(session_row["is_latest_in_lineage"] or 0),
                     "subtitles": [
                         {
                             "text": row["text"],
@@ -626,7 +679,25 @@ class DatabaseManager:
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT id, created_at, url, committee_name, 
-                           total_subtitles, total_characters, duration_seconds, notes
+                           total_subtitles, total_characters, duration_seconds, notes,
+                           lineage_id, parent_session_id, is_latest_in_lineage,
+                           (
+                               SELECT COUNT(*)
+                               FROM sessions same_lineage
+                               WHERE same_lineage.lineage_id = sessions.lineage_id
+                           ) AS lineage_total,
+                           (
+                               SELECT COUNT(*)
+                               FROM sessions newer
+                               WHERE newer.lineage_id = sessions.lineage_id
+                                 AND (
+                                     newer.created_at > sessions.created_at
+                                     OR (
+                                         newer.created_at = sessions.created_at
+                                         AND newer.id > sessions.id
+                                     )
+                                 )
+                           ) AS newer_versions
                     FROM sessions 
                     ORDER BY created_at DESC
                     LIMIT ? OFFSET ?

@@ -11,7 +11,9 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from core.config import Config
 from core.logging_utils import logger
+from ui.dialogs import _parse_live_list_payload
 from ui.main_window_impl.contracts import CaptureLiveHost
 
 
@@ -47,11 +49,16 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
         )
         try:
             req = Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urlopen(req, timeout=10) as response:
-                payload = response.read().decode("utf-8", errors="replace")
-            data = json.loads(payload)
-            if isinstance(data, dict):
-                return data.get("xlist", [])
+            with urlopen(req, timeout=Config.LIVE_LIST_REQUEST_TIMEOUT_MS / 1000.0) as response:
+                payload = response.read()
+            parsed = _parse_live_list_payload(payload)
+            if parsed.get("ok"):
+                return parsed.get("result", [])
+            logger.debug(
+                "live_list 응답 무시 (%s): %s",
+                parsed.get("error_type", "unknown"),
+                parsed.get("error", "알 수 없는 오류"),
+            )
         except (HTTPError, URLError, json.JSONDecodeError) as e:
             logger.debug(f"live_list API 오류: {e}")
         except Exception as e:
@@ -103,6 +110,8 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
     ) -> str:
         """live_list API로 xcgcd/xcode를 보완하여 URL 생성"""
         broadcasts = self._fetch_live_list()
+        if not isinstance(broadcasts, list):
+            return original_url
         if not broadcasts:
             return original_url
 

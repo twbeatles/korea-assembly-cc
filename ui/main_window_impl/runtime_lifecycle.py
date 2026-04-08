@@ -11,6 +11,7 @@ from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
 
@@ -91,6 +92,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             self._clear_preview()
             self.start_time = time.time()
             self._clear_session_dirty()
+            self._clear_session_db_identity()
             self._clear_destructive_undo_state()
             self._initial_recovery_snapshot_done = False
             self._set_capture_source_metadata(
@@ -697,7 +699,24 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             except Exception:
                 logger.debug("세션 저장 종료 대기 후 큐 처리 실패", exc_info=True)
 
-        if not self._confirm_dirty_session_action("종료"):
+        proceed_now = {"ready": False}
+        close_after_save = {"deferred": False}
+
+        def continue_close() -> None:
+            if close_after_save["deferred"]:
+                QTimer.singleShot(0, self.close)
+                return
+            proceed_now["ready"] = True
+
+        started_or_continued = self._run_after_dirty_session_action(
+            "종료",
+            continue_close,
+        )
+        close_after_save["deferred"] = started_or_continued and not proceed_now["ready"]
+        if not started_or_continued:
+            event.ignore()
+            return
+        if close_after_save["deferred"]:
             event.ignore()
             return
 

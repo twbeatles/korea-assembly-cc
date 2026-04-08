@@ -65,6 +65,8 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
         source_path = str(payload.get("path", "") or "")
         source_url = str(payload.get("url", "") or "")
         committee_name = str(payload.get("committee_name", "") or "")
+        lineage_id = str(payload.get("lineage_id", "") or "").strip()
+        db_session_id = payload.get("db_session_id")
         created_at = str(payload.get("created_at", "") or "")
         loaded_subtitles = payload.get("subtitles", [])
         try:
@@ -108,6 +110,11 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
         self._cleanup_runtime_session_archive(remove_files=False)
         self._clear_destructive_undo_state()
         self._initial_recovery_snapshot_done = False
+        self.current_session_lineage_id = lineage_id
+        try:
+            self.current_db_session_id = int(db_session_id)
+        except Exception:
+            self.current_db_session_id = None
         self._set_capture_source_metadata(
             source_url,
             committee_name,
@@ -198,6 +205,10 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             if self._is_stopping and msg_type not in (
                 "db_task_result",
                 "db_task_error",
+                "hydrate_cancelled",
+                "hydrate_done",
+                "hydrate_failed",
+                "hydrate_progress",
                 "session_save_done",
                 "session_save_failed",
                 "session_load_done",
@@ -326,9 +337,12 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                         logger.warning("세션 저장: DB 저장 실패 - %s", db_error)
                     else:
                         self._show_toast("세션 저장 완료!", "success")
+                self._apply_saved_session_db_identity(info)
+                self._resume_pending_deferred_action()
 
             elif msg_type == "session_save_failed":
                 self._session_save_in_progress = False
+                self._clear_pending_deferred_action()
                 err = data.get("error") if isinstance(data, dict) else str(data)
                 self._set_status(f"세션 저장 실패: {err}", "error")
                 pipeline_mod.QMessageBox.critical(self, "오류", f"세션 저장 실패: {err}")
@@ -479,6 +493,22 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             elif msg_type == "runtime_search_failed":
                 payload = data if isinstance(data, dict) else {}
                 self._handle_runtime_search_failed(payload)
+
+            elif msg_type == "hydrate_progress":
+                payload = data if isinstance(data, dict) else {}
+                self._handle_hydrate_progress(payload)
+
+            elif msg_type == "hydrate_done":
+                payload = data if isinstance(data, dict) else {}
+                self._handle_hydrate_done(payload)
+
+            elif msg_type == "hydrate_failed":
+                payload = data if isinstance(data, dict) else {}
+                self._handle_hydrate_failed(payload)
+
+            elif msg_type == "hydrate_cancelled":
+                payload = data if isinstance(data, dict) else {}
+                self._handle_hydrate_cancelled(payload)
 
         except Exception as e:
             logger.error(f"메시지 처리 오류 ({msg_type}): {e}")

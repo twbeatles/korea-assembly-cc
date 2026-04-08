@@ -164,7 +164,11 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
                     "holder": holder,
                 }
             )
-            done_event.wait()
+            completed = done_event.wait(timeout=float(Config.DB_SYNC_TASK_TIMEOUT_SECONDS))
+            if not completed:
+                raise TimeoutError(
+                    f"DB 작업 타임아웃 ({task_name}, {Config.DB_SYNC_TASK_TIMEOUT_SECONDS:.1f}s)"
+                )
             if "error" in holder:
                 raise holder["error"]
             return holder.get("result")

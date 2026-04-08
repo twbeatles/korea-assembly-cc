@@ -542,6 +542,38 @@ def test_append_db_history_sessions_updates_loaded_state():
     assert win._db_history_dialog_state["loading"] is False
 
 
+def test_format_db_history_item_includes_lineage_badges():
+    win = MainWindow.__new__(MainWindow)
+
+    latest = MainWindow._format_db_history_item(
+        win,
+        {
+            "created_at": "2026-03-27T09:00:00",
+            "committee_name": "운영위",
+            "total_subtitles": 10,
+            "total_characters": 123,
+            "is_latest_in_lineage": 1,
+            "lineage_total": 2,
+            "newer_versions": 0,
+        },
+    )
+    previous = MainWindow._format_db_history_item(
+        win,
+        {
+            "created_at": "2026-03-26T09:00:00",
+            "committee_name": "운영위",
+            "total_subtitles": 8,
+            "total_characters": 100,
+            "is_latest_in_lineage": 0,
+            "lineage_total": 2,
+            "newer_versions": 1,
+        },
+    )
+
+    assert latest.startswith("[최신]")
+    assert previous.startswith("[이전 저장본 1/1]")
+
+
 def test_append_db_search_results_updates_loaded_state():
     win = MainWindow.__new__(MainWindow)
     loaded_label = _FakeLabel()

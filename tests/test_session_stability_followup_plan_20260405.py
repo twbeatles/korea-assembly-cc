@@ -363,3 +363,78 @@ def test_live_broadcast_dialog_mark_closing_aborts_active_reply():
     assert dialog._active_reply is None
     assert fake_reply.aborted is True
     assert fake_reply.deleted is True
+
+
+def test_parse_live_list_payload_rejects_invalid_schema():
+    parsed = dialogs_mod._parse_live_list_payload(b'{"xlist": {"bad": "shape"}}')
+
+    assert parsed["ok"] is False
+    assert parsed["error_type"] == "invalid_schema"
+
+
+def test_parse_live_list_payload_drops_malformed_rows_but_keeps_valid_rows():
+    parsed = dialogs_mod._parse_live_list_payload(
+        (
+            '{"xlist": ['
+            '{"xstat":"1","xcgcd":"LIVE001","xcode":"AB","xname":"진행 중","time":"202604081030"},'
+            '{"xstat":"1","xcode":"BROKEN"}'
+            ']}'
+        ).encode("utf-8")
+    )
+
+    assert parsed["ok"] is True
+    assert parsed["dropped_rows"] == 1
+    assert parsed["result"] == [
+        {
+            "xstat": "1",
+            "xcgcd": "LIVE001",
+            "xcode": "AB",
+            "xname": "진행 중",
+            "time": "202604081030",
+        }
+    ]
+
+
+def test_live_broadcast_dialog_shows_schema_error_when_all_rows_are_invalid():
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    dialog = dialogs_mod.LiveBroadcastDialog()
+    dialog.refresh_btn.setEnabled(False)
+
+    dialog._on_fetch_done(
+        dialog._fetch_request_token,
+        {
+            "ok": False,
+            "error_type": "invalid_schema",
+            "error": "유효한 방송 항목이 없습니다. (손상 항목 2개)",
+        },
+    )
+
+    assert "응답 구조 오류" in dialog.msg_label.text()
+
+
+def test_live_broadcast_dialog_reports_dropped_rows_without_hiding_tree_message():
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    dialog = dialogs_mod.LiveBroadcastDialog()
+    dialog.refresh_btn.setEnabled(False)
+
+    dialog._on_fetch_done(
+        dialog._fetch_request_token,
+        {
+            "ok": True,
+            "result": [
+                {
+                    "xstat": "1",
+                    "xcgcd": "LIVE001",
+                    "xcode": "AB",
+                    "xname": "진행 중 방송",
+                    "time": "202604081030",
+                }
+            ],
+            "dropped_rows": 1,
+        },
+    )
+
+    assert dialog.tree.topLevelItemCount() == 1
+    assert "손상 항목 1개" in dialog.msg_label.text()

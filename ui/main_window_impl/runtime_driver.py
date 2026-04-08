@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from core import utils
 from core.config import Config
@@ -18,6 +19,31 @@ RuntimeBase = object
 
 
 class MainWindowRuntimeDriverMixin(RuntimeBase):
+    def _clear_session_db_identity(self) -> None:
+        self.current_session_lineage_id = ""
+        self.current_db_session_id = None
+
+    def _ensure_session_lineage_id(self) -> str:
+        lineage_id = str(self.__dict__.get("current_session_lineage_id", "") or "").strip()
+        if not lineage_id:
+            lineage_id = f"session-{uuid4().hex}"
+            self.current_session_lineage_id = lineage_id
+        return lineage_id
+
+    def _apply_saved_session_db_identity(self, info: dict[str, Any]) -> None:
+        if not isinstance(info, dict):
+            return
+        lineage_id = str(info.get("lineage_id", "") or "").strip()
+        if lineage_id:
+            self.current_session_lineage_id = lineage_id
+        session_id = info.get("db_session_id")
+        if session_id is None or session_id == "":
+            return
+        try:
+            self.current_db_session_id = int(session_id)
+        except Exception:
+            self.current_db_session_id = None
+
     def _update_realtime_status_indicator(self) -> None:
         label = self.__dict__.get("realtime_status_label")
         if label is None:

@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 
+import os
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -19,27 +21,152 @@ def _load_version_from_readme(default: str = "unknown") -> str:
         return default
 
 
-def _resolve_app_base_dir() -> Path:
-    """앱 데이터/설정 파일의 기준 디렉터리를 계산한다."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    return Path(__file__).resolve().parent.parent
+@dataclass(frozen=True)
+class StorageResolution:
+    install_dir: Path
+    storage_dir: Path
+    storage_mode: str
+    portable_flag_path: Path
+    settings_ini_path: Path | None
+
+
+def _resolve_install_dir(
+    *,
+    frozen: bool | None = None,
+    executable: str | None = None,
+    module_file: str | None = None,
+) -> Path:
+    """리소스/설치 기준 디렉터리를 계산한다."""
+    is_frozen = getattr(sys, "frozen", False) if frozen is None else bool(frozen)
+    if is_frozen:
+        executable_path = executable or getattr(sys, "executable", "")
+        return Path(executable_path).resolve().parent
+    module_path = module_file or __file__
+    return Path(module_path).resolve().parent.parent
+
+
+def _resolve_local_appdata_dir(
+    *,
+    localappdata: str | None = None,
+    home: str | Path | None = None,
+) -> Path:
+    env_value = localappdata if localappdata is not None else os.environ.get("LOCALAPPDATA")
+    if env_value:
+        return Path(env_value).resolve() / "AssemblySubtitle" / "Extractor"
+    home_path = Path.home() if home is None else Path(home)
+    return home_path.resolve() / "AppData" / "Local" / "AssemblySubtitle" / "Extractor"
+
+
+def resolve_storage_resolution(
+    *,
+    frozen: bool | None = None,
+    executable: str | None = None,
+    module_file: str | None = None,
+    portable_flag_exists: bool | None = None,
+    localappdata: str | None = None,
+    home: str | Path | None = None,
+) -> StorageResolution:
+    """설치 경로와 저장 경로를 분리해 계산한다."""
+    install_dir = _resolve_install_dir(
+        frozen=frozen,
+        executable=executable,
+        module_file=module_file,
+    )
+    is_frozen = getattr(sys, "frozen", False) if frozen is None else bool(frozen)
+    portable_flag_path = install_dir / "portable.flag"
+    flag_exists = (
+        portable_flag_path.exists()
+        if portable_flag_exists is None
+        else bool(portable_flag_exists)
+    )
+
+    if not is_frozen:
+        storage_dir = install_dir
+        storage_mode = "development"
+    elif flag_exists:
+        storage_dir = install_dir
+        storage_mode = "portable"
+    else:
+        storage_dir = _resolve_local_appdata_dir(
+            localappdata=localappdata,
+            home=home,
+        )
+        storage_mode = "localappdata"
+
+    settings_ini_path = storage_dir / "settings.ini" if storage_mode == "portable" else None
+    return StorageResolution(
+        install_dir=install_dir,
+        storage_dir=storage_dir.resolve(),
+        storage_mode=storage_mode,
+        portable_flag_path=portable_flag_path.resolve(),
+        settings_ini_path=settings_ini_path.resolve() if settings_ini_path else None,
+    )
+
+
+def build_storage_preflight_targets(storage_dir: str | Path, settings_ini_path: str | Path | None = None) -> list[Path]:
+    root = Path(storage_dir).resolve()
+    targets = [
+        root,
+        root / "logs",
+        root / "sessions",
+        root / "realtime_output",
+        root / "backups",
+        root / "backups" / "runtime_sessions",
+    ]
+    if settings_ini_path:
+        targets.append(Path(settings_ini_path).resolve().parent)
+    return targets
+
+
+def run_storage_preflight(
+    storage_dir: str | Path,
+    *,
+    settings_ini_path: str | Path | None = None,
+) -> tuple[bool, str]:
+    """필수 저장소 경로 생성/쓰기 가능 여부를 검증한다."""
+    failing_path = ""
+    try:
+        for target_dir in build_storage_preflight_targets(storage_dir, settings_ini_path):
+            failing_path = str(target_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            probe_path = target_dir / ".storage_probe"
+            probe_path.write_text("ok", encoding="utf-8")
+            probe_path.unlink(missing_ok=True)
+        return True, ""
+    except Exception as exc:
+        return False, f"{failing_path}\n{exc}"
+
+
+_STORAGE_RESOLUTION = resolve_storage_resolution()
 
 class Config:
     """프로그램 설정 상수"""
     VERSION = _load_version_from_readme()
     APP_NAME = "국회 의사중계 자막 추출기"
-    APP_BASE_DIR = _resolve_app_base_dir()
-    
+    APP_BASE_DIR = _STORAGE_RESOLUTION.install_dir
+    STORAGE_DIR = str(_STORAGE_RESOLUTION.storage_dir)
+    STORAGE_MODE = _STORAGE_RESOLUTION.storage_mode
+    PORTABLE_FLAG_PATH = str(_STORAGE_RESOLUTION.portable_flag_path)
+    SETTINGS_INI_PATH = (
+        str(_STORAGE_RESOLUTION.settings_ini_path)
+        if _STORAGE_RESOLUTION.settings_ini_path
+        else ""
+    )
+
     @staticmethod
     def get_resource_path(relative_path: str) -> str:
         """앱 내부 리소스 절대 경로를 반환한다 (PyInstaller 임시폴더 대응)"""
-        import sys
-        import os
         base_path = getattr(sys, '_MEIPASS', None)
         if base_path:
             return os.path.join(base_path, relative_path)
         return os.path.join(Config.APP_BASE_DIR, relative_path)
+
+    @staticmethod
+    def run_storage_preflight() -> tuple[bool, str]:
+        return run_storage_preflight(
+            Config.STORAGE_DIR,
+            settings_ini_path=Config.SETTINGS_INI_PATH or None,
+        )
     
     # 타이밍 상수 (초)
     SUBTITLE_FINALIZE_DELAY = 3.0      # 자막 확정까지 대기 시간 (앵커 기반 알고리즘)
@@ -69,7 +196,7 @@ class Config:
     AUTO_BACKUP_INTERVAL = 300000      # 5분 (ms)
     MAX_BACKUP_COUNT = 10
     MAX_URL_HISTORY = 50               # URL 히스토리 최대 개수
-    RUNTIME_SESSION_DIR = str(APP_BASE_DIR / "backups" / "runtime_sessions")
+    RUNTIME_SESSION_DIR = str(Path(STORAGE_DIR) / "backups" / "runtime_sessions")
     RUNTIME_SEGMENT_FLUSH_THRESHOLD = 2000
     RUNTIME_ACTIVE_TAIL_ENTRIES = 1000
     RUNTIME_SEARCH_MATCH_LIMIT = 5000
@@ -84,13 +211,13 @@ class Config:
     SUBTITLE_DIALOG_PAGE_SIZE = 200
     
     # 경로
-    LOG_DIR = str(APP_BASE_DIR / "logs")
-    SESSION_DIR = str(APP_BASE_DIR / "sessions")
-    REALTIME_DIR = str(APP_BASE_DIR / "realtime_output")
-    BACKUP_DIR = str(APP_BASE_DIR / "backups")
-    PRESET_FILE = str(APP_BASE_DIR / "committee_presets.json")
-    URL_HISTORY_FILE = str(APP_BASE_DIR / "url_history.json")
-    RECOVERY_STATE_FILE = str(APP_BASE_DIR / "session_recovery.json")
+    LOG_DIR = str(Path(STORAGE_DIR) / "logs")
+    SESSION_DIR = str(Path(STORAGE_DIR) / "sessions")
+    REALTIME_DIR = str(Path(STORAGE_DIR) / "realtime_output")
+    BACKUP_DIR = str(Path(STORAGE_DIR) / "backups")
+    PRESET_FILE = str(Path(STORAGE_DIR) / "committee_presets.json")
+    URL_HISTORY_FILE = str(Path(STORAGE_DIR) / "url_history.json")
+    RECOVERY_STATE_FILE = str(Path(STORAGE_DIR) / "session_recovery.json")
     
     # 기본 CSS 선택자
     DEFAULT_SELECTORS = [
@@ -208,6 +335,7 @@ class Config:
 
     # 생중계 갱신 감지 (초)
     LIVE_BROADCAST_REFRESH_INTERVAL = 30
+    LIVE_LIST_REQUEST_TIMEOUT_MS = 10000
 
     # 자동 재연결 (#31)
     AUTO_RECONNECT_ENABLED = True
@@ -256,7 +384,8 @@ class Config:
     FILENAME_TIME_FORMAT = "%H%M%S"
     
     # 데이터베이스 (#26)
-    DATABASE_PATH = str(APP_BASE_DIR / "subtitle_history.db")
+    DATABASE_PATH = str(Path(STORAGE_DIR) / "subtitle_history.db")
+    DB_SYNC_TASK_TIMEOUT_SECONDS = 15.0
     LOG_RETENTION_DAYS = 14
     
     # 성능 최적화: 사전 컴파일된 정규식 패턴

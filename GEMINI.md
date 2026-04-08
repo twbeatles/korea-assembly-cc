@@ -72,6 +72,11 @@
 - WebDriver 연결: 지수 백오프로 최대 5회 재시도 (#31)
 - 자막 요소: 여러 CSS 선택자 순차 시도
 
+### 4.4 저장소 / 세션 상태
+- 저장소 루트는 `development=repo root`, `portable=EXE dir(옆에 portable.flag 존재)`, `frozen default=%LOCALAPPDATA%\AssemblySubtitle\Extractor` 3가지 모드로 고정된다.
+- `QSettings`는 기본 Windows 경로를 사용하되, portable 모드에서는 storage root의 `settings.ini`를 사용한다.
+- `url_history.json`, `committee_presets.json`, `subtitle_history.db`, `session_recovery.json`, `logs/`, `sessions/`, `backups/`, `realtime_output/`는 모두 storage root 아래에 생성된다.
+
 ## 5. 주요 클래스
 
 | 클래스 | 파일 | 역할 |
@@ -171,14 +176,18 @@ korea-assembly-cc/
   GEMINI.md                 # AI 컨텍스트
   PIPELINE_LOCK.md          # 파이프라인 고정 문서
   ALGORITHM_ANALYSIS.md     # 알고리즘 분석 문서
-  subtitle_history.db       # SQLite DB (자동 생성)
-  url_history.json          # URL 히스토리 (자동 생성)
-  committee_presets.json    # 상임위 프리셋 (자동 생성)
-  logs/
-    subtitle_YYYYMMDD.log
-  sessions/
-  backups/
-  realtime_output/
+  portable.flag             # portable 모드 sentinel (선택적, 커밋 금지)
+  storage_root/             # development=repo root, portable=EXE dir, frozen default=%LOCALAPPDATA%\AssemblySubtitle\Extractor
+    settings.ini            # portable 모드에서만 사용
+    subtitle_history.db     # SQLite DB (자동 생성)
+    url_history.json        # URL 히스토리 (자동 생성)
+    committee_presets.json  # 상임위 프리셋 (자동 생성)
+    session_recovery.json   # 복구 포인터/state (자동 생성)
+    logs/
+      subtitle_YYYYMMDD.log
+    sessions/
+    backups/
+    realtime_output/
 ```
 
 ## 8. 의존성
@@ -442,6 +451,15 @@ pip install -r requirements-dev.txt
 - `pyrightconfig.json` / `.vscode/settings.json`은 `typings/`를 `stubPath`/`extraPaths`로 명시하고 `.pytest_tmp`를 분석 범위에서 제외하며, 로컬 stub 환경의 `reportMissingModuleSource` 경고를 끈다.
 - `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance에서 동일하게 해석된다.
 - 최신 기준선은 `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings 이다.
+
+## 9.9.8 v16.14.7 저장소 / 세션 안전성 보강 (2026-04-08)
+- frozen 기본 저장소는 `%LOCALAPPDATA%\AssemblySubtitle\Extractor`로 이동하고, EXE 옆 `portable.flag`가 있으면 로그/세션/DB/설정(`settings.ini`)을 EXE 폴더에 저장한다.
+- 앱 시작 전 storage preflight로 `logs/`, `sessions/`, `backups/`, `runtime_sessions/`, DB 경로 생성/쓰기 가능 여부를 검사하고 실패 시 UI 조립 전에 중단한다.
+- `종료`, `세션 불러오기`, `DB 세션 로드`, `세션 병합`은 `저장 후 원래 액션 재개` 흐름을 공유하고, DB sync save는 timeout 실패를 명시적으로 처리한다.
+- archived session 편집/삭제/복사/줄넘김 정리/병합은 background hydrate worker + modal progress/cancel로 전환되어 장시간 UI 정지를 줄인다.
+- `LiveBroadcastDialog`와 `capture_live`는 `10초` timeout, invalid JSON/schema 구분, malformed row drop, stale reply 무시를 공통 적용한다.
+- DB `sessions`는 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 유지하고, 히스토리 다이얼로그는 `[최신]`, `[이전 저장본 n/N]` 배지로 계보를 표시한다.
+- 최신 기준선은 `pytest -q` 170 pass, `pyright --outputjson` 0 errors / 0 warnings 이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

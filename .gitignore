@@ -50,6 +50,9 @@ backups/
 tmp_extension_unpacked/
 tmp_extension.crx
 *.tmp
+/portable.flag
+/settings.ini
+/.storage_probe
 
 # -----------------------------------------------------------------------------
 # Local database/state files

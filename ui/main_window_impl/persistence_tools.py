@@ -16,53 +16,54 @@ class MainWindowPersistenceToolsMixin(MainWindowHost):
             if bool(self.__dict__.get("_reflow_in_progress", False)):
                 self._show_toast("이미 줄넘김 정리가 진행 중입니다.", "info")
                 return
-            self._ensure_full_session_hydrated("줄넘김 정리")
-            # 자막이 없는 경우 처리
-            prepared_entries = self._build_prepared_entries_snapshot()
-            if not prepared_entries:
-                self._show_toast("정리할 자막이 없습니다.", "warning")
-                return
 
-            # 사용자 확인
-            reply = QMessageBox.question(
-                self,
-                "줄넘김 정리 (Smart Reflow)",
-                "자막 재정렬을 수행하시겠습니까?\n\n"
-                "기능:\n"
-                "1. 텍스트 내 타임스탬프([HH:MM:SS])를 감지하여 분리\n"
-                "2. 문장 부호(. ? !) 기준으로 줄 바꿈\n"
-                "3. 끊어진 문장 병합\n\n"
-                "(주의: 되돌리기는 지원되지 않습니다.)",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply == QMessageBox.StandardButton.No:
-                return
+            def continue_reflow() -> None:
+                prepared_entries = self._build_prepared_entries_snapshot()
+                if not prepared_entries:
+                    self._show_toast("정리할 자막이 없습니다.", "warning")
+                    return
 
-            old_count = len(prepared_entries)
-            self._reflow_in_progress = True
-            self._set_status("줄넘김 정리 중...", "running")
+                reply = QMessageBox.question(
+                    self,
+                    "줄넘김 정리 (Smart Reflow)",
+                    "자막 재정렬을 수행하시겠습니까?\n\n"
+                    "기능:\n"
+                    "1. 텍스트 내 타임스탬프([HH:MM:SS])를 감지하여 분리\n"
+                    "2. 문장 부호(. ? !) 기준으로 줄 바꿈\n"
+                    "3. 끊어진 문장 병합\n\n"
+                    "(주의: 되돌리기는 지원되지 않습니다.)",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    return
 
-            def background_reflow():
-                try:
-                    new_subtitles = utils.reflow_subtitles(prepared_entries)
-                    self._emit_control_message(
-                        "reflow_done",
-                        {
-                            "old_count": old_count,
-                            "subtitles": new_subtitles,
-                        },
-                    )
-                except Exception as e:
-                    logger.error(f"리플로우 중 오류: {e}")
-                    self._emit_control_message("reflow_failed", {"error": str(e)})
+                old_count = len(prepared_entries)
+                self._reflow_in_progress = True
+                self._set_status("줄넘김 정리 중...", "running")
 
-            started = self._start_background_thread(background_reflow, "ReflowWorker")
-            if not started:
-                self._reflow_in_progress = False
-                self._set_status("줄넘김 정리 시작 거부 (종료 중)", "warning")
-                self._show_toast("종료 중이라 줄넘김 정리를 시작할 수 없습니다.", "warning")
-                return
-            self._show_toast("줄넘김 정리 시작...", "info", 1500)
+                def background_reflow():
+                    try:
+                        new_subtitles = utils.reflow_subtitles(prepared_entries)
+                        self._emit_control_message(
+                            "reflow_done",
+                            {
+                                "old_count": old_count,
+                                "subtitles": new_subtitles,
+                            },
+                        )
+                    except Exception as e:
+                        logger.error(f"리플로우 중 오류: {e}")
+                        self._emit_control_message("reflow_failed", {"error": str(e)})
+
+                started = self._start_background_thread(background_reflow, "ReflowWorker")
+                if not started:
+                    self._reflow_in_progress = False
+                    self._set_status("줄넘김 정리 시작 거부 (종료 중)", "warning")
+                    self._show_toast("종료 중이라 줄넘김 정리를 시작할 수 없습니다.", "warning")
+                    return
+                self._show_toast("줄넘김 정리 시작...", "info", 1500)
+
+            self._run_after_full_session_hydrated("줄넘김 정리", continue_reflow)
 
     def _merge_sessions(
             self,

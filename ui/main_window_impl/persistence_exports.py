@@ -1274,46 +1274,16 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                 self._show_toast("이미 세션 저장이 진행 중입니다.", "info")
                 return
 
-            filename = (
-                f"{Config.SESSION_DIR}/세션_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            )
-            path, _ = QFileDialog.getSaveFileName(
-                self, "세션 저장", filename, "JSON (*.json)"
-            )
-
-            if not path:
-                return
-
             try:
-                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                path = self._choose_session_snapshot_path(dialog_title="세션 저장")
             except Exception as e:
                 QMessageBox.critical(self, "오류", f"세션 저장 경로 준비 실패: {e}")
                 return
-
-            self._session_save_in_progress = True
-            self._set_status("세션 저장 중...", "running")
-
-            def background_save():
-                try:
-                    info = self._write_session_snapshot(
-                        path,
-                        prepared_entries,
-                        include_db=True,
-                        runtime_root=runtime_root,
-                        runtime_manifest=runtime_manifest,
-                    )
-                    self._emit_control_message("session_save_done", info)
-                except Exception as e:
-                    logger.error(f"세션 저장 오류: {e}")
-                    self._emit_control_message(
-                        "session_save_failed",
-                        {"path": path, "error": str(e)},
-                    )
-
-            started = self._start_background_thread(background_save, "SessionSaveWorker")
-            if not started:
-                self._session_save_in_progress = False
-                self._set_status("세션 저장 시작 거부 (종료 중)", "warning")
-                self._show_toast("종료 중이라 세션 저장을 시작할 수 없습니다.", "warning")
+            if not path:
                 return
-            self._show_toast(f"💾 세션 저장 시작: {Path(path).name}", "info", 1500)
+            self._start_async_session_snapshot_save(
+                path,
+                prepared_entries,
+                runtime_root=runtime_root,
+                runtime_manifest=runtime_manifest,
+            )

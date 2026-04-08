@@ -211,6 +211,118 @@ def test_database_migrates_existing_subtitles_table_to_lossless_schema(tmp_path)
         db.close_all()
 
 
+def test_database_migrates_existing_sessions_table_to_lineage_schema(tmp_path):
+    db_path = tmp_path / "legacy_sessions_history.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                url TEXT,
+                committee_name TEXT,
+                total_subtitles INTEGER DEFAULT 0,
+                total_characters INTEGER DEFAULT 0,
+                duration_seconds INTEGER DEFAULT 0,
+                version TEXT,
+                notes TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE subtitles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                timestamp DATETIME,
+                start_time DATETIME,
+                end_time DATETIME,
+                sequence INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO sessions
+                (url, committee_name, total_subtitles, total_characters, duration_seconds, version, notes)
+            VALUES
+                ('https://example.com/legacy', '레거시위원회', 1, 4, 10, 'legacy', '')
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    db = DatabaseManager(str(db_path))
+    try:
+        with sqlite3.connect(db_path) as migrated:
+            migrated.row_factory = sqlite3.Row
+            columns = {
+                row[1]
+                for row in migrated.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+            row = migrated.execute(
+                "SELECT lineage_id, parent_session_id, is_latest_in_lineage FROM sessions WHERE id = 1"
+            ).fetchone()
+        assert {"lineage_id", "parent_session_id", "is_latest_in_lineage"}.issubset(columns)
+        assert row["lineage_id"] == "legacy-1"
+        assert row["parent_session_id"] is None
+        assert row["is_latest_in_lineage"] == 1
+    finally:
+        db.close_all()
+
+
+def test_database_save_session_tracks_lineage_versions_and_history_fields(tmp_path):
+    db_path = tmp_path / "lineage_history.db"
+    db = DatabaseManager(str(db_path))
+    try:
+        first_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("첫 버전")],
+                "duration_seconds": 10,
+                "version": "test",
+                "lineage_id": "lineage-alpha",
+                "parent_session_id": None,
+            }
+        )
+        second_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("둘째 버전")],
+                "duration_seconds": 11,
+                "version": "test",
+                "lineage_id": "lineage-alpha",
+                "parent_session_id": first_id,
+            }
+        )
+
+        first_loaded = db.load_session(first_id)
+        second_loaded = db.load_session(second_id)
+        listed = db.list_sessions(limit=10, offset=0)
+
+        assert first_loaded is not None
+        assert second_loaded is not None
+        assert first_loaded["lineage_id"] == "lineage-alpha"
+        assert first_loaded["is_latest_in_lineage"] == 0
+        assert second_loaded["lineage_id"] == "lineage-alpha"
+        assert second_loaded["parent_session_id"] == first_id
+        assert second_loaded["is_latest_in_lineage"] == 1
+
+        latest_row = next(row for row in listed if row["id"] == second_id)
+        previous_row = next(row for row in listed if row["id"] == first_id)
+        assert latest_row["lineage_total"] == 2
+        assert latest_row["newer_versions"] == 0
+        assert previous_row["lineage_total"] == 2
+        assert previous_row["newer_versions"] == 1
+    finally:
+        db.close_all()
+
+
 def test_database_search_defaults_to_literal_substring_matching(tmp_path):
     db_path = tmp_path / "subtitle_history.db"
     db = DatabaseManager(str(db_path))

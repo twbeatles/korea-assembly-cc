@@ -5,6 +5,124 @@ from ui.main_window_types import MainWindowHost
 
 
 class MainWindowPersistenceSessionMixin(MainWindowHost):
+    def _clear_pending_deferred_action(self) -> None:
+            self._pending_deferred_action = None
+            self._pending_deferred_action_name = ""
+            self._pending_deferred_action_after_save = False
+
+    def _set_pending_deferred_action(
+            self,
+            action_name: str,
+            callback: Callable[[], None],
+        ) -> None:
+            self._pending_deferred_action = callback
+            self._pending_deferred_action_name = str(action_name or "").strip()
+            self._pending_deferred_action_after_save = True
+
+    def _resume_pending_deferred_action(self) -> bool:
+            callback = self.__dict__.get("_pending_deferred_action")
+            if not callable(callback):
+                self._clear_pending_deferred_action()
+                return False
+            action_name = str(self.__dict__.get("_pending_deferred_action_name", "") or "")
+            self._clear_pending_deferred_action()
+
+            def run_callback() -> None:
+                try:
+                    callback()
+                except Exception:
+                    logger.exception("deferred action 재개 실패: %s", action_name or "unknown")
+                    QMessageBox.critical(
+                        self,
+                        "오류",
+                        f"저장 후 '{action_name or '작업'}' 재개 중 오류가 발생했습니다.",
+                    )
+
+            QTimer.singleShot(0, run_callback)
+            return True
+
+    def _choose_session_snapshot_path(
+            self,
+            *,
+            dialog_title: str = "세션 저장",
+        ) -> str | None:
+            filename = (
+                f"{Config.SESSION_DIR}/세션_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                dialog_title,
+                filename,
+                "JSON (*.json)",
+            )
+            if not path:
+                return None
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            return path
+
+    def _start_async_session_snapshot_save(
+            self,
+            path: str,
+            prepared_entries: list[SubtitleEntry],
+            *,
+            runtime_root: Path | None = None,
+            runtime_manifest: list[dict[str, Any]] | None = None,
+            on_success: Callable[[], None] | None = None,
+            action_name: str = "",
+        ) -> bool:
+            if self._session_save_in_progress:
+                self._show_toast("이미 세션 저장이 진행 중입니다.", "info")
+                return False
+
+            if on_success is not None:
+                self._set_pending_deferred_action(action_name, on_success)
+
+            self._session_save_in_progress = True
+            self._set_status("세션 저장 중...", "running")
+
+            def background_save() -> None:
+                try:
+                    info = self._write_session_snapshot(
+                        path,
+                        prepared_entries,
+                        include_db=True,
+                        runtime_root=runtime_root,
+                        runtime_manifest=runtime_manifest,
+                    )
+                    self._emit_control_message("session_save_done", info)
+                except Exception as e:
+                    logger.error(f"세션 저장 오류: {e}")
+                    self._emit_control_message(
+                        "session_save_failed",
+                        {"path": path, "error": str(e)},
+                    )
+
+            started = self._start_background_thread(background_save, "SessionSaveWorker")
+            if started:
+                self._show_toast(f"💾 세션 저장 시작: {Path(path).name}", "info", 1500)
+                return True
+
+            self._session_save_in_progress = False
+            self._clear_pending_deferred_action()
+            self._set_status("세션 저장 시작 거부 (종료 중)", "warning")
+            self._show_toast("종료 중이라 세션 저장을 시작할 수 없습니다.", "warning")
+            return False
+
+    def _run_after_dirty_session_action(
+            self,
+            action_name: str,
+            callback: Callable[[], None],
+        ) -> bool:
+            confirm = getattr(self, "_confirm_dirty_session_action")
+            try:
+                return bool(confirm(action_name, on_continue=callback))
+            except TypeError as exc:
+                if "on_continue" not in str(exc):
+                    raise
+                confirmed = bool(confirm(action_name))
+                if confirmed:
+                    callback()
+                return confirmed
 
     def _record_recovery_snapshot(
             self,
@@ -14,6 +132,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             created_at: str,
             url: str = "",
             committee_name: str = "",
+            lineage_id: str = "",
         ) -> None:
             utils.atomic_write_json(
                 Config.RECOVERY_STATE_FILE,
@@ -24,6 +143,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                     "saved_at": datetime.now().isoformat(),
                     "url": str(url or ""),
                     "committee_name": str(committee_name or ""),
+                    "lineage_id": str(lineage_id or ""),
                 },
                 ensure_ascii=False,
             )
@@ -127,6 +247,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                             "created_at": data.get("created", ""),
                             "url": data.get("url", ""),
                             "committee_name": data.get("committee_name", ""),
+                            "lineage_id": data.get("lineage_id", ""),
                             "subtitles": new_subtitles,
                             "skipped": skipped,
                             "mark_dirty": mark_dirty,
@@ -204,6 +325,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             """현재 세션 스냅샷을 JSON(+선택적 DB)으로 동기 저장한다."""
             current_url, committee_name, duration = self._build_session_save_context()
             created_at = datetime.now().isoformat()
+            lineage_id = self._ensure_session_lineage_id()
             manifest_items = (
                 runtime_manifest
                 if runtime_manifest is not None
@@ -220,6 +342,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                     ("created", created_at),
                     ("url", current_url),
                     ("committee_name", committee_name),
+                    ("lineage_id", lineage_id),
                 ],
                 sequence_key="subtitles",
                 sequence_items=self._iter_full_session_serialized_items(
@@ -235,10 +358,12 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 created_at=created_at,
                 url=current_url,
                 committee_name=committee_name,
+                lineage_id=lineage_id,
             )
 
             db_saved = False
             db_error = ""
+            db_session_id = None
             if include_db:
                 db = self.db
                 if db is not None:
@@ -251,8 +376,10 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                             "runtime_manifest": [dict(item) for item in manifest_items],
                             "version": Config.VERSION,
                             "duration_seconds": duration,
+                            "lineage_id": lineage_id,
+                            "parent_session_id": self.__dict__.get("current_db_session_id"),
                         }
-                        self._run_db_task_sync(
+                        db_session_id = self._run_db_task_sync(
                             "db_session_save",
                             lambda data=dict(db_data): db.save_session(
                                 {
@@ -265,6 +392,8 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                                     ),
                                     "version": data["version"],
                                     "duration_seconds": data["duration_seconds"],
+                                    "lineage_id": data["lineage_id"],
+                                    "parent_session_id": data["parent_session_id"],
                                 }
                             ),
                             write_task=True,
@@ -278,6 +407,8 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 "saved_count": saved_count,
                 "db_saved": db_saved,
                 "db_error": db_error,
+                "db_session_id": db_session_id,
+                "lineage_id": lineage_id,
                 "url": current_url,
                 "committee_name": committee_name,
                 "created_at": created_at,
@@ -325,6 +456,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                     )
                 self._clear_session_dirty()
                 self._clear_recovery_state()
+                self._apply_saved_session_db_identity(info)
                 db_error = str(info.get("db_error", "") or "").strip()
                 if db_error:
                     QMessageBox.warning(
@@ -338,9 +470,15 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 QMessageBox.critical(self, "오류", f"세션 저장 실패: {e}")
                 return None
 
-    def _confirm_dirty_session_action(self, action_name: str) -> bool:
+    def _confirm_dirty_session_action(
+            self,
+            action_name: str,
+            on_continue: Callable[[], None] | None = None,
+        ) -> bool:
             """dirty 세션이 있을 때 현재 작업을 보호하고 진행 여부를 반환한다."""
             if not self._has_dirty_session():
+                if callable(on_continue):
+                    on_continue()
                 return True
 
             prepared_entries = self._build_prepared_entries_snapshot()
@@ -358,8 +496,28 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                     | QMessageBox.StandardButton.Cancel,
                 )
                 if reply == QMessageBox.StandardButton.Cancel:
+                    self._clear_pending_deferred_action()
                     return False
                 if reply == QMessageBox.StandardButton.Save:
+                    if callable(on_continue):
+                        runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
+                        try:
+                            path = self._choose_session_snapshot_path(dialog_title="세션 저장")
+                        except Exception as e:
+                            self._clear_pending_deferred_action()
+                            QMessageBox.critical(self, "오류", f"세션 저장 경로 준비 실패: {e}")
+                            return False
+                        if not path:
+                            self._clear_pending_deferred_action()
+                            return False
+                        return self._start_async_session_snapshot_save(
+                            path,
+                            prepared_entries,
+                            runtime_root=runtime_root,
+                            runtime_manifest=runtime_manifest,
+                            on_success=on_continue,
+                            action_name=action_label,
+                        )
                     return (
                         self._prompt_write_session_snapshot(
                             prepared_entries,
@@ -367,6 +525,8 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                         )
                         is not None
                     )
+                if callable(on_continue):
+                    on_continue()
                 return True
 
             reply = QMessageBox.question(
@@ -376,7 +536,12 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 QMessageBox.StandardButton.Discard
                 | QMessageBox.StandardButton.Cancel,
             )
-            return reply != QMessageBox.StandardButton.Cancel
+            if reply == QMessageBox.StandardButton.Cancel:
+                self._clear_pending_deferred_action()
+                return False
+            if callable(on_continue):
+                on_continue()
+            return True
 
     def _start_backup_snapshot_write(
             self,
@@ -402,6 +567,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 backup_file = backup_dir / f"backup_{timestamp}.json"
                 source_url, committee_name, _duration = self._build_session_save_context()
                 created_at = datetime.now().isoformat()
+                lineage_id = self._ensure_session_lineage_id()
                 snapshot_entries = list(prepared_entries)
             except Exception as e:
                 try:
@@ -421,6 +587,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                             ("created", created_at),
                             ("url", source_url),
                             ("committee_name", committee_name),
+                            ("lineage_id", lineage_id),
                         ],
                         sequence_key="subtitles",
                         sequence_items=utils.iter_serialized_subtitles(snapshot_entries),
@@ -432,6 +599,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                         created_at=created_at,
                         url=source_url,
                         committee_name=committee_name,
+                        lineage_id=lineage_id,
                     )
                     self._cleanup_old_backups()
                     logger.info(
@@ -514,16 +682,17 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 return
             if self._block_session_replacement_while_saving("세션 불러오기"):
                 return
-            if not self._confirm_dirty_session_action("세션 불러오기"):
-                return
 
-            path, _ = QFileDialog.getOpenFileName(
-                self, "세션 불러오기", f"{Config.SESSION_DIR}/", "JSON (*.json)"
-            )
+            def continue_load() -> None:
+                path, _ = QFileDialog.getOpenFileName(
+                    self, "세션 불러오기", f"{Config.SESSION_DIR}/", "JSON (*.json)"
+                )
 
-            if not path:
-                return
-            self._start_session_load_from_path(path)
+                if not path:
+                    return
+                self._start_session_load_from_path(path)
+
+            self._run_after_dirty_session_action("세션 불러오기", continue_load)
 
     def _deserialize_subtitles(
             self, serialized_items, source: str = ""

@@ -70,6 +70,15 @@
 - 세션 저장/TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 export는 archived segment + active tail iterator를 직접 사용해 full-session hydrate 없이 스트리밍 처리합니다.
 - 최신 기준선: `pytest -q` `146 passed`, `pyright` `0 errors`.
 
+### 💾 저장소 / 세션 안전성 보강 (2026-04-08)
+- frozen 기본 저장소는 `%LOCALAPPDATA%\AssemblySubtitle\Extractor`로 분리했고, EXE 옆 `portable.flag`가 있으면 로그/세션/DB/설정(`settings.ini`)을 EXE 폴더 기준으로 저장합니다.
+- 앱 시작 전에 storage preflight를 수행해 `logs/`, `sessions/`, `backups/`, `runtime_sessions/`, DB 경로 생성/쓰기 가능 여부를 먼저 검증하고, 실패 시 UI 조립 전에 blocking 오류로 중단합니다.
+- dirty 세션 보호는 `저장 후 원래 액션 재개` 구조로 바뀌어 `종료`, `세션 불러오기`, `DB 세션 로드`, `세션 병합`에서 JSON+DB 저장이 끝난 뒤에만 후속 동작이 이어집니다.
+- 장시간 세션 hydrate는 UI 스레드 동기 clone 대신 background worker + modal progress/cancel로 전환되어 편집/삭제/복사/리플로우/병합 시 장시간 정지가 줄었습니다.
+- `LiveBroadcastDialog`와 `live_list` 보완 경로는 `10초` timeout, invalid JSON/schema 구분, row 단위 drop, stale reply 무시를 공통으로 적용합니다.
+- DB `sessions` 테이블은 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 유지하고, 히스토리 다이얼로그에서 `[최신]`, `[이전 저장본 n/N]` 배지로 같은 세션 계보를 바로 확인할 수 있습니다.
+- 최신 기준선: `pytest -q` `170 passed`, `pyright` `0 errors`.
+
 ### 🧱 코드 분할 리팩토링 정합화 (2026-04-05)
 - `ui/main_window_database.py`는 facade만 남기고 `database_worker.py` / `database_dialogs.py` 조합으로 분리해 DB 실행 경로와 다이얼로그 UI 경로를 분리했습니다.
 - `ui/main_window_persistence.py`는 facade만 남기고 `persistence_runtime.py` / `persistence_session.py` / `persistence_exports.py` / `persistence_tools.py`로 나눠 runtime archive, 세션/복구, export, 유틸 책임을 구분했습니다.
@@ -639,8 +648,9 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
 - `python-docx`, `pywin32`, `core.subtitle_processor`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
-- `typings/`, `.pytest_tmp`, `session_recovery.json`, `backups/runtime_sessions/` 같은 정적 분석/워크스페이스 temp/런타임 archive 산출물은 frozen 번들에 포함하지 않습니다.
-- 빌드 산출물은 기존 `.gitignore`의 `build/`, `dist/` 규칙으로 계속 관리됩니다.
+- frozen 기본 실행은 `%LOCALAPPDATA%\\AssemblySubtitle\\Extractor`를 storage root로 사용하고, EXE 옆에 `portable.flag`를 두면 로그/세션/DB/설정(`settings.ini`)을 EXE 폴더에 저장합니다.
+- `typings/`, `.pytest_tmp`, `portable.flag`, `settings.ini`, `session_recovery.json`, `backups/runtime_sessions/` 같은 정적 분석/portable/runtime 산출물은 frozen 번들에 포함하지 않습니다.
+- 빌드 산출물은 `.gitignore`의 `build/`, `dist/` 규칙으로, portable 실행 보조 파일은 `/portable.flag`, `/settings.ini`, `/.storage_probe` 규칙으로 관리합니다.
 
 ---
 
@@ -652,8 +662,13 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - `ui/main_window_database.py`, `ui/main_window_persistence.py`는 facade 조합 레이어로 축소하고 실제 DB/persistence 구현은 `ui/main_window_impl/database_*`, `ui/main_window_impl/persistence_*`로 재분리
 - `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장하고, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 현재 구조 기준으로 재동기화
 - `archive_token` + `run_id` 기반 runtime archive identity, best-effort runtime manifest salvage, blank-URL 세션 로드 hygiene, recovery pointer 유지 정책을 추가해 장시간 세션 안정성을 보강
+- frozen 기본 저장소를 `%LOCALAPPDATA%\\AssemblySubtitle\\Extractor`로 분리하고, `portable.flag`가 있으면 EXE 폴더 기준 `settings.ini`/로그/세션/DB를 사용하는 portable 모드를 추가
+- 앱 시작 전 storage preflight를 도입해 `logs/`, `sessions/`, `backups/`, `runtime_sessions/`, DB 경로 생성/쓰기 실패를 UI 조립 전에 차단
+- dirty 세션 보호를 `저장 후 원래 액션 재개` 방식으로 통일하고, 장시간 세션 hydrate를 background worker + progress/cancel 구조로 전환
+- `LiveBroadcastDialog`/`live_list` 보완 경로에 `10초` timeout, invalid JSON/schema 구분, row 단위 drop, stale reply 방어를 공통 적용
+- DB `sessions` 테이블에 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 추가하고, 히스토리 다이얼로그에 `[최신]`, `[이전 저장본 n/N]` 배지를 노출
 - `pyrightconfig.json` / `.vscode/settings.json` / `typings/PyQt6/QtNetwork.pyi` / `tests/test_encoding_hygiene.py`를 갱신해 Pylance/CLI `pyright`와 UTF-8 위생 기준을 현재 코드에 맞게 고정
-- 검증 기준선: `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings
+- 검증 기준선: `pytest -q` 170 pass, `pyright --outputjson` 0 errors / 0 warnings
 
 ### v16.14.6 (2026-04-01)
 - recovery state(`session_recovery.json`) 기반 최신 복구 가능 세션 제안, 종료 직전 저장/자동 백업 메타데이터 정리

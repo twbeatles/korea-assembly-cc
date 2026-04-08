@@ -100,8 +100,6 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                 return False
             if self._block_session_replacement_while_saving(action_name):
                 return False
-            if not self._confirm_dirty_session_action(action_name):
-                return False
 
             if isinstance(session_id, int):
                 normalized_session_id = session_id
@@ -124,50 +122,71 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                 self._show_toast("데이터베이스가 초기화되지 않았습니다.", "error")
                 return False
 
-            def worker(sid: int = normalized_session_id):
-                session_data = db.load_session(sid)
-                if not session_data:
-                    return {}
-                new_subtitles, skipped = self._deserialize_subtitles(
-                    session_data.get("subtitles", []),
-                    source=f"{source_tag}:{sid}",
-                )
-                payload = {
-                    "version": session_data.get("version", "unknown"),
-                    "created_at": session_data.get("created_at", ""),
-                    "url": session_data.get("url", ""),
-                    "committee_name": session_data.get("committee_name", ""),
-                    "subtitles": new_subtitles,
-                    "skipped": skipped,
-                }
+            started_holder: dict[str, bool | None] = {"value": None}
+
+            def continue_load() -> None:
+                def worker(sid: int = normalized_session_id):
+                    session_data = db.load_session(sid)
+                    if not session_data:
+                        return {}
+                    new_subtitles, skipped = self._deserialize_subtitles(
+                        session_data.get("subtitles", []),
+                        source=f"{source_tag}:{sid}",
+                    )
+                    payload = {
+                        "db_session_id": session_data.get("id"),
+                        "version": session_data.get("version", "unknown"),
+                        "created_at": session_data.get("created_at", ""),
+                        "url": session_data.get("url", ""),
+                        "committee_name": session_data.get("committee_name", ""),
+                        "lineage_id": session_data.get("lineage_id", ""),
+                        "subtitles": new_subtitles,
+                        "skipped": skipped,
+                    }
+                    if highlight_sequence >= 0:
+                        payload["highlight_sequence"] = highlight_sequence
+                        payload["highlight_query"] = highlight_query
+                    return payload
+
+                context: dict[str, Any] = {"session_id": normalized_session_id}
+                if dialog is not None:
+                    context["dialog"] = dialog
                 if highlight_sequence >= 0:
-                    payload["highlight_sequence"] = highlight_sequence
-                    payload["highlight_query"] = highlight_query
-                return payload
+                    context["highlight"] = True
+                    context["query"] = highlight_query
 
-            context: dict[str, Any] = {"session_id": normalized_session_id}
-            if dialog is not None:
-                context["dialog"] = dialog
-            if highlight_sequence >= 0:
-                context["highlight"] = True
-                context["query"] = highlight_query
+                started = self._run_db_task(
+                    task_name,
+                    worker=worker,
+                    context=context,
+                    loading_text=loading_text,
+                )
+                if started and set_busy is not None:
+                    set_busy(True, busy_message)
+                started_holder["value"] = bool(started)
 
-            started = self._run_db_task(
-                task_name,
-                worker=worker,
-                context=context,
-                loading_text=loading_text,
+            started_or_continued = self._run_after_dirty_session_action(
+                action_name,
+                continue_load,
             )
-            if started and set_busy is not None:
-                set_busy(True, busy_message)
-            return started
+            if started_holder["value"] is not None:
+                return bool(started_holder["value"])
+            return bool(started_or_continued)
 
     def _format_db_history_item(self, session_row: dict[str, Any]) -> str:
             created = session_row.get("created_at", "")[:19] if session_row.get("created_at") else ""
             committee = session_row.get("committee_name") or "알 수 없음"
             subtitles = session_row.get("total_subtitles", 0)
             chars = session_row.get("total_characters", 0)
-            return f"[{created}] {committee} - {subtitles}문장, {chars:,}자"
+            is_latest = bool(session_row.get("is_latest_in_lineage", 0))
+            lineage_total = max(1, int(session_row.get("lineage_total", 1) or 1))
+            newer_versions = max(0, int(session_row.get("newer_versions", 0) or 0))
+            if is_latest:
+                lineage_badge = "[최신]"
+            else:
+                previous_total = max(1, lineage_total - 1)
+                lineage_badge = f"[이전 저장본 {newer_versions}/{previous_total}]"
+            return f"{lineage_badge} [{created}] {committee} - {subtitles}문장, {chars:,}자"
 
     def _update_db_history_loaded_label(self) -> None:
             state = self.__dict__.get("_db_history_dialog_state") or {}
@@ -688,8 +707,28 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                     QMessageBox.warning(dialog, "알림", "2개 이상의 파일을 선택하세요.")
                     return
 
-                # 기존 자막 처리 옵션 확인
-                existing_subtitles: list[SubtitleEntry] | None = None
+                def apply_merge(
+                    existing_subtitles: list[SubtitleEntry] | None = None,
+                ) -> None:
+                    merged = self._merge_sessions(
+                        file_paths,
+                        remove_duplicates=remove_dup_check.isChecked(),
+                        sort_by_time=sort_check.isChecked(),
+                        existing_subtitles=existing_subtitles,
+                        dedupe_mode=str(
+                            dedupe_mode_combo.currentData() or "legacy_bucket"
+                        ),
+                    )
+
+                    if merged:
+                        self._store_destructive_undo_snapshot()
+                        self._replace_subtitles_and_refresh(merged)
+                        self._set_capture_source_metadata("", "")
+                        self._mark_session_dirty()
+                        self._notify_destructive_undo_available()
+                        self._show_toast(f"병합 완료! {len(merged)}개 문장", "success")
+                        dialog.accept()
+
                 if self.subtitles:
                     reply = QMessageBox.question(
                         dialog,
@@ -705,33 +744,26 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                         return
 
                     if reply == QMessageBox.StandardButton.Yes:
-                        self._ensure_full_session_hydrated("세션 병합")
-                        with self.subtitle_lock:
-                            existing_subtitles = list(self.subtitles)
-                    else:
-                        if self._block_session_replacement_while_saving("세션 병합"):
-                            return
-                        if not self._confirm_dirty_session_action("세션 병합"):
-                            return
+                        def continue_merge_with_existing() -> None:
+                            with self.subtitle_lock:
+                                existing_subtitles = list(self.subtitles)
+                            apply_merge(existing_subtitles)
 
-                merged = self._merge_sessions(
-                    file_paths,
-                    remove_duplicates=remove_dup_check.isChecked(),
-                    sort_by_time=sort_check.isChecked(),
-                    existing_subtitles=existing_subtitles,
-                    dedupe_mode=str(
-                        dedupe_mode_combo.currentData() or "legacy_bucket"
-                    ),
-                )
+                        self._run_after_full_session_hydrated(
+                            "세션 병합",
+                            continue_merge_with_existing,
+                        )
+                        return
 
-                if merged:
-                    self._store_destructive_undo_snapshot()
-                    self._replace_subtitles_and_refresh(merged)
-                    self._set_capture_source_metadata("", "")
-                    self._mark_session_dirty()
-                    self._notify_destructive_undo_available()
-                    self._show_toast(f"병합 완료! {len(merged)}개 문장", "success")
-                    dialog.accept()
+                    if self._block_session_replacement_while_saving("세션 병합"):
+                        return
+                    self._run_after_dirty_session_action(
+                        "세션 병합",
+                        lambda: apply_merge(None),
+                    )
+                    return
+
+                apply_merge(None)
 
             merge_btn.clicked.connect(do_merge)
             btn_layout.addWidget(merge_btn)

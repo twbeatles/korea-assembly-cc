@@ -33,6 +33,10 @@ COALESCED_WORKER_MESSAGE_ORDER = (
 COALESCED_CONTROL_MESSAGE_TYPES = {
     "db_task_error",
     "db_task_result",
+    "hydrate_cancelled",
+    "hydrate_done",
+    "hydrate_failed",
+    "hydrate_progress",
     "hwp_save_failed",
     "reflow_done",
     "reflow_failed",

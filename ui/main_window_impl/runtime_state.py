@@ -43,7 +43,13 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self.setMinimumSize(1100, 750)
         self.resize(1200, 800)
 
-        self.settings = QSettings("AssemblySubtitle", "Extractor")
+        if Config.SETTINGS_INI_PATH:
+            self.settings = QSettings(
+                Config.SETTINGS_INI_PATH,
+                QSettings.Format.IniFormat,
+            )
+        else:
+            self.settings = QSettings("AssemblySubtitle", "Extractor")
         self.is_dark_theme = self.settings.value("dark_theme", True, type=bool)
         self.font_size = self.settings.value(
             "font_size", Config.DEFAULT_FONT_SIZE, type=int
@@ -217,6 +223,8 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._capture_source_headless = False
         self._capture_source_realtime = False
         self._session_dirty = False
+        self.current_session_lineage_id = ""
+        self.current_db_session_id: int | None = None
 
         self._user_scrolled_up = False
         self._is_stopping = False
@@ -228,8 +236,16 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._coalesced_control_messages: dict[object, tuple[str, Any]] = {}
         self._last_status_message = ""
         self._session_save_in_progress = False
+        self._pending_deferred_action: Callable[[], None] | None = None
+        self._pending_deferred_action_name = ""
+        self._pending_deferred_action_after_save = False
         self._session_load_in_progress = False
         self._reflow_in_progress = False
+        self._hydrate_in_progress = False
+        self._hydrate_cancel_event = threading.Event()
+        self._hydrate_progress_dialog = None
+        self._pending_hydration_action: Callable[[], None] | None = None
+        self._pending_hydration_action_name = ""
         self._initial_recovery_snapshot_done = False
         self._destructive_undo_snapshot: dict[str, Any] | None = None
         self._restoring_destructive_undo = False
@@ -266,9 +282,9 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self.backup_timer = QTimer(self)
         self.backup_timer.timeout.connect(self._auto_backup)
 
-        Path(Config.SESSION_DIR).mkdir(exist_ok=True)
-        Path(Config.REALTIME_DIR).mkdir(exist_ok=True)
-        Path(Config.BACKUP_DIR).mkdir(exist_ok=True)
+        Path(Config.SESSION_DIR).mkdir(parents=True, exist_ok=True)
+        Path(Config.REALTIME_DIR).mkdir(parents=True, exist_ok=True)
+        Path(Config.BACKUP_DIR).mkdir(parents=True, exist_ok=True)
         Path(Config.RUNTIME_SESSION_DIR).mkdir(parents=True, exist_ok=True)
 
         self.db: DatabaseProtocol | None = None

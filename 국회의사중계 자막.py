@@ -28,7 +28,8 @@ except ImportError:
     print("selenium 필요: pip install selenium")
     sys.exit(1)
 
-from core.logging_utils import logger
+from core.config import Config
+from core.logging_utils import ensure_file_logging, logger
 from ui.main_window import MainWindow
 
 
@@ -41,6 +42,21 @@ def main():
             app = QApplication(sys.argv)
         if not isinstance(app, QApplication):
             raise RuntimeError("QApplication 인스턴스를 초기화할 수 없습니다.")
+
+        preflight_ok, preflight_error = Config.run_storage_preflight()
+        if not preflight_ok:
+            QMessageBox.critical(
+                None,
+                "저장소 초기화 실패",
+                (
+                    "필수 저장 경로를 준비하지 못해 프로그램을 시작할 수 없습니다.\n\n"
+                    f"저장 모드: {Config.STORAGE_MODE}\n"
+                    f"저장 루트: {Config.STORAGE_DIR}\n\n"
+                    f"{preflight_error}"
+                ),
+            )
+            return
+        ensure_file_logging()
 
         app.setStyle("Fusion")
         app.setFont(QFont("맑은 고딕", 10))
