@@ -248,6 +248,21 @@ def _build_search_window() -> Any:
     return win
 
 
+def _build_preset_target() -> tuple[Any, list[str], list[bool], list[bool]]:
+    target = MainWindow.__new__(MainWindow)
+    target.committee_presets = {}
+    target.custom_presets = {}
+
+    toasts: list[str] = []
+    save_calls: list[bool] = []
+    build_calls: list[bool] = []
+
+    target._show_toast = lambda message, *_args, **_kwargs: toasts.append(str(message))
+    target._save_committee_presets = lambda: save_calls.append(True)
+    target._build_preset_menu = lambda: build_calls.append(True)
+    return target, toasts, save_calls, build_calls
+
+
 def test_runtime_mutation_guards_preserve_subtitles_and_capture_state(monkeypatch):
     win, toasts = _build_runtime_window()
     original_entries = win.subtitles
@@ -446,8 +461,12 @@ def test_preset_export_import_round_trip_preserves_committee_and_custom(
     export_path = tmp_path / "presets.json"
 
     source = MainWindow.__new__(MainWindow)
-    source.committee_presets = {"행정안전위원회": "https://example.com/committee"}
-    source.custom_presets = {"내 프리셋": "https://example.com/custom"}
+    source.committee_presets = {
+        "행정안전위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=45"
+    }
+    source.custom_presets = {
+        "내 프리셋": "https://assembly.webcast.go.kr/main/player.asp?xcode=99"
+    }
     source._show_toast = lambda *_args, **_kwargs: None
 
     monkeypatch.setattr(
@@ -462,8 +481,12 @@ def test_preset_export_import_round_trip_preserves_committee_and_custom(
     assert exported["custom"] == source.custom_presets
 
     target = MainWindow.__new__(MainWindow)
-    target.committee_presets = {"행정안전위원회": "https://old.example.com"}
-    target.custom_presets = {"내 프리셋": "https://old.example.com/custom"}
+    target.committee_presets = {
+        "행정안전위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=1"
+    }
+    target.custom_presets = {
+        "내 프리셋": "https://assembly.webcast.go.kr/main/player.asp?xcode=2"
+    }
     target._show_toast = lambda *_args, **_kwargs: None
     target._save_committee_presets = lambda: None
     target._build_preset_menu = lambda: None
@@ -477,6 +500,163 @@ def test_preset_export_import_round_trip_preserves_committee_and_custom(
 
     assert target.committee_presets == source.committee_presets
     assert target.custom_presets == source.custom_presets
+
+
+def test_add_custom_preset_accepts_assembly_domain_url(monkeypatch):
+    target, toasts, save_calls, build_calls = _build_preset_target()
+    target._get_current_url = lambda: Config.DEFAULT_URL
+    responses = iter(
+        [
+            ("내 프리셋", True),
+            ("https://assembly.webcast.go.kr/main/player.asp?xcode=77", True),
+        ]
+    )
+
+    monkeypatch.setattr(
+        ui_mod.QInputDialog,
+        "getText",
+        lambda *_args, **_kwargs: next(responses),
+    )
+
+    MainWindow._add_custom_preset(target)
+
+    assert target.custom_presets == {
+        "내 프리셋": "https://assembly.webcast.go.kr/main/player.asp?xcode=77"
+    }
+    assert save_calls == [True]
+    assert build_calls == [True]
+    assert toasts == ["프리셋 '내 프리셋' 추가됨"]
+
+
+def test_add_custom_preset_rejects_non_assembly_domain_url(monkeypatch):
+    target, _toasts, save_calls, build_calls = _build_preset_target()
+    target._get_current_url = lambda: Config.DEFAULT_URL
+    warnings: list[str] = []
+    responses = iter([("외부 프리셋", True), ("https://example.com/live", True)])
+
+    monkeypatch.setattr(
+        ui_mod.QInputDialog,
+        "getText",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        ui_mod.QMessageBox,
+        "warning",
+        lambda *_args, **_kwargs: warnings.append(str(_args[2])) or None,
+    )
+
+    MainWindow._add_custom_preset(target)
+
+    assert target.custom_presets == {}
+    assert save_calls == []
+    assert build_calls == []
+    assert warnings == ["프리셋 URL은 assembly.webcast.go.kr 계열만 허용됩니다."]
+
+
+def test_manage_presets_updates_custom_preset_with_valid_assembly_domain_url(monkeypatch):
+    target, toasts, save_calls, build_calls = _build_preset_target()
+    target.custom_presets = {
+        "내 프리셋": "https://assembly.webcast.go.kr/main/player.asp?xcode=55"
+    }
+    item_responses = iter([("수정", True), ("내 프리셋", True)])
+    text_responses = iter(
+        [
+            ("수정된 프리셋", True),
+            ("https://assembly.webcast.go.kr/main/player.asp?xcode=56", True),
+        ]
+    )
+
+    monkeypatch.setattr(
+        ui_mod.QInputDialog,
+        "getItem",
+        lambda *_args, **_kwargs: next(item_responses),
+    )
+    monkeypatch.setattr(
+        ui_mod.QInputDialog,
+        "getText",
+        lambda *_args, **_kwargs: next(text_responses),
+    )
+
+    MainWindow._manage_presets(target)
+
+    assert target.custom_presets == {
+        "수정된 프리셋": "https://assembly.webcast.go.kr/main/player.asp?xcode=56"
+    }
+    assert save_calls == [True]
+    assert build_calls == [True]
+    assert toasts == ["프리셋 '수정된 프리셋' 수정됨"]
+
+
+def test_manage_presets_keeps_original_when_edited_url_is_invalid(monkeypatch):
+    target, _toasts, save_calls, build_calls = _build_preset_target()
+    original_url = "https://assembly.webcast.go.kr/main/player.asp?xcode=55"
+    target.custom_presets = {"내 프리셋": original_url}
+    warnings: list[str] = []
+    item_responses = iter([("수정", True), ("내 프리셋", True)])
+    text_responses = iter([("수정된 프리셋", True), ("https://example.com/live", True)])
+
+    monkeypatch.setattr(
+        ui_mod.QInputDialog,
+        "getItem",
+        lambda *_args, **_kwargs: next(item_responses),
+    )
+    monkeypatch.setattr(
+        ui_mod.QInputDialog,
+        "getText",
+        lambda *_args, **_kwargs: next(text_responses),
+    )
+    monkeypatch.setattr(
+        ui_mod.QMessageBox,
+        "warning",
+        lambda *_args, **_kwargs: warnings.append(str(_args[2])) or None,
+    )
+
+    MainWindow._manage_presets(target)
+
+    assert target.custom_presets == {"내 프리셋": original_url}
+    assert save_calls == []
+    assert build_calls == []
+    assert warnings == ["프리셋 URL은 assembly.webcast.go.kr 계열만 허용됩니다."]
+
+
+def test_import_presets_skips_invalid_urls_and_reports_skipped_count(tmp_path, monkeypatch):
+    import_path = tmp_path / "presets_partial.json"
+    import_path.write_text(
+        json.dumps(
+            {
+                "committee": {
+                    "행정안전위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=45",
+                    "외부위원회": "https://example.com/live",
+                },
+                "custom": {
+                    "내 프리셋": "https://assembly.webcast.go.kr/main/player.asp?xcode=88",
+                    "": "https://assembly.webcast.go.kr/main/player.asp?xcode=89",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    target, toasts, save_calls, build_calls = _build_preset_target()
+
+    monkeypatch.setattr(
+        ui_mod.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(import_path), ""),
+    )
+
+    MainWindow._import_presets(target)
+
+    assert target.committee_presets == {
+        "행정안전위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=45"
+    }
+    assert target.custom_presets == {
+        "내 프리셋": "https://assembly.webcast.go.kr/main/player.asp?xcode=88"
+    }
+    assert save_calls == [True]
+    assert build_calls == [True]
+    assert toasts == ["프리셋 2개 가져오기 완료! (제외 2개)"]
 
 
 def test_export_stats_overwrites_existing_report_atomically(tmp_path, monkeypatch):

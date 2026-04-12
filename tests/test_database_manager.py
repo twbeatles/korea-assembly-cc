@@ -323,6 +323,107 @@ def test_database_save_session_tracks_lineage_versions_and_history_fields(tmp_pa
         db.close_all()
 
 
+def test_database_delete_session_promotes_previous_lineage_version_to_latest(tmp_path):
+    db_path = tmp_path / "lineage_delete_latest.db"
+    db = DatabaseManager(str(db_path))
+    try:
+        first_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("첫 버전")],
+                "duration_seconds": 10,
+                "version": "test",
+                "lineage_id": "lineage-delete-latest",
+            }
+        )
+        second_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("둘째 버전")],
+                "duration_seconds": 11,
+                "version": "test",
+                "lineage_id": "lineage-delete-latest",
+                "parent_session_id": first_id,
+            }
+        )
+
+        assert db.delete_session(second_id) is True
+
+        first_loaded = db.load_session(first_id)
+        listed = db.list_sessions(limit=10, offset=0)
+
+        assert first_loaded is not None
+        assert first_loaded["is_latest_in_lineage"] == 1
+        assert [row["id"] for row in listed] == [first_id]
+        assert listed[0]["lineage_total"] == 1
+        assert listed[0]["newer_versions"] == 0
+        assert listed[0]["is_latest_in_lineage"] == 1
+    finally:
+        db.close_all()
+
+
+def test_database_delete_session_keeps_existing_latest_when_deleting_middle_version(tmp_path):
+    db_path = tmp_path / "lineage_delete_middle.db"
+    db = DatabaseManager(str(db_path))
+    try:
+        first_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("첫 버전")],
+                "duration_seconds": 10,
+                "version": "test",
+                "lineage_id": "lineage-delete-middle",
+            }
+        )
+        second_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("둘째 버전")],
+                "duration_seconds": 11,
+                "version": "test",
+                "lineage_id": "lineage-delete-middle",
+                "parent_session_id": first_id,
+            }
+        )
+        third_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("셋째 버전")],
+                "duration_seconds": 12,
+                "version": "test",
+                "lineage_id": "lineage-delete-middle",
+                "parent_session_id": second_id,
+            }
+        )
+
+        assert db.delete_session(second_id) is True
+
+        first_loaded = db.load_session(first_id)
+        third_loaded = db.load_session(third_id)
+        listed = db.list_sessions(limit=10, offset=0)
+
+        assert first_loaded is not None
+        assert third_loaded is not None
+        assert first_loaded["is_latest_in_lineage"] == 0
+        assert third_loaded["is_latest_in_lineage"] == 1
+
+        latest_row = next(row for row in listed if row["id"] == third_id)
+        previous_row = next(row for row in listed if row["id"] == first_id)
+        assert latest_row["lineage_total"] == 2
+        assert latest_row["newer_versions"] == 0
+        assert latest_row["is_latest_in_lineage"] == 1
+        assert previous_row["lineage_total"] == 2
+        assert previous_row["newer_versions"] == 1
+        assert previous_row["is_latest_in_lineage"] == 0
+    finally:
+        db.close_all()
+
+
 def test_database_search_defaults_to_literal_substring_matching(tmp_path):
     db_path = tmp_path / "subtitle_history.db"
     db = DatabaseManager(str(db_path))

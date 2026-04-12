@@ -1267,6 +1267,55 @@ class MainWindowUIMixin(MainWindowHost):
             return text_url
 
 
+    def _is_allowed_preset_host(self, host: str) -> bool:
+            normalized_host = str(host or "").strip().lower()
+            return normalized_host == "assembly.webcast.go.kr" or normalized_host.endswith(
+                ".assembly.webcast.go.kr"
+            )
+
+
+    def _validate_preset_url(self, url: object) -> tuple[str | None, str | None]:
+            from urllib.parse import urlsplit
+
+            normalized_url = str(url or "").strip()
+            if not normalized_url:
+                return None, "프리셋 URL을 입력하세요."
+
+            try:
+                parsed = urlsplit(normalized_url)
+            except Exception:
+                return None, "올바른 프리셋 URL을 입력하세요."
+
+            scheme = str(parsed.scheme or "").lower()
+            if scheme not in ("http", "https"):
+                return None, "프리셋 URL은 http:// 또는 https://만 허용됩니다."
+
+            host = str(parsed.hostname or "").strip().lower()
+            if not self._is_allowed_preset_host(host):
+                return (
+                    None,
+                    "프리셋 URL은 assembly.webcast.go.kr 계열만 허용됩니다.",
+                )
+
+            return normalized_url, None
+
+
+    def _coerce_preset_entry(
+        self,
+        name: object,
+        url: object,
+    ) -> tuple[tuple[str, str] | None, str | None]:
+            normalized_name = str(name or "").strip()
+            if not normalized_name:
+                return None, "프리셋 이름이 비어 있습니다."
+
+            normalized_url, error = self._validate_preset_url(url)
+            if normalized_url is None:
+                return None, error
+
+            return (normalized_name, normalized_url), None
+
+
     def _edit_url_tag(self):
             """현재 URL의 태그 편집"""
             if self._is_runtime_mutation_blocked("URL 태그 편집"):
@@ -1399,7 +1448,15 @@ class MainWindowUIMixin(MainWindowHost):
             )
 
             if ok and url.strip():
-                self.custom_presets[name] = url.strip()
+                normalized_url, error = self._validate_preset_url(url)
+                if normalized_url is None:
+                    QMessageBox.warning(
+                        self,
+                        "프리셋 URL 오류",
+                        error or "올바른 프리셋 URL을 입력하세요.",
+                    )
+                    return
+                self.custom_presets[name] = normalized_url
                 self._save_committee_presets()
                 self._build_preset_menu()
                 self._show_toast(f"프리셋 '{name}' 추가됨", "success")
@@ -1468,12 +1525,26 @@ class MainWindowUIMixin(MainWindowHost):
                 if not ok:
                     return
 
+                normalized_name = new_name.strip()
+                if not normalized_name:
+                    QMessageBox.warning(self, "프리셋 이름 오류", "프리셋 이름을 입력하세요.")
+                    return
+
+                normalized_url, error = self._validate_preset_url(new_url)
+                if normalized_url is None:
+                    QMessageBox.warning(
+                        self,
+                        "프리셋 URL 오류",
+                        error or "올바른 프리셋 URL을 입력하세요.",
+                    )
+                    return
+
                 # 기존 프리셋 삭제 후 새로 추가 (이름이 변경되었을 수 있으므로)
                 del self.custom_presets[name]
-                self.custom_presets[new_name.strip()] = new_url.strip()
+                self.custom_presets[normalized_name] = normalized_url
                 self._save_committee_presets()
                 self._build_preset_menu()
-                self._show_toast(f"프리셋 '{new_name}' 수정됨", "success")
+                self._show_toast(f"프리셋 '{normalized_name}' 수정됨", "success")
 
 
     def _export_presets(self):
@@ -1516,31 +1587,54 @@ class MainWindowUIMixin(MainWindowHost):
                     with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
 
+                    if not isinstance(data, dict):
+                        QMessageBox.warning(self, "오류", "프리셋 JSON 루트는 객체여야 합니다.")
+                        return
+
                     imported_count = 0
+                    skipped_count = 0
 
                     if "committee" in data and isinstance(data["committee"], dict):
                         for name, url in data["committee"].items():
-                            if self.committee_presets.get(name) != url:
-                                self.committee_presets[name] = url
+                            preset_entry, _error = self._coerce_preset_entry(name, url)
+                            if preset_entry is None:
+                                skipped_count += 1
+                                continue
+                            normalized_name, normalized_url = preset_entry
+                            if self.committee_presets.get(normalized_name) != normalized_url:
+                                self.committee_presets[normalized_name] = normalized_url
                                 imported_count += 1
 
                     # 사용자 정의 프리셋 가져오기 (기존 것에 추가)
                     if "custom" in data and isinstance(data["custom"], dict):
                         for name, url in data["custom"].items():
-                            if self.custom_presets.get(name) != url:
-                                self.custom_presets[name] = url
+                            preset_entry, _error = self._coerce_preset_entry(name, url)
+                            if preset_entry is None:
+                                skipped_count += 1
+                                continue
+                            normalized_name, normalized_url = preset_entry
+                            if self.custom_presets.get(normalized_name) != normalized_url:
+                                self.custom_presets[normalized_name] = normalized_url
                                 imported_count += 1
 
                     if imported_count > 0:
                         self._save_committee_presets()
                         self._build_preset_menu()
+                        message = f"프리셋 {imported_count}개 가져오기 완료!"
+                        if skipped_count > 0:
+                            message += f" (제외 {skipped_count}개)"
+                        self._show_toast(message, "success")
+                    elif skipped_count > 0:
                         self._show_toast(
-                            f"프리셋 {imported_count}개 가져오기 완료!", "success"
+                            f"유효한 프리셋이 없습니다. (제외 {skipped_count}개)",
+                            "warning",
                         )
                     else:
                         self._show_toast("가져올 새 프리셋이 없습니다", "info")
 
-                    logger.info(f"프리셋 가져오기 완료: {path}, {imported_count}개")
+                    logger.info(
+                        f"프리셋 가져오기 완료: {path}, {imported_count}개, 제외 {skipped_count}개"
+                    )
                 except json.JSONDecodeError:
                     QMessageBox.warning(self, "오류", "잘못된 JSON 파일 형식입니다.")
                 except Exception as e:

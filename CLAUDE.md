@@ -234,6 +234,7 @@ korea-assembly-cc/
 - **segment locator/cache**: runtime archive는 bisect 가능한 segment locator, render window cache, small segment LRU cache를 사용해 장시간 세션의 archived 접근 비용을 줄인다.
 - **debounced full-session search**: inline search는 debounce + revision stale-drop으로 최신 query만 반영하고, segment-local normalized text cache를 재사용한다.
 - **streaming save/export**: 세션 저장과 TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 export는 archived segment + active tail iterator를 직접 사용해 full hydrate를 피한다.
+- **export path cleanup**: `persistence_exports.py`의 TXT/SRT/VTT/통계 export는 현재 스트리밍 구현만 runtime 경로로 유지하고, 함수 내부 dead legacy branch는 제거해 단일 동작 경로로 맞춘다.
 - **LiveBroadcastDialog 네트워크 경로**: daemon fetch thread를 제거하고 `QNetworkAccessManager` + single active reply 구조로 전환했으며, frozen build에서는 `PyQt6.QtNetwork`를 포함하도록 `subtitle_extractor.spec`를 갱신했다.
 - **회귀 기준선**: `pytest -q` 146 pass, `pyright` 0 errors.
 
@@ -258,8 +259,9 @@ korea-assembly-cc/
 - **dirty-save deferred action**: `종료`, `세션 불러오기`, `DB 세션 로드`, `세션 병합`은 `저장 후 원래 액션 재개` 흐름을 공유하고, DB sync save는 timeout 실패를 명시적으로 처리한다.
 - **background hydrate**: archived session 편집/삭제/복사/리플로우/병합은 UI 스레드 동기 clone 대신 modal progress/cancel 기반 hydrate worker를 사용한다.
 - **live list hardening**: `LiveBroadcastDialog`와 `capture_live`는 `10초` timeout, invalid JSON/schema 구분, malformed row drop, stale reply 무시를 공통 적용한다.
-- **DB lineage**: `sessions`는 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 저장하고, 히스토리 다이얼로그에서 `[최신]`, `[이전 저장본 n/N]` 배지로 계보를 노출한다.
-- **회귀 기준선**: `pytest -q` 170 pass, `pyright --outputjson` 0 errors / 0 warnings.
+- **live list auto-refresh**: `LiveBroadcastDialog`는 열려 있는 동안 `Config.LIVE_BROADCAST_REFRESH_INTERVAL` 기준 반복 갱신을 유지하고, 종료 시 auto-refresh timer와 active reply를 함께 정리한다.
+- **DB lineage**: `sessions`는 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 저장하고, 히스토리 다이얼로그에서 `[최신]`, `[이전 저장본 n/N]` 배지로 계보를 노출하며 latest 저장본 삭제 후 남은 계보의 latest를 자동 복구한다.
+- **회귀 기준선**: `pytest -q` 179 pass, `pyright --outputjson` 0 errors / 0 warnings.
 
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
@@ -278,7 +280,7 @@ korea-assembly-cc/
 - **세션 로드 payload 통합**: 파일 세션 로드와 DB 세션 로드가 `version`, `url`, `committee_name`, `created_at`, `subtitles`, `skipped`, optional `highlight_sequence`/`highlight_query`를 공유하고 `_complete_loaded_session()`으로 완료 처리
 - **DB 검색 결과 액션 강화**: 검색 결과 다이얼로그에서 세션 자체를 로드하거나, 로드 후 `sequence` 기준 해당 자막 위치로 즉시 이동 가능
 - **DB 검색 기본 정책**: 기본 검색은 FTS raw 문법이 아니라 literal substring 검색으로 고정하고, 특수문자도 문자 그대로 해석
-- **프리셋/저장 정합성**: 프리셋 export/import가 `committee` + `custom` round-trip을 지원하고, 통계/프리셋 export는 각각 `atomic_write_text`/`atomic_write_json`으로 통일
+- **프리셋/저장 정합성**: 프리셋 export/import가 `committee` + `custom` round-trip을 지원하고, add/edit/import는 `http/https` + `assembly.webcast.go.kr` 계열만 허용하며 invalid import 항목은 제외 개수를 요약한다.
 - **병합 dedupe 모드 노출**: `보수적(같은 초)`과 `기존(30초 버킷)`을 UI에서 선택 가능하게 정리
 - **저장소 hygiene 점검**: `.gitignore`를 재검토해 루트에 실수로 저장된 `세션_*.json` export가 추적되지 않도록 보강
 - **검증 상태**: `pytest -q` 85 pass, `pyright` 0 errors
@@ -355,7 +357,7 @@ korea-assembly-cc/
 - **스마트 `xcgcd` 감지**: `xcode`만 입력해도 `live_list.asp` API 및 페이지 분석을 통해 생중계 주소 자동 확보
 - **연결 지점 명확화**: 감지는 `xcgcd`가 없는 URL에서만 시작/재연결 루프에 연결되며, 기존 `xcgcd`가 있으면 원 URL을 유지
 - **리다이렉트 대응**: 메인 페이지로 이동 시 해당 위원회의 '생중계' 버튼 자동 클릭
-- **생중계 목록 선택 UI**: '📡 생중계 목록' 버튼을 통해 현재/종료 방송을 함께 확인할 수 있고, `종료/예정` 항목은 확인 후 URL만 채움 (`LiveBroadcastDialog`)
+- **생중계 목록 선택 UI**: '📡 생중계 목록' 버튼을 통해 현재/종료 방송을 함께 확인할 수 있고, `종료/예정` 항목은 확인 후 URL만 채우며 dialog가 열려 있는 동안 목록은 자동 새로고침된다 (`LiveBroadcastDialog`)
 
 ### 6.3 자동 파일명 생성 (#28)
 - 형식: `{날짜}_{위원회명}_{시간}.확장자`

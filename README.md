@@ -76,8 +76,9 @@
 - dirty 세션 보호는 `저장 후 원래 액션 재개` 구조로 바뀌어 `종료`, `세션 불러오기`, `DB 세션 로드`, `세션 병합`에서 JSON+DB 저장이 끝난 뒤에만 후속 동작이 이어집니다.
 - 장시간 세션 hydrate는 UI 스레드 동기 clone 대신 background worker + modal progress/cancel로 전환되어 편집/삭제/복사/리플로우/병합 시 장시간 정지가 줄었습니다.
 - `LiveBroadcastDialog`와 `live_list` 보완 경로는 `10초` timeout, invalid JSON/schema 구분, row 단위 drop, stale reply 무시를 공통으로 적용합니다.
-- DB `sessions` 테이블은 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 유지하고, 히스토리 다이얼로그에서 `[최신]`, `[이전 저장본 n/N]` 배지로 같은 세션 계보를 바로 확인할 수 있습니다.
-- 최신 기준선: `pytest -q` `170 passed`, `pyright` `0 errors`.
+- `LiveBroadcastDialog`는 열려 있는 동안 `30초`마다 목록을 자동 갱신하고, 종료 시 auto-refresh timer와 in-flight reply를 함께 정리합니다.
+- DB `sessions` 테이블은 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 유지하고, 최신 저장본 삭제 뒤에도 남은 세션 계보의 latest가 자동 재정렬되도록 보장합니다.
+- 최신 기준선: `pytest -q` `179 passed`, `pyright` `0 errors`.
 
 ### 🧱 코드 분할 리팩토링 정합화 (2026-04-05)
 - `ui/main_window_database.py`는 facade만 남기고 `database_worker.py` / `database_dialogs.py` 조합으로 분리해 DB 실행 경로와 다이얼로그 UI 경로를 분리했습니다.
@@ -120,6 +121,7 @@
 - `종료/예정` 항목은 즉시 실행하지 않고 확인 후 URL만 채웁니다.
 - 자동 감지 및 `live_list.asp` 기반 URL 보완은 `xstat == "1"`인 실제 live 항목만 사용합니다.
 - `LiveBroadcastDialog`는 persistent fetch thread를 제거하고, 요청당 1회성 백그라운드 fetch + request token으로 늦게 도착한 응답을 무시합니다.
+- `LiveBroadcastDialog`를 열어둔 동안 목록은 `30초` 간격으로 자동 새로고침됩니다.
 
 ### 🗄️ 대용량 목록 / 세션 종료 UX
 - DB 세션 히스토리는 50건, 자막 검색은 100건, 자막 편집/삭제 다이얼로그는 200개 단위로 `더 보기` 점진 로드를 사용합니다.
@@ -153,6 +155,7 @@
 - 파일 세션 로드와 DB 세션 로드가 동일 payload(`version`, `url`, `committee_name`, `created_at`, `subtitles`, `skipped`)와 동일 완료 핸들러를 사용합니다.
 - DB 자막 검색 결과는 이제 "세션 불러오기"와 "결과로 이동"을 지원하며, `sequence` 기준으로 원문 위치를 복원합니다.
 - 프리셋 export/import는 `committee`와 `custom`을 모두 round-trip하고, import 시 동일 키는 가져온 값으로 overwrite 합니다.
+- 프리셋 add/edit/import는 `http/https`이면서 `assembly.webcast.go.kr` 계열 URL만 허용하고, invalid import 항목은 건너뛴 뒤 제외 개수를 요약합니다.
 
 ### 💾 저장 / 병합 정책
 - 통계 export는 `atomic_write_text`, 프리셋 export는 `atomic_write_json`으로 통일했습니다.
@@ -367,7 +370,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션 저장
 
 ### 🏛️ 상임위원회 프리셋
 - 상임위원회/특별위원회 URL 빠른 선택
-- 사용자 정의 프리셋 추가/관리
+- 사용자 정의 프리셋 추가/관리 (`assembly.webcast.go.kr` 계열 `http/https` URL만 허용)
 - **생중계 목록 선택** - 현재 방송을 목록에서 직접 선택 (📡 생중계 목록)
 - 기본 제공 특별 코드 프리셋은 현재 검증된 `IO` 계열만 유지하며, 미확인 코드는 직접 URL/사용자 프리셋으로 입력
 
@@ -435,6 +438,7 @@ python "국회의사중계 자막.py"
 4. URL이 자동으로 입력됨
 
 - 기본 프리셋은 검증된 상임위와 `IO` 기반 특위만 포함합니다. 확인되지 않은 특수 코드는 직접 URL 또는 사용자 프리셋을 사용하세요.
+- 생중계 목록 창은 열려 있는 동안 `30초`마다 자동으로 최신 상태를 다시 불러옵니다.
 
 #### 3단계: 옵션 설정
 - ✅ **자동 스크롤**: 새 자막이 추가될 때 자동으로 아래로 스크롤 (사용자 스크롤 시 일시 중지)

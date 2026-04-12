@@ -360,9 +360,39 @@ def test_live_broadcast_dialog_mark_closing_aborts_active_reply():
 
     dialog._mark_closing()
 
+    assert dialog._auto_refresh_timer is None
     assert dialog._active_reply is None
     assert fake_reply.aborted is True
     assert fake_reply.deleted is True
+
+
+def test_live_broadcast_dialog_starts_auto_refresh_timer():
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    dialog = dialogs_mod.LiveBroadcastDialog()
+
+    assert dialog._auto_refresh_timer is not None
+    assert dialog._auto_refresh_timer.isActive() is True
+    assert dialog._auto_refresh_timer.interval() == (
+        dialogs_mod.Config.LIVE_BROADCAST_REFRESH_INTERVAL * 1000
+    )
+
+    dialog._mark_closing()
+
+
+def test_live_broadcast_dialog_auto_refresh_skips_when_request_is_in_progress():
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    dialog = dialogs_mod.LiveBroadcastDialog()
+    dialog.refresh_btn.setEnabled(False)
+    before_token = dialog._fetch_request_token
+
+    assert dialog._auto_refresh_timer is not None
+    dialog._auto_refresh_timer.timeout.emit()
+
+    assert dialog._fetch_request_token == before_token
+
+    dialog._mark_closing()
 
 
 def test_parse_live_list_payload_rejects_invalid_schema():

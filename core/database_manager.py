@@ -790,10 +790,51 @@ class DatabaseManager:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT lineage_id, is_latest_in_lineage
+                    FROM sessions
+                    WHERE id = ?
+                    """,
+                    (safe_session_id,),
+                )
+                session_row = cursor.fetchone()
+                if not session_row:
+                    return False
+
+                lineage_id = str(session_row["lineage_id"] or "").strip()
+                was_latest = bool(session_row["is_latest_in_lineage"] or 0)
                 cursor.execute("DELETE FROM sessions WHERE id = ?", (safe_session_id,))
-                conn.commit()
-                
                 deleted = cursor.rowcount > 0
+                if deleted and lineage_id and was_latest:
+                    cursor.execute(
+                        """
+                        SELECT 1
+                        FROM sessions
+                        WHERE lineage_id = ?
+                          AND is_latest_in_lineage = 1
+                        LIMIT 1
+                        """,
+                        (lineage_id,),
+                    )
+                    has_latest = cursor.fetchone() is not None
+                    if not has_latest:
+                        cursor.execute(
+                            """
+                            UPDATE sessions
+                            SET is_latest_in_lineage = 1
+                            WHERE id = (
+                                SELECT id
+                                FROM sessions
+                                WHERE lineage_id = ?
+                                ORDER BY created_at DESC, id DESC
+                                LIMIT 1
+                            )
+                            """,
+                            (lineage_id,),
+                        )
+
+                conn.commit()
                 if deleted:
                     logger.info(f"세션 삭제 완료: ID={safe_session_id}")
                 return deleted

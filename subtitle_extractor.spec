@@ -5,6 +5,7 @@
 버전과 EXE 이름은 README.md 첫 줄과 동기화됩니다.
 정적 분석 전용 `typings/`와 workspace temp(`.pytest_tmp`)는 번들에 포함하지 않습니다.
 `portable.flag`, `settings.ini`, `session_recovery.json` 같은 저장소/runtime state는 런타임 전용이며 번들에 포함하지 않습니다.
+생중계 목록 자동 갱신과 프리셋 도메인 검증은 런타임 로직 변경만 포함하며, 추가 datas/hidden import는 필요하지 않습니다.
 
 빌드 명령: pyinstaller subtitle_extractor.spec
 """

@@ -98,6 +98,7 @@ class LiveBroadcastDialog(QDialog):
         self._network_manager = QNetworkAccessManager(self)
         self._active_reply: QNetworkReply | None = None
         self._active_timeout_timer: QTimer | None = None
+        self._auto_refresh_timer: QTimer | None = None
 
         layout = QVBoxLayout(self)
 
@@ -142,7 +143,26 @@ class LiveBroadcastDialog(QDialog):
             """
         )
         self.sig_fetch_done.connect(self._on_fetch_done)
+        self._start_auto_refresh_timer()
         QTimer.singleShot(100, self.load_broadcasts)
+
+    def _start_auto_refresh_timer(self) -> None:
+        interval_ms = max(1, int(Config.LIVE_BROADCAST_REFRESH_INTERVAL)) * 1000
+        timer = self._auto_refresh_timer
+        if timer is None:
+            timer = QTimer(self)
+            timer.timeout.connect(self.load_broadcasts)
+            self._auto_refresh_timer = timer
+        timer.setInterval(interval_ms)
+        timer.start()
+
+    def _stop_auto_refresh_timer(self) -> None:
+        timer = self._auto_refresh_timer
+        self._auto_refresh_timer = None
+        if timer is None:
+            return
+        timer.stop()
+        timer.deleteLater()
 
     def _abort_active_reply(self) -> None:
         timeout_timer = self._active_timeout_timer
@@ -341,4 +361,5 @@ class LiveBroadcastDialog(QDialog):
             return
         self._is_closing = True
         self._fetch_request_token += 1
+        self._stop_auto_refresh_timer()
         self._abort_active_reply()
