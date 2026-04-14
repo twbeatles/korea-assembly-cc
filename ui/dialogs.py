@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 # pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
-import json
-import time
-
 from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QCloseEvent
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -19,68 +16,11 @@ from PyQt6.QtWidgets import (
 )
 
 from core.config import Config
-
-
-def _normalize_live_list_row(item: object) -> dict[str, str] | None:
-    if not isinstance(item, dict):
-        return None
-    xcgcd = str(item.get("xcgcd", "") or "").strip()
-    if not xcgcd:
-        return None
-    return {
-        "xstat": str(item.get("xstat", "") or "").strip(),
-        "xcgcd": xcgcd,
-        "xcode": str(item.get("xcode", "") or "").strip(),
-        "xname": str(item.get("xname", "이름 없음") or "이름 없음").strip() or "이름 없음",
-        "time": str(item.get("time", "") or "").strip(),
-    }
+from core.live_list import build_live_list_url, parse_live_list_payload
 
 
 def _parse_live_list_payload(payload: bytes) -> dict[str, object]:
-    try:
-        decoded = payload.decode("utf-8", errors="replace")
-        data = json.loads(decoded)
-    except Exception as e:
-        return {"ok": False, "error": str(e), "error_type": "invalid_json"}
-
-    if not isinstance(data, dict):
-        return {
-            "ok": False,
-            "error": "응답 루트가 객체(dict)가 아닙니다.",
-            "error_type": "invalid_schema",
-        }
-
-    rows = data.get("xlist")
-    if not isinstance(rows, list):
-        return {
-            "ok": False,
-            "error": "응답의 xlist가 목록(list)이 아닙니다.",
-            "error_type": "invalid_schema",
-        }
-
-    valid_rows: list[dict[str, str]] = []
-    dropped_rows = 0
-    for item in rows:
-        normalized = _normalize_live_list_row(item)
-        if normalized is None:
-            dropped_rows += 1
-            continue
-        valid_rows.append(normalized)
-
-    if not valid_rows and rows:
-        return {
-            "ok": False,
-            "error": f"유효한 방송 항목이 없습니다. (손상 항목 {dropped_rows}개)",
-            "error_type": "invalid_schema",
-            "dropped_rows": dropped_rows,
-        }
-
-    return {
-        "ok": True,
-        "result": valid_rows,
-        "dropped_rows": dropped_rows,
-        "error_type": "none",
-    }
+    return parse_live_list_payload(payload)
 
 
 class LiveBroadcastDialog(QDialog):
@@ -197,9 +137,7 @@ class LiveBroadcastDialog(QDialog):
         self._fetch_request_token += 1
         request_token = self._fetch_request_token
 
-        api_url = (
-            f"https://assembly.webcast.go.kr/main/service/live_list.asp?vv={int(time.time())}"
-        )
+        api_url = build_live_list_url()
         request = QNetworkRequest(QUrl(api_url))
         request.setRawHeader(b"User-Agent", b"Mozilla/5.0")
         reply = self._network_manager.get(request)

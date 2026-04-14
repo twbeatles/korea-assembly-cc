@@ -11,12 +11,14 @@ from core.config import Config
 from core.live_capture import create_empty_live_capture_ledger
 from core.models import SubtitleEntry
 from core.subtitle_pipeline import create_empty_capture_state
+import ui.main_window_capture as capture_mod
+import ui.main_window_impl.runtime_state as runtime_state_mod
+import ui.main_window_ui as ui_mod
 from ui.main_window_common import (
     SubtitleDialogItem,
     build_subtitle_dialog_items,
     filter_subtitle_dialog_items,
 )
-import ui.main_window_capture as capture_mod
 
 mw_mod = pytest.importorskip("ui.main_window")
 MainWindow = mw_mod.MainWindow
@@ -198,6 +200,22 @@ def test_resolve_live_url_from_list_uses_only_live_rows():
 
     assert "xcgcd=LIVE001" in resolved
     assert "ENDED001" not in resolved
+
+
+def test_resolve_live_url_from_list_keeps_original_url_when_live_candidates_are_ambiguous():
+    win = MainWindow.__new__(MainWindow)
+    win._fetch_live_list = lambda: {
+        "ok": True,
+        "result": [
+            {"xcode": "AB", "xcgcd": "LIVE001", "xstat": "1"},
+            {"xcode": "CD", "xcgcd": "LIVE002", "xstat": "1"},
+        ],
+    }
+    original_url = "https://assembly.webcast.go.kr/main/player.asp"
+
+    resolved = MainWindow._resolve_live_url_from_list(win, original_url, None)
+
+    assert resolved == original_url
 
 
 def test_show_live_dialog_prompts_before_applying_non_live_selection(monkeypatch):
@@ -610,3 +628,64 @@ def test_append_db_search_results_updates_loaded_state():
     assert win._db_search_dialog_state["has_more"] is False
     assert more_btn.enabled is False
     assert win._db_search_dialog_state["loading"] is False
+
+
+def test_initialize_database_state_marks_runtime_degraded_when_db_init_fails(monkeypatch):
+    class _BrokenDatabase:
+        def __init__(self, _db_path: str):
+            raise RuntimeError("db boom")
+
+    win = MainWindow.__new__(MainWindow)
+    win._sync_runtime_action_state = lambda: None
+
+    monkeypatch.setattr(runtime_state_mod, "DB_AVAILABLE", True)
+    monkeypatch.setattr(runtime_state_mod, "DatabaseManagerClass", _BrokenDatabase)
+
+    MainWindow._initialize_database_state(win)
+
+    assert win.db is None
+    assert win.db_available is False
+    assert win.fts_available is False
+    assert "db boom" in win.db_degraded_reason
+
+
+def test_load_url_history_reports_user_visible_warning(monkeypatch):
+    win = MainWindow.__new__(MainWindow)
+    reported: list[tuple[str, dict[str, Any]]] = []
+    win._report_user_visible_warning = (
+        lambda message, **kwargs: reported.append((message, kwargs))
+    )
+
+    monkeypatch.setattr(ui_mod.Path, "exists", lambda self: True)
+    monkeypatch.setattr(
+        "builtins.open",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("history boom")),
+    )
+
+    result = MainWindow._load_url_history(win)
+
+    assert result == {}
+    assert reported
+    assert "URL 히스토리 로드 실패" in reported[0][0]
+    assert reported[0][1]["toast"] is False
+
+
+def test_save_committee_presets_reports_user_visible_warning(monkeypatch):
+    win = MainWindow.__new__(MainWindow)
+    win.committee_presets = {"행정안전위원회": "https://example.com"}
+    win.custom_presets = {}
+    reported: list[tuple[str, dict[str, Any]]] = []
+    win._report_user_visible_warning = (
+        lambda message, **kwargs: reported.append((message, kwargs))
+    )
+
+    monkeypatch.setattr(
+        ui_mod.utils,
+        "atomic_write_json",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("preset boom")),
+    )
+
+    MainWindow._save_committee_presets(win)
+
+    assert reported
+    assert "프리셋 저장 실패" in reported[0][0]

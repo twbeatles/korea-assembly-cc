@@ -81,6 +81,55 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
         self._realtime_error_count = 0
         self._set_realtime_save_status("inactive")
 
+    def _get_db_degraded_message(self) -> str:
+        reason = str(self.__dict__.get("db_degraded_reason", "") or "").strip()
+        if reason:
+            return reason
+        if not bool(self.__dict__.get("db_available", False)):
+            return "데이터베이스를 사용할 수 없어 DB 히스토리/검색/통계 기능이 비활성화되었습니다."
+        if not bool(self.__dict__.get("fts_available", True)):
+            return "FTS 검색을 사용할 수 없어 literal 검색만 동작합니다."
+        return ""
+
+    def _update_db_status_indicator(self) -> None:
+        label = self.__dict__.get("db_status_label")
+        if label is None:
+            return
+
+        db_available = bool(self.__dict__.get("db_available", False))
+        fts_available = bool(self.__dict__.get("fts_available", False))
+        tooltip = self._get_db_degraded_message()
+        if not db_available:
+            label.setText("⚠️ DB 비활성")
+            label.setToolTip(tooltip)
+            label.setStyleSheet("color: #ff9800; background: transparent; border: none;")
+            label.show()
+            return
+        if not fts_available:
+            label.setText("⚠️ DB 제한 모드")
+            label.setToolTip(tooltip)
+            label.setStyleSheet("color: #d29922; background: transparent; border: none;")
+            label.show()
+            return
+        if label.isVisible():
+            label.hide()
+        label.setText("")
+        label.setToolTip("")
+
+    def _notify_initial_db_degraded_state(self) -> None:
+        if bool(self.__dict__.get("_db_degraded_notified", False)):
+            return
+        db_available = bool(self.__dict__.get("db_available", False))
+        fts_available = bool(self.__dict__.get("fts_available", False))
+        if db_available and fts_available:
+            return
+        message = self._get_db_degraded_message()
+        if not message:
+            return
+        self._db_degraded_notified = True
+        self._set_status(message, "warning")
+        self._show_toast(message, "warning", 5000)
+
     def _close_realtime_save_file(self) -> None:
         realtime_file = self.__dict__.get("realtime_file")
         if realtime_file is None:
@@ -271,6 +320,29 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
                 control.setEnabled(should_enable)
             except Exception:
                 continue
+        db_actions = [
+            self.__dict__.get("db_history_action"),
+            self.__dict__.get("db_search_action"),
+            self.__dict__.get("db_stats_action"),
+        ]
+        db_enabled = should_enable and bool(self.__dict__.get("db_available", False))
+        db_tooltip = self._get_db_degraded_message()
+        for action in db_actions:
+            if action is None:
+                continue
+            try:
+                default_tooltip = action.property("_db_default_tooltip")
+                if default_tooltip is None:
+                    action.setProperty("_db_default_tooltip", action.toolTip())
+                    default_tooltip = action.toolTip()
+                action.setEnabled(db_enabled)
+                if db_enabled:
+                    action.setToolTip(str(default_tooltip or ""))
+                elif db_tooltip:
+                    action.setToolTip(db_tooltip)
+            except Exception:
+                continue
+        self._update_db_status_indicator()
         self._update_destructive_undo_action_state()
 
     def _set_capture_source_metadata(

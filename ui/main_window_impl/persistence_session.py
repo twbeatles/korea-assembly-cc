@@ -366,7 +366,9 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             db_session_id = None
             if include_db:
                 db = self.db
-                if db is not None:
+                if db is None or not bool(self.__dict__.get("db_available", False)):
+                    db_error = self._get_db_degraded_message()
+                else:
                     try:
                         db_data = {
                             "url": current_url,

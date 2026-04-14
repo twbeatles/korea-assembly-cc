@@ -257,6 +257,11 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._background_shutdown_initiated = False
         self._detached_driver_cleanup_lock = threading.Lock()
         self._detached_driver_cleanup_in_progress = False
+        self._startup_warnings: list[str] = []
+        self.db_available = False
+        self.fts_available = False
+        self.db_degraded_reason = ""
+        self._db_degraded_notified = False
 
         self.url_history = self._load_url_history()
 
@@ -264,7 +269,6 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._create_ui()
         self._apply_theme()
         self._setup_shortcuts()
-        self._sync_runtime_action_state()
 
         self.queue_timer = QTimer(self)
         self.queue_timer.timeout.connect(self._process_message_queue)
@@ -287,14 +291,7 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         Path(Config.BACKUP_DIR).mkdir(parents=True, exist_ok=True)
         Path(Config.RUNTIME_SESSION_DIR).mkdir(parents=True, exist_ok=True)
 
-        self.db: DatabaseProtocol | None = None
-        self._db_tasks_inflight: set[str] = set()
-        if DB_AVAILABLE and DatabaseManagerClass is not None:
-            try:
-                db_factory = cast(Callable[[str], DatabaseProtocol], DatabaseManagerClass)
-                self.db = db_factory(Config.DATABASE_PATH)
-            except Exception as e:
-                logger.error(f"데이터베이스 초기화 실패: {e}")
+        self._initialize_database_state()
 
         try:
             self._cleanup_orphan_runtime_archives()
@@ -309,4 +306,35 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
             self.restoreState(state)
 
         self._setup_tray()
+        self._flush_startup_warnings()
+        self._notify_initial_db_degraded_state()
         QTimer.singleShot(0, self._prompt_session_recovery_if_available)
+
+    def _initialize_database_state(self) -> None:
+        self.db = None
+        self._db_tasks_inflight = set()
+
+        if not DB_AVAILABLE or DatabaseManagerClass is None:
+            self.db_available = False
+            self.fts_available = False
+            self.db_degraded_reason = "데이터베이스 모듈을 불러오지 못해 DB 기능이 비활성화되었습니다."
+            self._sync_runtime_action_state()
+            return
+
+        try:
+            db_factory = cast(Callable[[str], DatabaseProtocol], DatabaseManagerClass)
+            db_instance = db_factory(Config.DATABASE_PATH)
+            self.db = db_instance
+            self.db_available = True
+            self.fts_available = bool(getattr(db_instance, "fts_available", True))
+            self.db_degraded_reason = str(getattr(db_instance, "degraded_reason", "") or "")
+            if (not self.fts_available) and not self.db_degraded_reason:
+                self.db_degraded_reason = "FTS 검색을 사용할 수 없어 부분 기능만 동작합니다."
+        except Exception as exc:
+            self.db = None
+            self.db_available = False
+            self.fts_available = False
+            self.db_degraded_reason = str(exc)
+            logger.error("데이터베이스 초기화 실패: %s", exc)
+
+        self._sync_runtime_action_state()

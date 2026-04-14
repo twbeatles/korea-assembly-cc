@@ -7,6 +7,7 @@ from typing import Callable
 
 import pytest
 
+from core.live_list import select_live_broadcast_row
 from core.models import SubtitleEntry
 
 mw_mod = pytest.importorskip("ui.main_window")
@@ -423,6 +424,34 @@ def test_parse_live_list_payload_drops_malformed_rows_but_keeps_valid_rows():
             "time": "202604081030",
         }
     ]
+
+
+def test_select_live_broadcast_row_prefers_exact_xcode_match():
+    selection = select_live_broadcast_row(
+        [
+            {"xstat": "1", "xcgcd": "LIVE001", "xcode": "AB", "xname": "A", "time": ""},
+            {"xstat": "1", "xcgcd": "LIVE002", "xcode": "CD", "xname": "B", "time": ""},
+        ],
+        target_xcode="CD",
+    )
+
+    assert selection["ok"] is True
+    row = selection.get("row")
+    assert isinstance(row, dict)
+    assert row["xcgcd"] == "LIVE002"
+
+
+def test_select_live_broadcast_row_marks_multiple_live_candidates_as_ambiguous():
+    selection = select_live_broadcast_row(
+        [
+            {"xstat": "1", "xcgcd": "LIVE001", "xcode": "AB", "xname": "A", "time": ""},
+            {"xstat": "1", "xcgcd": "LIVE002", "xcode": "CD", "xname": "B", "time": ""},
+        ]
+    )
+
+    assert selection["ok"] is False
+    assert selection["reason"] == "ambiguous_live"
+    assert selection["candidate_count"] == 2
 
 
 def test_live_broadcast_dialog_shows_schema_error_when_all_rows_are_invalid():

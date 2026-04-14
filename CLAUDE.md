@@ -119,6 +119,7 @@ korea-assembly-cc/
     file_io.py
     live_capture.py
     live_capture_impl/          # ledger/model/reconcile 내부 구현
+    live_list.py                # live_list.asp 공유 fetch/parse/selection helper
     logging_utils.py
     models.py
     reflow.py
@@ -262,6 +263,15 @@ korea-assembly-cc/
 - **live list auto-refresh**: `LiveBroadcastDialog`는 열려 있는 동안 `Config.LIVE_BROADCAST_REFRESH_INTERVAL` 기준 반복 갱신을 유지하고, 종료 시 auto-refresh timer와 active reply를 함께 정리한다.
 - **DB lineage**: `sessions`는 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 저장하고, 히스토리 다이얼로그에서 `[최신]`, `[이전 저장본 n/N]` 배지로 계보를 노출하며 latest 저장본 삭제 후 남은 계보의 latest를 자동 복구한다.
 - **회귀 기준선**: `pytest -q` 179 pass, `pyright --outputjson` 0 errors / 0 warnings.
+
+### v16.14.7 기능 구현 정합성 보강 메모 (2026-04-14)
+- **storage preflight v2**: startup preflight는 디렉터리 probe만이 아니라 `subtitle_history.db`, `committee_presets.json`, `url_history.json`, `session_recovery.json`의 실제 파일 surface와 SQLite `PRAGMA journal_mode=WAL`까지 검증한다.
+- **shared live list service**: `core/live_list.py`가 `live_list.asp` URL 생성, payload 파싱, row 정규화, 오류 분류, 자동 선택 정책을 담당하고, `LiveBroadcastDialog`와 `capture_live`가 이를 함께 사용한다.
+- **안전 우선 자동 선택**: `xcode`가 없고 진행 중인 생중계 후보가 여러 개인 경우 첫 후보를 자동 선택하지 않고 원래 URL을 유지한다. 상태바/토스트는 `생중계 목록`에서 직접 선택하라고 안내한다.
+- **DB degraded mode**: `DatabaseManager`는 base schema와 FTS 초기화를 분리하고, `db_available` / `fts_available` / `db_degraded_reason`를 UI에 노출한다. FTS를 쓸 수 없으면 검색은 literal `LIKE`로 fallback하고 DB 액션은 제한 상태에 맞게 비활성화된다.
+- **사용자 경고 정합화**: URL 히스토리/프리셋 load-save 실패는 status/toast에도 노출되고, `persistence_exports.py` / `pipeline_messages.py`의 dead branch는 제거되었다.
+- **패키징/문서 동기화**: `subtitle_extractor.spec` hidden import에 `core.live_list`를 추가했고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시하도록 맞췄다.
+- **회귀 기준선**: `pytest -q` 178 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록

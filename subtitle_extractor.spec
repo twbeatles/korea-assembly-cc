@@ -4,7 +4,7 @@
 
 버전과 EXE 이름은 README.md 첫 줄과 동기화됩니다.
 정적 분석 전용 `typings/`와 workspace temp(`.pytest_tmp`)는 번들에 포함하지 않습니다.
-`portable.flag`, `settings.ini`, `session_recovery.json` 같은 저장소/runtime state는 런타임 전용이며 번들에 포함하지 않습니다.
+`portable.flag`, `settings.ini`, `session_recovery.json`, `.storage_probe` 같은 저장소/runtime state는 런타임 전용이며 번들에 포함하지 않습니다.
 생중계 목록 자동 갱신과 프리셋 도메인 검증은 런타임 로직 변경만 포함하며, 추가 datas/hidden import는 필요하지 않습니다.
 
 빌드 명령: pyinstaller subtitle_extractor.spec
@@ -69,6 +69,7 @@ HIDDEN_IMPORTS = [
     'core.live_capture_impl.ledger',
     'core.live_capture_impl.models',
     'core.live_capture_impl.reconcile',
+    'core.live_list',
     'core.logging_utils',
     'core.models',
     'core.reflow',
@@ -135,8 +136,8 @@ a = Analysis(
     binaries=[],
     # Config.VERSION이 README 첫 줄에서 버전을 읽으므로 빌드 산출물에도 함께 포함한다.
     # HWPX 기본 내보내기는 assets/hwpx/header.xml 템플릿을 사용한다.
-    # portable.flag / settings.ini / session_recovery.json / subtitle_history.db / url_history.json /
-    # committee_presets.json / logs / sessions / backups / .pytest_tmp 는 런타임 또는 workspace temp
+    # portable.flag / settings.ini / session_recovery.json / .storage_probe / subtitle_history.db /
+    # url_history.json / committee_presets.json / logs / sessions / backups / .pytest_tmp 는 런타임 또는 workspace temp
     # 산출물이라 frozen 번들에 포함하지 않는다.
     # typings/ 는 pyright/Pylance 전용 로컬 stub이므로 frozen 번들에는 포함하지 않는다.
     datas=[('README.md', '.'), ('assets/icon.ico', 'assets'), ('assets/hwpx', 'assets/hwpx')],

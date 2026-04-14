@@ -45,6 +45,9 @@ class DatabaseManager:
         self._thread_connections: dict[int, sqlite3.Connection] = {}
         self._stale_cleanup_calls = 0
         self._last_stale_cleanup_at = 0.0
+        self.db_available = False
+        self.fts_available = False
+        self.degraded_reason = ""
         self._init_db()
 
     def close_all(self) -> None:
@@ -322,7 +325,7 @@ class DatabaseManager:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                
+
                 # 세션 테이블
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS sessions (
@@ -364,33 +367,6 @@ class DatabaseManager:
                 """)
                 self._ensure_subtitle_table_columns(cursor)
                 
-                # FTS5 가상 테이블 생성 (전체 텍스트 검색용)
-                cursor.execute("""
-                    CREATE VIRTUAL TABLE IF NOT EXISTS subtitles_fts USING fts5(
-                        text,
-                        content='subtitles',
-                        content_rowid='id'
-                    )
-                """)
-                
-                # 트리거: subtitles 삽입 시 fts 자동 업데이트
-                cursor.execute("""
-                    CREATE TRIGGER IF NOT EXISTS subtitles_ai AFTER INSERT ON subtitles BEGIN
-                        INSERT INTO subtitles_fts(rowid, text) VALUES (new.id, new.text);
-                    END;
-                """)
-                cursor.execute("""
-                    CREATE TRIGGER IF NOT EXISTS subtitles_ad AFTER DELETE ON subtitles BEGIN
-                        INSERT INTO subtitles_fts(subtitles_fts, rowid, text) VALUES('delete', old.id, old.text);
-                    END;
-                """)
-                cursor.execute("""
-                    CREATE TRIGGER IF NOT EXISTS subtitles_au AFTER UPDATE ON subtitles BEGIN
-                        INSERT INTO subtitles_fts(subtitles_fts, rowid, text) VALUES('delete', old.id, old.text);
-                        INSERT INTO subtitles_fts(rowid, text) VALUES (new.id, new.text);
-                    END;
-                """)
-                
                 # 인덱스 생성
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_subtitles_session 
@@ -417,17 +393,62 @@ class DatabaseManager:
                     CREATE INDEX IF NOT EXISTS idx_sessions_lineage_latest
                     ON sessions(lineage_id, is_latest_in_lineage, created_at DESC, id DESC)
                 """)
-                
+
                 conn.commit()
+                self.db_available = True
+                self.degraded_reason = ""
+                self._init_fts_objects(conn)
                 try:
                     conn.execute("PRAGMA optimize")
                 except Exception as opt_error:
                     logger.debug(f"PRAGMA optimize 실행 오류: {opt_error}")
                 logger.info(f"데이터베이스 초기화 완료: {self.db_path}")
             except Exception as e:
+                self.db_available = False
+                self.fts_available = False
+                self.degraded_reason = str(e)
                 logger.error(f"데이터베이스 초기화 오류: {e}")
                 raise
             # 연결은 캐싱되므로 닫지 않음
+
+    def _init_fts_objects(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.cursor()
+        try:
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS subtitles_fts USING fts5(
+                    text,
+                    content='subtitles',
+                    content_rowid='id'
+                )
+            """)
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS subtitles_ai AFTER INSERT ON subtitles BEGIN
+                    INSERT INTO subtitles_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+            """)
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS subtitles_ad AFTER DELETE ON subtitles BEGIN
+                    INSERT INTO subtitles_fts(subtitles_fts, rowid, text) VALUES('delete', old.id, old.text);
+                END;
+            """)
+            cursor.execute("""
+                CREATE TRIGGER IF NOT EXISTS subtitles_au AFTER UPDATE ON subtitles BEGIN
+                    INSERT INTO subtitles_fts(subtitles_fts, rowid, text) VALUES('delete', old.id, old.text);
+                    INSERT INTO subtitles_fts(rowid, text) VALUES (new.id, new.text);
+                END;
+            """)
+            cursor.execute("INSERT INTO subtitles_fts(subtitles_fts) VALUES ('rebuild')")
+            conn.commit()
+            self.fts_available = True
+            self.degraded_reason = ""
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            self.fts_available = False
+            self.degraded_reason = f"FTS5 초기화 실패: {exc}"
+            logger.warning("%s", self.degraded_reason)
 
     def _ensure_subtitle_table_columns(self, cursor: sqlite3.Cursor) -> None:
         column_rows = cursor.execute("PRAGMA table_info(subtitles)").fetchall()
@@ -739,21 +760,24 @@ class DatabaseManager:
                 cursor = conn.cursor()
 
                 if str(syntax or "literal").strip().lower() == "fts":
-                    try:
-                        cursor.execute("""
-                            SELECT s.id as subtitle_id, s.text, s.timestamp, s.sequence,
-                                   sess.id as session_id, sess.created_at, sess.committee_name
-                            FROM subtitles s
-                            JOIN sessions sess ON s.session_id = sess.id
-                            WHERE s.id IN (
-                                SELECT rowid FROM subtitles_fts WHERE text MATCH ? ORDER BY rank
-                            )
-                            ORDER BY sess.created_at DESC, s.sequence
-                            LIMIT ? OFFSET ?
-                        """, (safe_query, safe_limit, safe_offset))
-                        return [dict(row) for row in cursor.fetchall()]
-                    except sqlite3.OperationalError as fts_error:
-                        logger.debug(f"FTS 검색 실패, literal LIKE로 fallback: {fts_error}")
+                    if not bool(self.fts_available):
+                        logger.debug("FTS 비활성 상태라 literal LIKE로 fallback")
+                    else:
+                        try:
+                            cursor.execute("""
+                                SELECT s.id as subtitle_id, s.text, s.timestamp, s.sequence,
+                                       sess.id as session_id, sess.created_at, sess.committee_name
+                                FROM subtitles s
+                                JOIN sessions sess ON s.session_id = sess.id
+                                WHERE s.id IN (
+                                    SELECT rowid FROM subtitles_fts WHERE text MATCH ? ORDER BY rank
+                                )
+                                ORDER BY sess.created_at DESC, s.sequence
+                                LIMIT ? OFFSET ?
+                            """, (safe_query, safe_limit, safe_offset))
+                            return [dict(row) for row in cursor.fetchall()]
+                        except sqlite3.OperationalError as fts_error:
+                            logger.debug(f"FTS 검색 실패, literal LIKE로 fallback: {fts_error}")
 
                 like_query = f"%{self._escape_like_query(safe_query)}%"
                 cursor.execute("""

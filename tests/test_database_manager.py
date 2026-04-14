@@ -467,3 +467,33 @@ def test_database_search_defaults_to_literal_substring_matching(tmp_path):
         ]
     finally:
         db.close_all()
+
+
+def test_database_degrades_when_fts_initialization_fails(tmp_path, monkeypatch):
+    db_path = tmp_path / "subtitle_history.db"
+
+    def fail_fts(self, _conn):
+        self.fts_available = False
+        self.degraded_reason = "FTS5 초기화 실패: simulated"
+
+    monkeypatch.setattr(DatabaseManager, "_init_fts_objects", fail_fts)
+
+    db = DatabaseManager(str(db_path))
+    try:
+        assert db.db_available is True
+        assert db.fts_available is False
+        assert "FTS5 초기화 실패" in db.degraded_reason
+
+        db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("alpha beta fallback")],
+                "duration_seconds": 3,
+                "version": "test",
+            }
+        )
+        results = db.search_subtitles("alpha beta", syntax="fts")
+        assert [row["text"] for row in results] == ["alpha beta fallback"]
+    finally:
+        db.close_all()

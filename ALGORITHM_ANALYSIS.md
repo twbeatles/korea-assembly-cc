@@ -20,6 +20,7 @@
 > **v16.14.7(2026-04-05) facade 세분화 정합성 반영**: `ui/main_window_database.py`와 `ui/main_window_persistence.py`는 공개 facade만 남기고 실제 구현을 `ui/main_window_impl/database_*`, `ui/main_window_impl/persistence_*`로 재분리했지만, 이는 책임 경계와 패키징 정합화 변경이며 이 문서가 다루는 글로벌 히스토리 + suffix 코어 의미론은 그대로입니다.
 > **v16.14.7(2026-04-06) 세션 안정성 / 도구 체인 정합성 반영**: runtime archive lifetime 고정, `archive_token` + `run_id` 기반 stale background isolation, best-effort runtime manifest salvage, blank URL/recovery pointer hygiene, `pyrightconfig.json`/`.vscode/settings.json`의 `typings/` 명시 및 `.pytest_tmp` 제외가 반영되었지만, 이는 저장·복구·정적 분석 레이어 정리이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
 > **v16.14.7(2026-04-08) 저장소 / 세션 안전성 정합성 반영**: storage root 분리(`development/repo`, `portable/EXE`, `frozen default/%LOCALAPPDATA%`), startup preflight, deferred dirty-save, background hydrate, live list timeout/schema validation, DB lineage/history badge가 추가되었지만, 이는 저장·UI·DB 안전성 보강이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
+> **v16.14.7(2026-04-14) 기능 구현 정합성 반영**: storage preflight v2(file surface + SQLite WAL), shared `core/live_list.py`, ambiguous multi-live no-auto-select, DB degraded UI/FTS->LIKE fallback, export/message dead-branch cleanup, URL history/preset warning surface가 반영되었지만, 이는 저장·UI·DB·패키징 정합성 보강이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
 > 후속 Pylance/인코딩 위생 보강(`ui/main_window_types.py`, 로컬 `typings/`, `pytest.ini --basetemp=.pytest_tmp`, 확장된 `tests/test_encoding_hygiene.py`)과 HWP 저장의 missing-dependency fallback 정렬은 이 문서가 분석하는 자막 추출 알고리즘 자체를 바꾸지 않습니다.
 
 ---

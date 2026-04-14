@@ -257,30 +257,6 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     duration = 3000
                 self._show_toast(str(message), str(toast_type), duration)
 
-            elif msg_type == "preview":
-                if isinstance(data, dict):
-                    self._apply_structured_preview_payload(data)
-                else:
-                    prepared = self._prepare_preview_raw(data)
-                    if prepared:
-                        self._process_raw_text(prepared)
-
-            elif msg_type == "subtitle_reset":
-                logger.info("subtitle_reset 감지: %s", data)
-                if self.last_subtitle:
-                    self._finalize_subtitle(self.last_subtitle)
-                    self.last_subtitle = ""
-                    self._stream_start_time = None
-                self._confirmed_compact = ""
-                self._trailing_suffix = ""
-                self._last_raw_text = ""
-                self._last_processed_raw = ""
-                self._preview_desync_count = 0
-                self._preview_ambiguous_skip_count = 0
-
-            elif msg_type == "keepalive":
-                self._handle_keepalive(str(data or ""))
-
             elif msg_type == "error":
                 self._retire_capture_run()
                 self.worker = None

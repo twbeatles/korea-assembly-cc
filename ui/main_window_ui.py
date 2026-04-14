@@ -271,22 +271,22 @@ class MainWindowUIMixin(MainWindowHost):
             db_menu = menubar.addMenu("데이터베이스")
             assert db_menu is not None
 
-            db_history_action = QAction("📋 세션 히스토리", self)
-            db_history_action.setToolTip("최근 저장 세션을 점진적으로 불러와 확인합니다")
-            db_history_action.triggered.connect(self._show_db_history)
-            db_menu.addAction(db_history_action)
+            self.db_history_action = QAction("📋 세션 히스토리", self)
+            self.db_history_action.setToolTip("최근 저장 세션을 점진적으로 불러와 확인합니다")
+            self.db_history_action.triggered.connect(self._show_db_history)
+            db_menu.addAction(self.db_history_action)
 
-            db_search_action = QAction("🔍 자막 검색", self)
-            db_search_action.setToolTip("검색 결과를 점진적으로 불러와 확인합니다")
-            db_search_action.triggered.connect(self._show_db_search)
-            db_menu.addAction(db_search_action)
+            self.db_search_action = QAction("🔍 자막 검색", self)
+            self.db_search_action.setToolTip("검색 결과를 점진적으로 불러와 확인합니다")
+            self.db_search_action.triggered.connect(self._show_db_search)
+            db_menu.addAction(self.db_search_action)
 
             db_menu.addSeparator()
 
-            db_stats_action = QAction("📊 전체 통계", self)
-            db_stats_action.setToolTip("데이터베이스 전체 통계를 확인합니다")
-            db_stats_action.triggered.connect(self._show_db_stats)
-            db_menu.addAction(db_stats_action)
+            self.db_stats_action = QAction("📊 전체 통계", self)
+            self.db_stats_action.setToolTip("데이터베이스 전체 통계를 확인합니다")
+            self.db_stats_action.triggered.connect(self._show_db_stats)
+            db_menu.addAction(self.db_stats_action)
 
             # 도움말 메뉴
             help_menu = menubar.addMenu("도움말")
@@ -885,12 +885,18 @@ class MainWindowUIMixin(MainWindowHost):
                 "background: transparent; border: none; font-weight: 600;"
             )
             self.realtime_status_label.hide()
+            self.db_status_label = QLabel("")
+            self.db_status_label.setStyleSheet(
+                "background: transparent; border: none; font-weight: 600;"
+            )
+            self.db_status_label.hide()
 
             status_layout.addWidget(self.status_label)
             status_layout.addStretch()
             status_layout.addWidget(self.connection_indicator)
             status_layout.addWidget(separator)
             status_layout.addWidget(self.realtime_status_label)
+            status_layout.addWidget(self.db_status_label)
             status_layout.addWidget(self.count_label)
 
             layout.addWidget(status_frame)
@@ -1035,6 +1041,44 @@ class MainWindowUIMixin(MainWindowHost):
             )
             self.active_toasts.append(toast)
 
+    def _report_user_visible_warning(
+            self,
+            message: str,
+            *,
+            toast: bool = True,
+            status: bool = True,
+        ) -> None:
+            warning = str(message or "").strip()
+            if not warning:
+                return
+            status_label = self.__dict__.get("status_label")
+            central = None
+            try:
+                central = self.centralWidget()
+            except Exception:
+                central = None
+            if status_label is None or central is None:
+                pending = self.__dict__.get("_startup_warnings")
+                if not isinstance(pending, list):
+                    pending = []
+                    self._startup_warnings = pending
+                if warning not in pending:
+                    pending.append(warning)
+                return
+            if status:
+                self._set_status(warning, "warning")
+            if toast:
+                self._show_toast(warning, "warning", 4000)
+
+    def _flush_startup_warnings(self) -> None:
+            pending = self.__dict__.get("_startup_warnings", [])
+            if not isinstance(pending, list) or not pending:
+                return
+            messages = [str(item).strip() for item in pending if str(item).strip()]
+            self._startup_warnings = []
+            for message in messages:
+                self._report_user_visible_warning(message)
+
 
     def _set_status_now(self, text: str, status_type: str = "info"):
             """상태 표시 (아이콘 + 색상)"""
@@ -1153,6 +1197,10 @@ class MainWindowUIMixin(MainWindowHost):
                             return {url: "" for url in data}
             except Exception as e:
                 logger.warning(f"URL 히스토리 로드 오류: {e}")
+                self._report_user_visible_warning(
+                    f"URL 히스토리 로드 실패: {e}",
+                    toast=False,
+                )
             return {}
 
 
@@ -1169,6 +1217,7 @@ class MainWindowUIMixin(MainWindowHost):
                 )
             except Exception as e:
                 logger.warning(f"URL 히스토리 저장 오류: {e}")
+                self._report_user_visible_warning(f"URL 히스토리 저장 실패: {e}")
 
 
     def _add_to_history(self, url, tag=""):
@@ -1357,6 +1406,10 @@ class MainWindowUIMixin(MainWindowHost):
                             self.custom_presets = data["custom"]
             except Exception as e:
                 logger.warning(f"프리셋 로드 오류: {e}")
+                self._report_user_visible_warning(
+                    f"프리셋 로드 실패: {e}",
+                    toast=False,
+                )
 
 
     def _save_committee_presets(self):
@@ -1371,6 +1424,7 @@ class MainWindowUIMixin(MainWindowHost):
                 )
             except Exception as e:
                 logger.warning(f"프리셋 저장 오류: {e}")
+                self._report_user_visible_warning(f"프리셋 저장 실패: {e}")
 
 
     def _build_preset_menu(self):

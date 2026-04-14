@@ -52,7 +52,7 @@ tmp_extension.crx
 *.tmp
 /portable.flag
 /settings.ini
-/.storage_probe
+.storage_probe
 
 # -----------------------------------------------------------------------------
 # Local database/state files

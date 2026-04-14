@@ -131,6 +131,9 @@ class _ResetTimerShim:
 
 
 class DatabaseProtocol(Protocol):
+    fts_available: bool
+    degraded_reason: str
+
     def save_session(self, session_data: object) -> int: ...
     def load_session(self, session_id: int) -> dict[str, Any] | None: ...
     def delete_session(self, session_id: int) -> bool: ...

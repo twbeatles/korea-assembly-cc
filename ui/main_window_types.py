@@ -192,6 +192,11 @@ if TYPE_CHECKING:
         _db_worker_current_task: str
         _last_exit_escalation_at: float
         _exit_escalation_active: bool
+        _startup_warnings: list[str]
+        db_available: bool
+        fts_available: bool
+        db_degraded_reason: str
+        _db_degraded_notified: bool
         url_combo: QComboBox
         selector_combo: QComboBox
         keyword_input: QLineEdit
@@ -201,6 +206,7 @@ if TYPE_CHECKING:
         preview_label: QLabel
         status_label: QLabel
         realtime_status_label: QLabel
+        db_status_label: QLabel
         count_label: QLabel
         connection_indicator: QLabel
         stat_time: QLabel
@@ -231,6 +237,9 @@ if TYPE_CHECKING:
         theme_action: QAction
         tray_action: QAction
         tray_status_action: QAction
+        db_history_action: QAction
+        db_search_action: QAction
+        db_stats_action: QAction
         load_session_action: QAction
         edit_subtitle_action: QAction
         delete_subtitle_action: QAction
@@ -256,6 +265,14 @@ if TYPE_CHECKING:
             toast_type: str = "info",
             duration: int = 3000,
         ) -> None: ...
+        def _report_user_visible_warning(
+            self,
+            message: str,
+            *,
+            toast: bool = True,
+            status: bool = True,
+        ) -> None: ...
+        def _flush_startup_warnings(self) -> None: ...
 
         def _ensure_ui_refresh_state(self) -> None: ...
         def _schedule_ui_refresh(
@@ -616,6 +633,10 @@ if TYPE_CHECKING:
         def _store_destructive_undo_snapshot(self) -> bool: ...
         def _update_destructive_undo_action_state(self) -> None: ...
         def _update_realtime_status_indicator(self) -> None: ...
+        def _update_db_status_indicator(self) -> None: ...
+        def _notify_initial_db_degraded_state(self) -> None: ...
+        def _get_db_degraded_message(self) -> str: ...
+        def _initialize_database_state(self) -> None: ...
 
 else:
     class MainWindowHost:

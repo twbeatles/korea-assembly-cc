@@ -68,7 +68,7 @@
 - runtime archive는 segment locator + render window cache + small segment LRU cache를 사용해 장시간 세션에서 동일 window 재렌더와 archived 검색 비용을 줄입니다.
 - inline search는 debounce + revision stale-drop을 사용하고, archived segment별 normalized text cache를 재사용해 연속 검색 입력 비용을 줄입니다.
 - 세션 저장/TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 export는 archived segment + active tail iterator를 직접 사용해 full-session hydrate 없이 스트리밍 처리합니다.
-- 최신 기준선: `pytest -q` `146 passed`, `pyright` `0 errors`.
+- 당시 기준선: `pytest -q` `146 passed`, `pyright` `0 errors`.
 
 ### 💾 저장소 / 세션 안전성 보강 (2026-04-08)
 - frozen 기본 저장소는 `%LOCALAPPDATA%\AssemblySubtitle\Extractor`로 분리했고, EXE 옆 `portable.flag`가 있으면 로그/세션/DB/설정(`settings.ini`)을 EXE 폴더 기준으로 저장합니다.
@@ -77,8 +77,17 @@
 - 장시간 세션 hydrate는 UI 스레드 동기 clone 대신 background worker + modal progress/cancel로 전환되어 편집/삭제/복사/리플로우/병합 시 장시간 정지가 줄었습니다.
 - `LiveBroadcastDialog`와 `live_list` 보완 경로는 `10초` timeout, invalid JSON/schema 구분, row 단위 drop, stale reply 무시를 공통으로 적용합니다.
 - `LiveBroadcastDialog`는 열려 있는 동안 `30초`마다 목록을 자동 갱신하고, 종료 시 auto-refresh timer와 in-flight reply를 함께 정리합니다.
-- DB `sessions` 테이블은 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 유지하고, 최신 저장본 삭제 뒤에도 남은 세션 계보의 latest가 자동 재정렬되도록 보장합니다.
-- 최신 기준선: `pytest -q` `179 passed`, `pyright` `0 errors`.
+- DB `sessions` 테이블은 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 유지하고, 히스토리 다이얼로그에서 `[최신]`, `[이전 저장본 n/N]` 배지로 같은 세션 계보를 바로 확인할 수 있으며, 최신 저장본 삭제 뒤에도 남은 세션 계보의 latest가 자동 재정렬되도록 보장합니다.
+- 당시 기준선: `pytest -q` `179 passed`, `pyright` `0 errors`.
+
+### 🧪 기능 구현 정합성 보강 (2026-04-14)
+- storage preflight는 이제 디렉터리 probe에서 끝나지 않고 `subtitle_history.db`, `committee_presets.json`, `url_history.json`, `session_recovery.json`의 실제 생성/교체 가능 여부와 SQLite `PRAGMA journal_mode=WAL`까지 확인합니다.
+- `core/live_list.py`를 추가해 `LiveBroadcastDialog`와 자동 URL 보완이 같은 `live_list.asp` URL 생성, payload 파싱, row 정규화, 오류 분류, 자동 선택 정책을 공유합니다.
+- `xcode`가 없고 진행 중인 생중계 후보가 여러 개인 경우 더 이상 첫 후보를 자동 선택하지 않고, 원래 URL을 유지한 채 상태바/토스트로 수동 선택을 유도합니다.
+- DB 초기화는 base schema와 FTS를 분리해 처리하며, `db_available`, `fts_available`, `db_degraded_reason` 상태를 UI에 노출합니다. FTS를 쓸 수 없으면 검색은 literal `LIKE`로 fallback되고, DB 기능 버튼은 제한 상태에 맞게 비활성화됩니다.
+- `ui/main_window_impl/persistence_exports.py`와 `ui/main_window_impl/pipeline_messages.py`의 dead branch를 정리했고, URL 히스토리/프리셋 load-save 실패는 더 이상 로그에만 남기지 않고 사용자 경고로도 노출합니다.
+- `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 이번 배치 기준으로 다시 맞췄습니다.
+- 현재 전체 기준선: `pytest -q` `179 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### 🧱 코드 분할 리팩토링 정합화 (2026-04-05)
 - `ui/main_window_database.py`는 facade만 남기고 `database_worker.py` / `database_dialogs.py` 조합으로 분리해 DB 실행 경로와 다이얼로그 UI 경로를 분리했습니다.
@@ -93,7 +102,7 @@
 - 빈 URL 세션 로드 시 stale `current_url`과 URL 입력 UI를 명시적으로 비우고, recovery pointer는 복구 거절/복구 성공 시 즉시 지우지 않으며 성공한 JSON 세션 저장 또는 정상 종료에서만 정리합니다.
 - `pyrightconfig.json`과 `.vscode/settings.json`은 `typings/`를 `stubPath`/`extraPaths`로 명시하고 `.pytest_tmp`를 분석 범위에서 제외하며, 로컬 stub 환경의 `reportMissingModuleSource` 경고를 끄도록 동기화했습니다.
 - `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance에서 동일하게 해석됩니다.
-- 최신 기준선: `pytest -q` `158 passed`, `pyright --outputjson` `0 errors / 0 warnings`.
+- 당시 기준선: `pytest -q` `158 passed`, `pyright --outputjson` `0 errors / 0 warnings`.
 
 ## ✨ v16.14.6 자막 유실 방지 배치 (2026-04-01)
 
@@ -651,10 +660,10 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
-- `python-docx`, `pywin32`, `core.subtitle_processor`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
+- `python-docx`, `pywin32`, `core.subtitle_processor`, 공유 `core.live_list`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
 - frozen 기본 실행은 `%LOCALAPPDATA%\\AssemblySubtitle\\Extractor`를 storage root로 사용하고, EXE 옆에 `portable.flag`를 두면 로그/세션/DB/설정(`settings.ini`)을 EXE 폴더에 저장합니다.
 - `typings/`, `.pytest_tmp`, `portable.flag`, `settings.ini`, `session_recovery.json`, `backups/runtime_sessions/` 같은 정적 분석/portable/runtime 산출물은 frozen 번들에 포함하지 않습니다.
-- 빌드 산출물은 `.gitignore`의 `build/`, `dist/` 규칙으로, portable 실행 보조 파일은 `/portable.flag`, `/settings.ini`, `/.storage_probe` 규칙으로 관리합니다.
+- 빌드 산출물은 `.gitignore`의 `build/`, `dist/` 규칙으로, portable 실행 보조 파일은 `/portable.flag`, `/settings.ini`, `.storage_probe` 규칙으로 관리합니다.
 
 ---
 
@@ -667,12 +676,14 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장하고, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 현재 구조 기준으로 재동기화
 - `archive_token` + `run_id` 기반 runtime archive identity, best-effort runtime manifest salvage, blank-URL 세션 로드 hygiene, recovery pointer 유지 정책을 추가해 장시간 세션 안정성을 보강
 - frozen 기본 저장소를 `%LOCALAPPDATA%\\AssemblySubtitle\\Extractor`로 분리하고, `portable.flag`가 있으면 EXE 폴더 기준 `settings.ini`/로그/세션/DB를 사용하는 portable 모드를 추가
-- 앱 시작 전 storage preflight를 도입해 `logs/`, `sessions/`, `backups/`, `runtime_sessions/`, DB 경로 생성/쓰기 실패를 UI 조립 전에 차단
+- 앱 시작 전 storage preflight를 도입해 `logs/`, `sessions/`, `backups/`, `runtime_sessions/`, DB 경로 생성/쓰기 실패를 UI 조립 전에 차단하고, 후속 배치에서 실제 파일 surface와 SQLite WAL probe까지 확장
 - dirty 세션 보호를 `저장 후 원래 액션 재개` 방식으로 통일하고, 장시간 세션 hydrate를 background worker + progress/cancel 구조로 전환
-- `LiveBroadcastDialog`/`live_list` 보완 경로에 `10초` timeout, invalid JSON/schema 구분, row 단위 drop, stale reply 방어를 공통 적용
+- `core.live_list.py`를 추가해 `LiveBroadcastDialog`/자동 URL 보완 경로의 `live_list.asp` URL 생성, payload 파싱, row 정규화, 오류 분류를 공통화하고, 다중 live 후보는 더 이상 자동 선택하지 않음
 - DB `sessions` 테이블에 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 추가하고, 히스토리 다이얼로그에 `[최신]`, `[이전 저장본 n/N]` 배지를 노출
+- DB 초기화를 base schema와 FTS로 분리해 degraded mode를 허용하고, `db_available`/`fts_available`/`db_degraded_reason` 상태와 persistent warning UI를 추가
+- URL 히스토리/프리셋 load-save 실패를 사용자 경고로 노출하고, export/message 계층의 dead branch를 정리
 - `pyrightconfig.json` / `.vscode/settings.json` / `typings/PyQt6/QtNetwork.pyi` / `tests/test_encoding_hygiene.py`를 갱신해 Pylance/CLI `pyright`와 UTF-8 위생 기준을 현재 코드에 맞게 고정
-- 검증 기준선: `pytest -q` 170 pass, `pyright --outputjson` 0 errors / 0 warnings
+- 검증 기준선: `pytest -q` 178 pass, `pyright --outputjson` 0 errors / 0 warnings
 
 ### v16.14.6 (2026-04-01)
 - recovery state(`session_recovery.json`) 기반 최신 복구 가능 세션 제안, 종료 직전 저장/자동 백업 메타데이터 정리

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import core.config as config_mod
 from core.config import Config, resolve_storage_resolution, run_storage_preflight
 
 
@@ -75,29 +76,47 @@ def test_storage_resolution_uses_portable_flag_when_present(tmp_path):
 
 
 def test_storage_preflight_creates_required_directories(tmp_path):
+    db_path = tmp_path / "storage" / "subtitle_history.db"
     ok, error = run_storage_preflight(
         tmp_path / "storage",
         settings_ini_path=tmp_path / "storage" / "settings.ini",
+        database_path=db_path,
     )
 
     assert ok is True
     assert error == ""
     assert (tmp_path / "storage" / "logs").exists()
     assert (tmp_path / "storage" / "sessions").exists()
+    assert db_path.exists()
 
 
 def test_storage_preflight_returns_failure_details_when_probe_write_fails(
     tmp_path, monkeypatch
 ):
-    def fail_write(self, *_args, **_kwargs):
+    def fail_probe(*_args, **_kwargs):
         raise OSError("probe denied")
 
-    monkeypatch.setattr(Path, "write_text", fail_write)
+    monkeypatch.setattr(config_mod, "_probe_writable_file_surface", fail_probe)
 
     ok, error = run_storage_preflight(tmp_path / "storage")
 
     assert ok is False
     assert "probe denied" in error
+
+
+def test_storage_preflight_returns_failure_details_when_db_probe_fails(
+    tmp_path, monkeypatch
+):
+    def fail_db_probe(*_args, **_kwargs):
+        raise OSError("wal denied")
+
+    monkeypatch.setattr(config_mod, "_probe_sqlite_database_surface", fail_db_probe)
+
+    ok, error = run_storage_preflight(tmp_path / "storage")
+
+    assert ok is False
+    assert "wal denied" in error
+    assert "subtitle_history.db" in error
 
 
 def test_merge_and_streaming_config_defaults():

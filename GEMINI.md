@@ -139,6 +139,7 @@ korea-assembly-cc/
     file_io.py
     live_capture.py
     live_capture_impl/          # ledger/model/reconcile 내부 구현
+    live_list.py                # live_list.asp 공유 fetch/parse/selection helper
     logging_utils.py
     models.py
     reflow.py
@@ -450,7 +451,7 @@ pip install -r requirements-dev.txt
 - 빈 URL 세션 로드 시 stale `current_url`을 비우고, recovery pointer는 복구 거절/복구 성공 시 즉시 지우지 않으며 성공한 JSON 저장 또는 정상 종료에서만 정리한다.
 - `pyrightconfig.json` / `.vscode/settings.json`은 `typings/`를 `stubPath`/`extraPaths`로 명시하고 `.pytest_tmp`를 분석 범위에서 제외하며, 로컬 stub 환경의 `reportMissingModuleSource` 경고를 끈다.
 - `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance에서 동일하게 해석된다.
-- 최신 기준선은 `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings 이다.
+- 당시 기준선은 `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings 이다.
 
 ## 9.9.8 v16.14.7 저장소 / 세션 안전성 보강 (2026-04-08)
 - frozen 기본 저장소는 `%LOCALAPPDATA%\AssemblySubtitle\Extractor`로 이동하고, EXE 옆 `portable.flag`가 있으면 로그/세션/DB/설정(`settings.ini`)을 EXE 폴더에 저장한다.
@@ -459,7 +460,16 @@ pip install -r requirements-dev.txt
 - archived session 편집/삭제/복사/줄넘김 정리/병합은 background hydrate worker + modal progress/cancel로 전환되어 장시간 UI 정지를 줄인다.
 - `LiveBroadcastDialog`와 `capture_live`는 `10초` timeout, invalid JSON/schema 구분, malformed row drop, stale reply 무시를 공통 적용한다.
 - DB `sessions`는 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 유지하고, 히스토리 다이얼로그는 `[최신]`, `[이전 저장본 n/N]` 배지로 계보를 표시한다.
-- 최신 기준선은 `pytest -q` 170 pass, `pyright --outputjson` 0 errors / 0 warnings 이다.
+- 당시 기준선은 `pytest -q` 170 pass, `pyright --outputjson` 0 errors / 0 warnings 이다.
+
+## 9.9.9 v16.14.7 기능 구현 정합성 보강 (2026-04-14)
+- storage preflight는 이제 디렉터리 probe뿐 아니라 `subtitle_history.db`, `committee_presets.json`, `url_history.json`, `session_recovery.json`의 실제 파일 surface와 SQLite `PRAGMA journal_mode=WAL`까지 검증한다.
+- `core/live_list.py`가 `live_list.asp` URL 생성, payload 파싱, row 정규화, 오류 분류, 자동 선택 정책을 공통화하고, `LiveBroadcastDialog`와 `capture_live`는 같은 helper를 사용한다.
+- `xcode`가 없고 진행 중인 생중계 후보가 여러 개인 경우 첫 후보를 자동 선택하지 않고 원래 URL을 유지하며, 상태바/토스트로 `생중계 목록` 수동 선택을 유도한다.
+- `DatabaseManager`는 base schema와 FTS 초기화를 분리하고, `db_available`, `fts_available`, `db_degraded_reason`를 UI에 노출한다. FTS를 사용할 수 없으면 검색은 literal `LIKE`로 fallback한다.
+- URL 히스토리/프리셋 load-save 실패는 더 이상 로그에만 남지 않고 사용자 경고로 노출되며, `persistence_exports.py` / `pipeline_messages.py` dead branch는 정리되었다.
+- `subtitle_extractor.spec` hidden import에 `core.live_list`가 추가되었고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시한다.
+- 최신 기준선은 `pytest -q` 178 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

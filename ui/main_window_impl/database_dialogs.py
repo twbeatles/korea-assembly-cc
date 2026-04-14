@@ -273,8 +273,8 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
     def _show_db_history(self):
             """세션 히스토리 다이얼로그 표시"""
             db = self.db
-            if db is None:
-                QMessageBox.warning(self, "알림", "데이터베이스가 초기화되지 않았습니다.")
+            if db is None or not bool(self.__dict__.get("db_available", False)):
+                QMessageBox.warning(self, "알림", self._get_db_degraded_message())
                 return
             self._run_db_task(
                 "db_history_list",
@@ -444,8 +444,8 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
     def _show_db_search(self):
             """자막 통합 검색 다이얼로그"""
             db = self.db
-            if db is None:
-                QMessageBox.warning(self, "알림", "데이터베이스가 초기화되지 않았습니다.")
+            if db is None or not bool(self.__dict__.get("db_available", False)):
+                QMessageBox.warning(self, "알림", self._get_db_degraded_message())
                 return
 
             query, ok = QInputDialog.getText(self, "자막 검색", "검색어:")
@@ -611,8 +611,8 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
     def _show_db_stats(self):
             """데이터베이스 전체 통계"""
             db = self.db
-            if db is None:
-                QMessageBox.warning(self, "알림", "데이터베이스가 초기화되지 않았습니다.")
+            if db is None or not bool(self.__dict__.get("db_available", False)):
+                QMessageBox.warning(self, "알림", self._get_db_degraded_message())
                 return
             self._run_db_task(
                 "db_stats",
