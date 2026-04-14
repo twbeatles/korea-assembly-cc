@@ -4,7 +4,7 @@
 - 참조 문서: `README.md`, `CLAUDE.md`
 - 점검 대상: `core/config.py`, `core/live_list.py`, `core/database_manager.py`, `ui/dialogs.py`, `ui/main_window_impl/capture_live.py`, `ui/main_window_impl/runtime_state.py`, `ui/main_window_impl/runtime_driver.py`, `ui/main_window_impl/persistence_exports.py`, `ui/main_window_impl/pipeline_messages.py`, `ui/main_window_ui.py`, `subtitle_extractor.spec`, `.gitignore`, 관련 `.md` 문서
 - 실행 검증:
-- `pytest -q` -> `178 passed`
+- `pytest -q` -> `187 passed`
 - `python -m pyright --outputjson` -> `0 errors / 0 warnings`
 - `pyinstaller --clean subtitle_extractor.spec` -> 빌드 성공
 
@@ -85,7 +85,7 @@
 
 ### 6. 자동 검증 범위를 조금 더 운영형으로 넓힐 필요가 있었음
 - 현재 기준선은 좋습니다.
-- `pytest -q` 178 pass
+- `pytest -q` 187 pass
 - `pyright` 0 errors
 - `pyinstaller` 빌드 성공
 - 이번 배치에서 아래 시나리오가 회귀 테스트에 추가되었습니다.
@@ -125,4 +125,4 @@
 ## 결론
 이번 배치에서 원래 리뷰 문서가 지적했던 항목과 연관 문서/spec/.gitignore 동기화까지 모두 반영했습니다. 코드 경로와 문서 설명, PyInstaller hidden import, 저장소 ignore 규칙이 현재 동작 기준으로 다시 맞춰졌습니다.
 
-현재 기준선은 `pytest -q` `178 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공입니다.
+현재 기준선은 `pytest -q` `187 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공입니다.

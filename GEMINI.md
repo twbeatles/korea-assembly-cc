@@ -469,7 +469,7 @@ pip install -r requirements-dev.txt
 - `DatabaseManager`는 base schema와 FTS 초기화를 분리하고, `db_available`, `fts_available`, `db_degraded_reason`를 UI에 노출한다. FTS를 사용할 수 없으면 검색은 literal `LIKE`로 fallback한다.
 - URL 히스토리/프리셋 load-save 실패는 더 이상 로그에만 남지 않고 사용자 경고로 노출되며, `persistence_exports.py` / `pipeline_messages.py` dead branch는 정리되었다.
 - `subtitle_extractor.spec` hidden import에 `core.live_list`가 추가되었고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시한다.
-- 최신 기준선은 `pytest -q` 178 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공이다.
+- 최신 기준선은 `pytest -q` 187 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

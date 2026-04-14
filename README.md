@@ -87,7 +87,7 @@
 - DB 초기화는 base schema와 FTS를 분리해 처리하며, `db_available`, `fts_available`, `db_degraded_reason` 상태를 UI에 노출합니다. FTS를 쓸 수 없으면 검색은 literal `LIKE`로 fallback되고, DB 기능 버튼은 제한 상태에 맞게 비활성화됩니다.
 - `ui/main_window_impl/persistence_exports.py`와 `ui/main_window_impl/pipeline_messages.py`의 dead branch를 정리했고, URL 히스토리/프리셋 load-save 실패는 더 이상 로그에만 남기지 않고 사용자 경고로도 노출합니다.
 - `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 이번 배치 기준으로 다시 맞췄습니다.
-- 현재 전체 기준선: `pytest -q` `179 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+- 현재 전체 기준선: `pytest -q` `187 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### 🧱 코드 분할 리팩토링 정합화 (2026-04-05)
 - `ui/main_window_database.py`는 facade만 남기고 `database_worker.py` / `database_dialogs.py` 조합으로 분리해 DB 실행 경로와 다이얼로그 UI 경로를 분리했습니다.
@@ -683,7 +683,7 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - DB 초기화를 base schema와 FTS로 분리해 degraded mode를 허용하고, `db_available`/`fts_available`/`db_degraded_reason` 상태와 persistent warning UI를 추가
 - URL 히스토리/프리셋 load-save 실패를 사용자 경고로 노출하고, export/message 계층의 dead branch를 정리
 - `pyrightconfig.json` / `.vscode/settings.json` / `typings/PyQt6/QtNetwork.pyi` / `tests/test_encoding_hygiene.py`를 갱신해 Pylance/CLI `pyright`와 UTF-8 위생 기준을 현재 코드에 맞게 고정
-- 검증 기준선: `pytest -q` 178 pass, `pyright --outputjson` 0 errors / 0 warnings
+- 검증 기준선: `pytest -q` 187 pass, `pyright --outputjson` 0 errors / 0 warnings
 
 ### v16.14.6 (2026-04-01)
 - recovery state(`session_recovery.json`) 기반 최신 복구 가능 세션 제안, 종료 직전 저장/자동 백업 메타데이터 정리

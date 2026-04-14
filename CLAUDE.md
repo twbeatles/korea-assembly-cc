@@ -271,7 +271,7 @@ korea-assembly-cc/
 - **DB degraded mode**: `DatabaseManager`는 base schema와 FTS 초기화를 분리하고, `db_available` / `fts_available` / `db_degraded_reason`를 UI에 노출한다. FTS를 쓸 수 없으면 검색은 literal `LIKE`로 fallback하고 DB 액션은 제한 상태에 맞게 비활성화된다.
 - **사용자 경고 정합화**: URL 히스토리/프리셋 load-save 실패는 status/toast에도 노출되고, `persistence_exports.py` / `pipeline_messages.py`의 dead branch는 제거되었다.
 - **패키징/문서 동기화**: `subtitle_extractor.spec` hidden import에 `core.live_list`를 추가했고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시하도록 맞췄다.
-- **회귀 기준선**: `pytest -q` 178 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+- **회귀 기준선**: `pytest -q` 187 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
