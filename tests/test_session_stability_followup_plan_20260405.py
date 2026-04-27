@@ -512,7 +512,7 @@ def test_parse_live_list_payload_drops_malformed_rows_but_keeps_valid_rows():
         (
             '{"xlist": ['
             '{"xstat":"1","xcgcd":"LIVE001","xcode":"AB","xname":"진행 중","time":"202604081030"},'
-            '{"xstat":"1","xcode":"BROKEN"}'
+            'null'
             ']}'
         ).encode("utf-8")
     )
@@ -525,7 +525,32 @@ def test_parse_live_list_payload_drops_malformed_rows_but_keeps_valid_rows():
             "xcgcd": "LIVE001",
             "xcode": "AB",
             "xname": "진행 중",
+            "xdesc": "",
             "time": "202604081030",
+        }
+    ]
+
+
+def test_parse_live_list_payload_keeps_no_live_rows_without_xcgcd():
+    parsed = dialogs_mod._parse_live_list_payload(
+        (
+            '{"xlist": ['
+            '{"xstat":"0","xcgcd":"","xcode":"10","xname":"본회의",'
+            '"xdesc":"생중계 없음","time":""}'
+            ']}'
+        ).encode("utf-8")
+    )
+
+    assert parsed["ok"] is True
+    assert parsed["dropped_rows"] == 0
+    assert parsed["result"] == [
+        {
+            "xstat": "0",
+            "xcgcd": "",
+            "xcode": "10",
+            "xname": "본회의",
+            "xdesc": "생중계 없음",
+            "time": "",
         }
     ]
 
@@ -592,6 +617,7 @@ def test_live_broadcast_dialog_reports_dropped_rows_without_hiding_tree_message(
                     "xcgcd": "LIVE001",
                     "xcode": "AB",
                     "xname": "진행 중 방송",
+                    "xdesc": "",
                     "time": "202604081030",
                 }
             ],
@@ -601,3 +627,32 @@ def test_live_broadcast_dialog_reports_dropped_rows_without_hiding_tree_message(
 
     assert dialog.tree.topLevelItemCount() == 1
     assert "손상 항목 1개" in dialog.msg_label.text()
+
+
+def test_live_broadcast_dialog_reports_no_selectable_rows_without_schema_error():
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    dialog = dialogs_mod.LiveBroadcastDialog()
+    dialog.refresh_btn.setEnabled(False)
+
+    dialog._on_fetch_done(
+        dialog._fetch_request_token,
+        {
+            "ok": True,
+            "result": [
+                {
+                    "xstat": "0",
+                    "xcgcd": "",
+                    "xcode": "10",
+                    "xname": "본회의",
+                    "xdesc": "생중계 없음",
+                    "time": "",
+                }
+            ],
+            "dropped_rows": 0,
+        },
+    )
+
+    assert dialog.tree.topLevelItemCount() == 0
+    assert "현재 선택 가능한 생중계가 없습니다." in dialog.msg_label.text()
+    assert "응답 구조 오류" not in dialog.msg_label.text()

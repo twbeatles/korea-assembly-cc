@@ -16,13 +16,17 @@ def normalize_live_list_row(item: object) -> dict[str, str] | None:
     if not isinstance(item, dict):
         return None
     xcgcd = str(item.get("xcgcd", "") or "").strip()
-    if not xcgcd:
+    xcode = str(item.get("xcode", "") or "").strip()
+    xname = str(item.get("xname", "이름 없음") or "이름 없음").strip() or "이름 없음"
+    xdesc = str(item.get("xdesc", "") or "").strip()
+    if not any((xcgcd, xcode, xname and xname != "이름 없음", xdesc)):
         return None
     return {
         "xstat": str(item.get("xstat", "") or "").strip(),
         "xcgcd": xcgcd,
-        "xcode": str(item.get("xcode", "") or "").strip(),
-        "xname": str(item.get("xname", "이름 없음") or "이름 없음").strip() or "이름 없음",
+        "xcode": xcode,
+        "xname": xname,
+        "xdesc": xdesc,
         "time": str(item.get("time", "") or "").strip(),
     }
 

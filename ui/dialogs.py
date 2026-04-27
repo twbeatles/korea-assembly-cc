@@ -238,10 +238,12 @@ class LiveBroadcastDialog(QDialog):
         sorted_list = sorted(result, key=lambda x: str(x.get("xstat", "")) != "1")
 
         added = 0
+        skipped_without_xcgcd = 0
         for item in sorted_list:
             xstat = str(item.get("xstat", "")).strip()
             xcgcd = str(item.get("xcgcd", "")).strip()
             if not xcgcd:
+                skipped_without_xcgcd += 1
                 continue
 
             status_text = "생중계" if xstat == "1" else "종료/예정"
@@ -270,7 +272,13 @@ class LiveBroadcastDialog(QDialog):
             added += 1
 
         if added == 0:
-            self.msg_label.setText("현재 선택 가능한 생중계가 없습니다.")
+            if skipped_without_xcgcd:
+                self.msg_label.setText(
+                    f"현재 선택 가능한 생중계가 없습니다. "
+                    f"(사이트 응답 {skipped_without_xcgcd}건: 생중계 없음)"
+                )
+            else:
+                self.msg_label.setText("현재 선택 가능한 생중계가 없습니다.")
             self.msg_label.show()
         else:
             self.tree.expandAll()
