@@ -459,6 +459,7 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             self._runtime_archive_run_id = None
             self._runtime_segment_flush_in_progress = False
             self._invalidate_runtime_segment_caches()
+            self._cancel_runtime_search()
             self._runtime_search_revision = int(
                 self.__dict__.get("_runtime_search_revision", 0) or 0
             ) + 1

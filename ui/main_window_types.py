@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         settings: QSettings
         font_size: int
         minimize_to_tray: bool
+        keep_browser_on_stop: bool
         message_queue: queue.Queue[Any]
         worker: threading.Thread | None
         driver: Any | None
@@ -100,6 +101,7 @@ if TYPE_CHECKING:
         _active_background_threads_lock: Any
         _background_shutdown_initiated: bool
         _is_stopping: bool
+        _preserve_driver_on_worker_stop: bool
         _capture_run_sequence: int
         _active_capture_run_id: int | None
         _worker_message_lock: Any
@@ -178,6 +180,7 @@ if TYPE_CHECKING:
         _runtime_search_query: str
         _runtime_search_requested_query: str
         _runtime_search_truncated: bool
+        _runtime_search_cancel_event: threading.Event
         _runtime_search_debounce_timer: QTimer
         _runtime_tail_revision: int
         _runtime_tail_checkpoint_revision: int
@@ -236,6 +239,7 @@ if TYPE_CHECKING:
         timestamp_action: QAction
         theme_action: QAction
         tray_action: QAction
+        keep_browser_action: QAction
         tray_status_action: QAction
         db_history_action: QAction
         db_search_action: QAction
@@ -543,6 +547,7 @@ if TYPE_CHECKING:
         def _update_search_count_label_now(
             self, current_index: int | None = None
         ) -> None: ...
+        def _cancel_runtime_search(self) -> None: ...
         def _handle_runtime_search_done(self, payload: dict[str, object]) -> None: ...
         def _handle_runtime_search_failed(
             self, payload: dict[str, object]
@@ -565,6 +570,13 @@ if TYPE_CHECKING:
         def _save_hwp(self) -> None: ...
         def _set_current_driver(self, driver: Any | None) -> Any | None: ...
         def _toggle_auto_clean_newlines_option(self) -> None: ...
+        def _save_setting_value(
+            self,
+            key: str,
+            value: object,
+            *,
+            context: str = "설정 저장",
+        ) -> bool: ...
         def _save_rtf(self) -> None: ...
         def _save_session(self) -> None: ...
         def _handle_escape_shortcut(self) -> None: ...
@@ -599,6 +611,7 @@ if TYPE_CHECKING:
             worker,
             *,
             write_task: bool = False,
+            timeout: float | None = ...,
         ) -> Any: ...
         def _start_background_thread(self, target: Any, name: str) -> bool: ...
         def _stop(self, for_app_exit: bool = False) -> None: ...
@@ -610,6 +623,7 @@ if TYPE_CHECKING:
         def _toggle_stats_panel(self) -> None: ...
         def _toggle_theme(self) -> None: ...
         def _toggle_theme_from_button(self) -> None: ...
+        def _toggle_keep_browser_on_stop(self) -> None: ...
         def _sync_runtime_action_state(self) -> None: ...
         def _update_keyword_cache(self) -> None: ...
         def _get_capture_source_url(self, fallback_to_current: bool = True) -> str: ...

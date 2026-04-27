@@ -57,6 +57,9 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self.minimize_to_tray = self.settings.value(
             "minimize_to_tray", False, type=bool
         )
+        self.keep_browser_on_stop = self.settings.value(
+            "keep_browser_on_stop", False, type=bool
+        )
         self.auto_clean_newlines_enabled = self.settings.value(
             "auto_clean_newlines",
             Config.AUTO_CLEAN_NEWLINES_DEFAULT,
@@ -94,8 +97,13 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
             legacy_keywords = self.settings.value("keywords", "", type=str)
             if legacy_keywords:
                 saved_keywords = legacy_keywords
-                self.settings.setValue("highlight_keywords", legacy_keywords)
+                self._save_setting_value(
+                    "highlight_keywords",
+                    legacy_keywords,
+                    context="하이라이트 키워드 설정 저장",
+                )
                 self.settings.remove("keywords")
+                self.settings.sync()
         self.keywords = (
             [k.strip() for k in saved_keywords.split(",") if k.strip()]
             if saved_keywords
@@ -177,6 +185,7 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._runtime_search_query = ""
         self._runtime_search_truncated = False
         self._runtime_search_requested_query = ""
+        self._runtime_search_cancel_event = threading.Event()
         self._runtime_tail_revision = 0
         self._runtime_tail_checkpoint_revision = -1
         self._db_history_request_token = 0
@@ -228,6 +237,7 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
 
         self._user_scrolled_up = False
         self._is_stopping = False
+        self._preserve_driver_on_worker_stop = False
         self._capture_run_sequence = 0
         self._active_capture_run_id: int | None = None
         self._worker_message_lock = threading.Lock()

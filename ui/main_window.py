@@ -39,9 +39,20 @@ class MainWindow(  # pyright: ignore[reportGeneralTypeIssues]
         self._sync_capture_compat_globals()
         return MainWindowCaptureMixin._activate_subtitle(self, driver)
 
-    def _detect_live_broadcast(self, driver: Any, original_url: str) -> str:
+    def _detect_live_broadcast(
+        self,
+        driver: Any,
+        original_url: str,
+        *,
+        force_refresh: bool = False,
+    ) -> str:
         self._sync_capture_compat_globals()
-        return MainWindowCaptureMixin._detect_live_broadcast(self, driver, original_url)
+        return MainWindowCaptureMixin._detect_live_broadcast(
+            self,
+            driver,
+            original_url,
+            force_refresh=force_refresh,
+        )
 
     def _read_subtitle_probe_by_selectors(
         self,

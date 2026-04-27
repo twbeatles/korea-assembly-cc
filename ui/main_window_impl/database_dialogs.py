@@ -226,6 +226,64 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                 more_btn.setEnabled(bool(state["has_more"]))
             self._update_db_history_loaded_label()
 
+    def _replace_db_history_sessions(
+            self,
+            sessions: list[dict[str, Any]],
+            page_size: int | None = None,
+        ) -> None:
+            state = self.__dict__.get("_db_history_dialog_state") or {}
+            current_sessions = state.get("sessions")
+            list_widget = state.get("list_widget")
+            if not isinstance(current_sessions, list) or list_widget is None:
+                return
+
+            new_sessions = [dict(item) for item in sessions]
+            current_sessions[:] = new_sessions
+            set_updates_enabled = getattr(list_widget, "setUpdatesEnabled", None)
+            if callable(set_updates_enabled):
+                set_updates_enabled(False)
+            try:
+                clear = getattr(list_widget, "clear", None)
+                if callable(clear):
+                    clear()
+                else:
+                    take_item = getattr(list_widget, "takeItem", None)
+                    count = getattr(list_widget, "count", None)
+                    if callable(take_item) and callable(count):
+                        while int(cast(Any, count)()) > 0:
+                            take_item(0)
+                for session_row in current_sessions:
+                    list_widget.addItem(self._format_db_history_item(session_row))
+            finally:
+                if callable(set_updates_enabled):
+                    set_updates_enabled(True)
+
+            raw_page_size = (
+                page_size
+                if page_size is not None
+                else state.get("page_size", Config.DB_HISTORY_PAGE_SIZE)
+            )
+            try:
+                resolved_page_size = int(raw_page_size or Config.DB_HISTORY_PAGE_SIZE)
+            except Exception:
+                resolved_page_size = Config.DB_HISTORY_PAGE_SIZE
+            state["page_size"] = resolved_page_size
+            state["offset"] = len(current_sessions)
+            state["has_more"] = len(current_sessions) >= resolved_page_size
+            state["loading"] = False
+            more_btn = state.get("more_btn")
+            if more_btn is not None:
+                more_btn.setEnabled(bool(state["has_more"]))
+            count = getattr(list_widget, "count", None)
+            set_current_row = getattr(list_widget, "setCurrentRow", None)
+            if (
+                callable(count)
+                and callable(set_current_row)
+                and int(cast(Any, count)()) > 0
+            ):
+                set_current_row(0)
+            self._update_db_history_loaded_label()
+
     def _format_db_search_item(self, row: dict[str, Any]) -> str:
             created = row.get("created_at", "")[:10] if row.get("created_at") else ""
             committee = row.get("committee_name") or ""
@@ -461,6 +519,7 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                     q,
                     limit=Config.DB_SEARCH_PAGE_SIZE,
                     offset=0,
+                    syntax="literal",
                 ),
                 context={
                     "query": query,
@@ -556,6 +615,7 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                         q,
                         limit=page_size,
                         offset=off,
+                        syntax="literal",
                     ),
                     context={
                         "query": query,

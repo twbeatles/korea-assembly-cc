@@ -26,6 +26,7 @@ class DatabaseManager:
     
     DEFAULT_DB_PATH = "subtitle_history.db"
     MAX_QUERY_LIMIT = 500
+    INSERT_BATCH_SIZE = 500
     STALE_CONNECTION_CLEANUP_INTERVAL = 2.0
     STALE_CONNECTION_CLEANUP_EVERY = 32
     
@@ -522,18 +523,6 @@ class DatabaseManager:
                     and not isinstance(subtitles_raw, (str, bytes, dict))
                     else ()
                 )
-                if not isinstance(subtitles, (list, tuple)):
-                    subtitles = tuple(subtitles)
-
-                total_subtitles = 0
-                total_chars = 0
-                for item in subtitles:
-                    if isinstance(item, SubtitleEntry):
-                        total_subtitles += 1
-                        total_chars += item.char_count
-                    elif isinstance(item, dict):
-                        total_subtitles += 1
-                        total_chars += len(str(item.get("text", "")))
                 duration_seconds = self._sanitize_duration(
                     session_data.get("duration_seconds", 0)
                 )
@@ -561,8 +550,8 @@ class DatabaseManager:
                 """, (
                     session_data.get("url", ""),
                     session_data.get("committee_name", ""),
-                    total_subtitles,
-                    total_chars,
+                    0,
+                    0,
                     duration_seconds,
                     session_data.get("version", ""),
                     session_data.get("notes", ""),
@@ -574,9 +563,13 @@ class DatabaseManager:
                 if session_id is None:
                     raise RuntimeError("세션 저장 후 session_id를 확인할 수 없습니다.")
                 
-                # 자막 대량 삽입 (executemany 사용)
-                # 딕셔너리 리스트를 튜플 리스트로 변환
-                if total_subtitles:
+                total_subtitles = 0
+                total_chars = 0
+                batch: list[tuple[Any, ...]] = []
+
+                def flush_batch() -> None:
+                    if not batch:
+                        return
                     cursor.executemany("""
                         INSERT INTO subtitles 
                         (
@@ -595,7 +588,25 @@ class DatabaseManager:
                             speaker_changed
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, self._iter_subtitle_rows(session_id, subtitles))
+                    """, batch)
+                    batch.clear()
+
+                for row in self._iter_subtitle_rows(session_id, subtitles):
+                    total_subtitles += 1
+                    total_chars += len(str(row[1] or ""))
+                    batch.append(row)
+                    if len(batch) >= self.INSERT_BATCH_SIZE:
+                        flush_batch()
+                flush_batch()
+
+                cursor.execute(
+                    """
+                    UPDATE sessions
+                    SET total_subtitles = ?, total_characters = ?
+                    WHERE id = ?
+                    """,
+                    (total_subtitles, total_chars, session_id),
+                )
                 
                 conn.commit()
                 logger.info(f"세션 저장 완료: ID={session_id}, 자막={total_subtitles}개")
@@ -720,7 +731,7 @@ class DatabaseManager:
                                  )
                            ) AS newer_versions
                     FROM sessions 
-                    ORDER BY created_at DESC
+                    ORDER BY created_at DESC, id DESC
                     LIMIT ? OFFSET ?
                 """, (safe_limit, safe_offset))
                 

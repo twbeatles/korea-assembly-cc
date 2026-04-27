@@ -47,6 +47,14 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             return
 
         try:
+            retained_driver = self._take_current_driver()
+            if retained_driver:
+                self._force_quit_driver_with_timeout(
+                    retained_driver,
+                    timeout=Config.DRIVER_QUIT_TIMEOUT,
+                    source="start_replacing_preserved",
+                )
+
             self._add_to_history(url)
             self.current_url = url
             committee_name = self.url_history.get(url, "") or self._autodetect_tag(url)
@@ -70,6 +78,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             search_count = self.__dict__.get("search_count")
             if search_count is not None:
                 search_count.setText("")
+            self._cancel_runtime_search()
             self._runtime_search_revision += 1
             self._runtime_search_in_progress = False
             self._runtime_search_query = ""
@@ -162,6 +171,10 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             self.stop_event.set()
             self._set_status("중지 중...", "warning")
             self._is_stopping = True
+            preserve_driver = (not for_app_exit) and bool(
+                self.__dict__.get("keep_browser_on_stop", False)
+            )
+            self._preserve_driver_on_worker_stop = preserve_driver
             self._cancel_scheduled_subtitle_reset()
 
             self._drain_pending_previews(requeue_others=True)
@@ -174,7 +187,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             self._sync_capture_state_entries(force_refresh=False)
             self._finalize_pending_subtitle()
 
-            force_driver_quit = for_app_exit or (not Config.KEEP_BROWSER_ON_STOP)
+            force_driver_quit = not preserve_driver
 
             if force_driver_quit:
                 driver = self._take_current_driver()
@@ -236,6 +249,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             self._reset_ui()
         finally:
             self._is_stopping = False
+            self._preserve_driver_on_worker_stop = False
 
     def _force_quit_driver_with_timeout(
         self, driver, timeout: float = 2.0, source: str = "shutdown"
@@ -738,8 +752,16 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
         self._cleanup_runtime_session_archive(remove_files=True)
         self._clear_recovery_state()
 
-        self.settings.setValue("geometry", self.saveGeometry())
-        self.settings.setValue("windowState", self.saveState())
+        self._save_setting_value(
+            "geometry",
+            self.saveGeometry(),
+            context="창 위치 설정 저장",
+        )
+        self._save_setting_value(
+            "windowState",
+            self.saveState(),
+            context="창 상태 설정 저장",
+        )
 
         self.queue_timer.stop()
         self.stats_timer.stop()

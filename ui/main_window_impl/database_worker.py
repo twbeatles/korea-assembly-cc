@@ -143,6 +143,7 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
             worker,
             *,
             write_task: bool = False,
+            timeout: float | None = Config.DB_SYNC_TASK_TIMEOUT_SECONDS,
         ) -> Any:
             self._ensure_db_worker_state()
             if not self.db:
@@ -164,10 +165,11 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
                     "holder": holder,
                 }
             )
-            completed = done_event.wait(timeout=float(Config.DB_SYNC_TASK_TIMEOUT_SECONDS))
+            wait_timeout = None if timeout is None else max(0.0, float(timeout))
+            completed = done_event.wait(timeout=wait_timeout)
             if not completed:
                 raise TimeoutError(
-                    f"DB 작업 타임아웃 ({task_name}, {Config.DB_SYNC_TASK_TIMEOUT_SECONDS:.1f}s)"
+                    f"DB 작업 타임아웃 ({task_name}, {float(timeout or 0.0):.1f}s)"
                 )
             if "error" in holder:
                 raise holder["error"]
@@ -261,6 +263,23 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
                     self._set_status(f"세션 히스토리 추가 로드 ({len(sessions)}건)", "success")
                 return
 
+            if task_name == "db_history_refresh_after_delete":
+                state = self.__dict__.get("_db_history_dialog_state") or {}
+                if request_token and request_token != int(state.get("request_token", 0)):
+                    return
+                self._set_db_history_dialog_busy(False)
+                sessions = result if isinstance(result, list) else []
+                self._replace_db_history_sessions(
+                    sessions,
+                    page_size=int(
+                        context.get("page_size", Config.DB_HISTORY_PAGE_SIZE)
+                        or Config.DB_HISTORY_PAGE_SIZE
+                    ),
+                )
+                self._show_toast("세션 삭제됨", "info")
+                self._set_status("세션 삭제 완료", "success")
+                return
+
             if task_name == "db_search":
                 query = str(context.get("query", "")).strip()
                 if request_token and request_token != int(
@@ -344,9 +363,39 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
 
                 state = self.__dict__.get("_db_history_dialog_state") or {}
                 sessions = state.get("sessions")
-                list_widget = state.get("list_widget")
                 session_id = context.get("session_id")
+                db = self.db
+                if db is not None and isinstance(sessions, list):
+                    page_size = int(
+                        state.get("page_size", Config.DB_HISTORY_PAGE_SIZE)
+                        or Config.DB_HISTORY_PAGE_SIZE
+                    )
+                    loaded_count = max(page_size, len(sessions))
+                    refresh_token = int(state.get("request_token", 0) or 0) + 1
+                    state["request_token"] = refresh_token
+                    started = self._run_db_task(
+                        "db_history_refresh_after_delete",
+                        worker=lambda lim=loaded_count: db.list_sessions(
+                            limit=lim,
+                            offset=0,
+                        ),
+                        context={
+                            "session_id": session_id,
+                            "limit": loaded_count,
+                            "page_size": page_size,
+                            "request_token": refresh_token,
+                        },
+                        loading_text="DB 세션 히스토리 갱신 중...",
+                    )
+                    if started:
+                        state["loading"] = True
+                        self._set_db_history_dialog_busy(
+                            True,
+                            "세션 목록을 갱신하는 중입니다...",
+                        )
+                        return
 
+                list_widget = state.get("list_widget")
                 remove_idx = None
                 if isinstance(sessions, list):
                     for i, item in enumerate(sessions):
@@ -384,9 +433,14 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
                 history_state = self.__dict__.get("_db_history_dialog_state") or {}
                 if request_token != int(history_state.get("request_token", 0)):
                     return
+            if task_name == "db_history_refresh_after_delete" and request_token:
+                history_state = self.__dict__.get("_db_history_dialog_state") or {}
+                if request_token != int(history_state.get("request_token", 0)):
+                    return
             if task_name in (
                 "db_history_load_selected",
                 "db_history_delete_selected",
+                "db_history_refresh_after_delete",
                 "db_history_list_more",
                 "db_search_load_selected",
                 "db_search_more",

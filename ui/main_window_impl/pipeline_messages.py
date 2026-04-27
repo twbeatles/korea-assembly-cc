@@ -268,24 +268,38 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 pipeline_mod.QMessageBox.critical(self, "오류", str(data))
 
             elif msg_type == "finished":
+                if isinstance(data, dict):
+                    success = bool(data.get("success", True))
+                    error_message = str(data.get("error", "") or "").strip()
+                    finalize_preview = bool(data.get("finalize_preview", True))
+                else:
+                    success = True
+                    error_message = ""
+                    finalize_preview = True
                 self._retire_capture_run()
                 self.worker = None
-                self._cancel_scheduled_subtitle_reset()
-                self._materialize_pending_preview()
-                finalize_session(
-                    self.capture_state,
-                    datetime.now(),
-                    self._current_capture_settings(),
-                )
-                self._sync_capture_state_entries(force_refresh=False)
-                if self.last_subtitle:
-                    self._finalize_subtitle(self.last_subtitle)
-                    self.last_subtitle = ""
-                    self._stream_start_time = None
+                if finalize_preview:
+                    self._cancel_scheduled_subtitle_reset()
+                    self._materialize_pending_preview()
+                    finalize_session(
+                        self.capture_state,
+                        datetime.now(),
+                        self._current_capture_settings(),
+                    )
+                    self._sync_capture_state_entries(force_refresh=False)
+                    if self.last_subtitle:
+                        self._finalize_subtitle(self.last_subtitle)
+                        self.last_subtitle = ""
+                        self._stream_start_time = None
                 self._clear_preview()
                 self._reset_ui()
                 self._update_tray_status("⚪ 대기 중")
                 self._update_connection_status("disconnected")
+                if not success:
+                    rendered_error = error_message or "자막 수집이 실패했습니다."
+                    self._schedule_status_update(rendered_error, "error")
+                    pipeline_mod.QMessageBox.critical(self, "오류", rendered_error)
+                    return
                 subtitle_count = self._get_global_subtitle_count()
                 total_chars = self._get_global_total_chars()
                 self._schedule_status_update(
