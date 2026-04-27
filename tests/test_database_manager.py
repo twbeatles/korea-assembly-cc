@@ -120,6 +120,50 @@ def test_database_save_session_accepts_subtitle_entry_objects(tmp_path):
         db.close_all()
 
 
+def test_database_save_session_keeps_generator_streaming(tmp_path, monkeypatch):
+    db_path = tmp_path / "subtitle_history.db"
+    db = DatabaseManager(str(db_path))
+
+    class StreamingSubtitles:
+        def __iter__(self):
+            for index in range(5):
+                yield {"text": f"streamed {index}", "timestamp": f"2026-04-27T09:00:0{index}"}
+
+    subtitles = StreamingSubtitles()
+    seen: dict[str, bool] = {}
+    original_iter_rows = DatabaseManager._iter_subtitle_rows
+
+    def spy_iter_rows(session_id, input_subtitles):
+        seen["same_object"] = input_subtitles is subtitles
+        return original_iter_rows(session_id, input_subtitles)
+
+    monkeypatch.setattr(
+        DatabaseManager,
+        "_iter_subtitle_rows",
+        staticmethod(spy_iter_rows),
+    )
+    monkeypatch.setattr(DatabaseManager, "INSERT_BATCH_SIZE", 2)
+
+    try:
+        session_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": subtitles,
+                "duration_seconds": 5,
+                "version": "test",
+            }
+        )
+        loaded = db.load_session(session_id)
+
+        assert seen["same_object"] is True
+        assert loaded is not None
+        assert loaded["total_subtitles"] == 5
+        assert loaded["total_characters"] == sum(len(f"streamed {index}") for index in range(5))
+    finally:
+        db.close_all()
+
+
 def test_database_save_load_preserves_lossless_subtitle_metadata(tmp_path):
     db_path = tmp_path / "subtitle_history.db"
     db = DatabaseManager(str(db_path))
@@ -360,6 +404,42 @@ def test_database_delete_session_promotes_previous_lineage_version_to_latest(tmp
         assert listed[0]["lineage_total"] == 1
         assert listed[0]["newer_versions"] == 0
         assert listed[0]["is_latest_in_lineage"] == 1
+    finally:
+        db.close_all()
+
+
+def test_database_list_sessions_orders_same_created_at_by_id_desc(tmp_path):
+    db_path = tmp_path / "same_created_at_history.db"
+    db = DatabaseManager(str(db_path))
+    try:
+        first_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("첫 저장")],
+                "duration_seconds": 10,
+                "version": "test",
+            }
+        )
+        second_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("둘째 저장")],
+                "duration_seconds": 11,
+                "version": "test",
+            }
+        )
+        conn = db._get_connection()
+        conn.execute(
+            "UPDATE sessions SET created_at = ? WHERE id IN (?, ?)",
+            ("2026-04-27 10:00:00", first_id, second_id),
+        )
+        conn.commit()
+
+        listed = db.list_sessions(limit=2, offset=0)
+
+        assert [row["id"] for row in listed] == [second_id, first_id]
     finally:
         db.close_all()
 

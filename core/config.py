@@ -197,6 +197,7 @@ def run_storage_preflight(
         if recovery_state_file
         else root / "session_recovery.json"
     )
+    settings_path = Path(settings_ini_path).resolve() if settings_ini_path else None
     db_path = Path(database_path).resolve() if database_path else root / "subtitle_history.db"
     try:
         for target_dir in build_storage_preflight_targets(storage_dir, settings_ini_path):
@@ -205,11 +206,14 @@ def run_storage_preflight(
             probe_path = target_dir / ".storage_probe"
             probe_path.write_text("ok", encoding="utf-8")
             probe_path.unlink(missing_ok=True)
-        for path, sample_text in (
+        file_surfaces = [
             (preset_path, '{"presets": {}, "custom": {}}\n'),
             (url_history_path, "{}\n"),
             (recovery_path, "{}\n"),
-        ):
+        ]
+        if settings_path is not None:
+            file_surfaces.append((settings_path, "[General]\n"))
+        for path, sample_text in file_surfaces:
             failing_path = str(path)
             _probe_writable_file_surface(path, sample_text=sample_text)
         failing_path = str(db_path)
@@ -444,8 +448,8 @@ class Config:
         "--no-default-browser-check",
     )
 
-    # 중지 시 브라우저 창 유지
-    KEEP_BROWSER_ON_STOP = True
+    # 중지 시 브라우저 창 유지 기본값 (QSettings keep_browser_on_stop으로 덮어씀)
+    KEEP_BROWSER_ON_STOP = False
 
     # 자막 병합 기준 (현재 운영 동작 유지: 5초/300자)
     ENTRY_MERGE_MAX_CHARS = 300

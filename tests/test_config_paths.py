@@ -90,6 +90,28 @@ def test_storage_preflight_creates_required_directories(tmp_path):
     assert db_path.exists()
 
 
+def test_storage_preflight_checks_portable_settings_file_surface(tmp_path, monkeypatch):
+    probed_paths: list[Path] = []
+
+    def record_probe(path, *, sample_text):
+        probed_paths.append(Path(path).resolve())
+        assert sample_text
+
+    monkeypatch.setattr(config_mod, "_probe_writable_file_surface", record_probe)
+    monkeypatch.setattr(config_mod, "_probe_sqlite_database_surface", lambda *_args: None)
+
+    settings_ini = tmp_path / "storage" / "settings.ini"
+    ok, error = run_storage_preflight(
+        tmp_path / "storage",
+        settings_ini_path=settings_ini,
+        database_path=tmp_path / "storage" / "subtitle_history.db",
+    )
+
+    assert ok is True
+    assert error == ""
+    assert settings_ini.resolve() in probed_paths
+
+
 def test_storage_preflight_returns_failure_details_when_probe_write_fails(
     tmp_path, monkeypatch
 ):

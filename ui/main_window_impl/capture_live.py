@@ -258,14 +258,20 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                 candidates.append(normalized)
         return candidates
 
-    def _detect_live_broadcast(self, driver, original_url: str) -> str:
+    def _detect_live_broadcast(
+        self,
+        driver,
+        original_url: str,
+        *,
+        force_refresh: bool = False,
+    ) -> str:
         """현재 진행 중인 생중계의 xcgcd를 자동 감지"""
         capture_mod = _capture_public()
         try:
             existing_xcgcd = self._get_query_param(original_url, "xcgcd").strip()
             existing_xcode = self._get_query_param(original_url, "xcode").strip()
 
-            if existing_xcgcd and existing_xcode:
+            if existing_xcgcd and existing_xcode and not force_refresh:
                 logger.info(f"URL에 이미 xcode/xcgcd 포함됨: {original_url}")
                 return original_url
 

@@ -399,6 +399,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                                 }
                             ),
                             write_task=True,
+                            timeout=None,
                         )
                         db_saved = True
                     except Exception as db_exc:

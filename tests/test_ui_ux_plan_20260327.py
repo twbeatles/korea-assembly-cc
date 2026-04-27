@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -86,6 +87,14 @@ class _FakeListWidget:
 
     def addItem(self, text: str) -> None:
         self.items.append(text)
+
+    def clear(self) -> None:
+        self.items.clear()
+
+    def takeItem(self, row: int) -> str | None:
+        if 0 <= row < len(self.items):
+            return self.items.pop(row)
+        return None
 
     def setEnabled(self, enabled: bool) -> None:
         self.enabled = enabled
@@ -335,6 +344,40 @@ def test_session_save_done_clears_dirty_and_reports_db_warning():
     assert toasts == [("세션 저장 완료 (DB 저장은 실패)", "warning", 3500)]
 
 
+def test_worker_failure_finished_payload_keeps_error_status(monkeypatch):
+    import ui.main_window_pipeline as pipeline_mod
+
+    win = MainWindow.__new__(MainWindow)
+    win._is_stopping = False
+    win.worker = object()
+    win.progress = SimpleNamespace(hide=lambda: None)
+    statuses: list[tuple[str, str]] = []
+    criticals: list[tuple[str, str]] = []
+    win._retire_capture_run = lambda: None
+    win._reset_ui = lambda: None
+    win._update_tray_status = lambda *_args: None
+    win._update_connection_status = lambda *_args: None
+    win._clear_preview = lambda: None
+    win._schedule_status_update = lambda message, level: statuses.append((message, level))
+    monkeypatch.setattr(
+        pipeline_mod,
+        "QMessageBox",
+        SimpleNamespace(
+            critical=lambda _parent, title, message: criticals.append((title, message))
+        ),
+    )
+
+    MainWindow._handle_message(
+        win,
+        "finished",
+        {"success": False, "error": "driver failed", "finalize_preview": False},
+    )
+
+    assert win.worker is None
+    assert statuses == [("driver failed", "error")]
+    assert criticals == [("오류", "driver failed")]
+
+
 def test_complete_loaded_session_clears_stale_current_url_when_payload_url_blank():
     win, history = _build_session_window()
     win.current_url = "https://assembly.example/old"
@@ -560,6 +603,157 @@ def test_append_db_history_sessions_updates_loaded_state():
     assert win._db_history_dialog_state["loading"] is False
 
 
+def test_replace_db_history_sessions_refreshes_lineage_badges():
+    win = MainWindow.__new__(MainWindow)
+    loaded_label = _FakeLabel()
+    more_btn = _FakeButton()
+    list_widget = _FakeListWidget()
+    sessions: list[dict[str, Any]] = [
+        {
+            "id": 1,
+            "created_at": "2026-03-27T09:00:00",
+            "committee_name": "운영위",
+            "total_subtitles": 8,
+            "total_characters": 100,
+            "is_latest_in_lineage": 0,
+            "lineage_total": 2,
+            "newer_versions": 1,
+        },
+        {
+            "id": 2,
+            "created_at": "2026-03-28T09:00:00",
+            "committee_name": "운영위",
+            "total_subtitles": 10,
+            "total_characters": 123,
+            "is_latest_in_lineage": 1,
+            "lineage_total": 2,
+            "newer_versions": 0,
+        },
+    ]
+    list_widget.items = ["old first", "old second"]
+    win._db_history_dialog_state = {
+        "sessions": sessions,
+        "list_widget": list_widget,
+        "loaded_label": loaded_label,
+        "more_btn": more_btn,
+        "page_size": Config.DB_HISTORY_PAGE_SIZE,
+        "offset": 2,
+        "has_more": True,
+        "loading": True,
+    }
+
+    MainWindow._replace_db_history_sessions(
+        win,
+        [
+            {
+                "id": 1,
+                "created_at": "2026-03-27T09:00:00",
+                "committee_name": "운영위",
+                "total_subtitles": 8,
+                "total_characters": 100,
+                "is_latest_in_lineage": 1,
+                "lineage_total": 1,
+                "newer_versions": 0,
+            }
+        ],
+    )
+
+    assert [row["id"] for row in sessions] == [1]
+    assert list_widget.items[0].startswith("[최신]")
+    assert loaded_label.text() == "현재 1개 로드됨"
+    assert more_btn.enabled is False
+
+
+def test_db_history_delete_success_starts_refresh_and_replaces_dialog():
+    win = MainWindow.__new__(MainWindow)
+    loaded_label = _FakeLabel()
+    more_btn = _FakeButton()
+    list_widget = _FakeListWidget()
+    sessions: list[dict[str, Any]] = [
+        {
+            "id": 1,
+            "created_at": "2026-03-27T09:00:00",
+            "committee_name": "운영위",
+            "total_subtitles": 8,
+            "total_characters": 100,
+            "is_latest_in_lineage": 0,
+            "lineage_total": 2,
+            "newer_versions": 1,
+        },
+        {
+            "id": 2,
+            "created_at": "2026-03-28T09:00:00",
+            "committee_name": "운영위",
+            "total_subtitles": 10,
+            "total_characters": 123,
+            "is_latest_in_lineage": 1,
+            "lineage_total": 2,
+            "newer_versions": 0,
+        },
+    ]
+    win._db_history_dialog_state = {
+        "sessions": sessions,
+        "list_widget": list_widget,
+        "loaded_label": loaded_label,
+        "more_btn": more_btn,
+        "page_size": Config.DB_HISTORY_PAGE_SIZE,
+        "offset": 2,
+        "has_more": True,
+        "loading": False,
+        "request_token": 3,
+    }
+    win.is_running = False
+    win.db = object()
+    busy_calls: list[tuple[bool, str]] = []
+    tasks: list[tuple[str, dict[str, Any]]] = []
+    toasts: list[tuple[Any, ...]] = []
+    statuses: list[tuple[str, str]] = []
+    win._set_db_history_dialog_busy = lambda busy, message="": busy_calls.append((busy, message))
+    win._show_toast = lambda *args, **_kwargs: toasts.append(args)
+    win._set_status = lambda message, level: statuses.append((message, level))
+
+    def run_db_task(task_name, worker, context=None, loading_text=""):
+        tasks.append((task_name, dict(context or {})))
+        return True
+
+    win._run_db_task = run_db_task
+
+    MainWindow._handle_db_task_result(
+        win,
+        "db_history_delete_selected",
+        True,
+        {"session_id": 2},
+    )
+
+    assert tasks[0][0] == "db_history_refresh_after_delete"
+    assert busy_calls[-1] == (True, "세션 목록을 갱신하는 중입니다...")
+
+    MainWindow._handle_db_task_result(
+        win,
+        "db_history_refresh_after_delete",
+        [
+            {
+                "id": 1,
+                "created_at": "2026-03-27T09:00:00",
+                "committee_name": "운영위",
+                "total_subtitles": 8,
+                "total_characters": 100,
+                "is_latest_in_lineage": 1,
+                "lineage_total": 1,
+                "newer_versions": 0,
+            }
+        ],
+        {
+            "request_token": win._db_history_dialog_state["request_token"],
+            "page_size": Config.DB_HISTORY_PAGE_SIZE,
+        },
+    )
+
+    assert [row["id"] for row in sessions] == [1]
+    assert toasts == [("세션 삭제됨", "info")]
+    assert statuses[-1] == ("세션 삭제 완료", "success")
+
+
 def test_format_db_history_item_includes_lineage_badges():
     win = MainWindow.__new__(MainWindow)
 
@@ -628,6 +822,71 @@ def test_append_db_search_results_updates_loaded_state():
     assert win._db_search_dialog_state["has_more"] is False
     assert more_btn.enabled is False
     assert win._db_search_dialog_state["loading"] is False
+
+
+def test_db_search_ui_requests_literal_syntax(monkeypatch):
+    import ui.main_window_impl.database_dialogs as database_dialogs_mod
+
+    class _FakeDb:
+        def __init__(self) -> None:
+            self.syntax_values: list[str] = []
+
+        def search_subtitles(self, _query, *, limit, offset, syntax):
+            self.syntax_values.append(syntax)
+            return []
+
+    fake_db = _FakeDb()
+    win = MainWindow.__new__(MainWindow)
+    win.db = fake_db
+    win.db_available = True
+    win._db_search_request_token = 0
+    run_calls: list[str] = []
+    win._get_db_degraded_message = lambda: ""
+    win._run_db_task = (
+        lambda task_name, worker, context=None, loading_text="": run_calls.append(task_name)
+        or worker()
+        or True
+    )
+    monkeypatch.setattr(
+        database_dialogs_mod.QInputDialog,
+        "getText",
+        lambda *_args, **_kwargs: ("alpha beta", True),
+    )
+
+    MainWindow._show_db_search(win)
+
+    assert run_calls == ["db_search"]
+    assert fake_db.syntax_values == ["literal"]
+
+
+def test_save_setting_value_reports_qsettings_sync_failure():
+    class _FailingSettings:
+        def __init__(self) -> None:
+            self.values: dict[str, object] = {}
+
+        def setValue(self, key, value) -> None:
+            self.values[key] = value
+
+        def sync(self) -> None:
+            return None
+
+        def status(self):
+            return "AccessError"
+
+    win = MainWindow.__new__(MainWindow)
+    win.settings = _FailingSettings()
+    warnings: list[str] = []
+    win._report_user_visible_warning = lambda message, **_kwargs: warnings.append(message)
+
+    saved = MainWindow._save_setting_value(
+        win,
+        "dark_theme",
+        False,
+        context="테마 설정 저장",
+    )
+
+    assert saved is False
+    assert warnings and warnings[0].startswith("테마 설정 저장 실패")
 
 
 def test_initialize_database_state_marks_runtime_degraded_when_db_init_fails(monkeypatch):

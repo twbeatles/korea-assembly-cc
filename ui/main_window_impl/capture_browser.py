@@ -225,17 +225,32 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                 driver, selector_candidates
             )
 
+            base_has_xcgcd = bool(self._get_query_param(base_url, "xcgcd").strip())
+            connected_has_xcgcd = bool(
+                self._get_query_param(connected_url, "xcgcd").strip()
+            )
+            should_force_live_refresh = (
+                not active_selector
+                and reconnecting
+                and (bool(cached_live_url) or base_has_xcgcd or connected_has_xcgcd)
+            )
             should_retry_live_detect = (
                 not active_selector
-                and bool(cached_live_url)
-                and cached_live_url != base_url
-                and not self._get_query_param(base_url, "xcgcd").strip()
+                and (
+                    (
+                        bool(cached_live_url)
+                        and cached_live_url != base_url
+                        and not base_has_xcgcd
+                    )
+                    or should_force_live_refresh
+                )
             )
             if should_retry_live_detect:
                 refreshed_url = self._resolve_live_url_for_driver(
                     driver,
-                    base_url,
+                    base_url if not base_has_xcgcd else connected_url,
                     reconnecting=reconnecting,
+                    force_refresh=should_force_live_refresh,
                 )
                 if refreshed_url != connected_url:
                     connected_url = refreshed_url
@@ -289,11 +304,21 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
         url: str,
         *,
         reconnecting: bool = False,
+        force_refresh: bool = False,
     ) -> str:
-        if self._get_query_param(url, "xcgcd").strip():
+        if self._get_query_param(url, "xcgcd").strip() and not force_refresh:
             return url
         try:
-            resolved_url = self._detect_live_broadcast(driver, url)
+            try:
+                resolved_url = self._detect_live_broadcast(
+                    driver,
+                    url,
+                    force_refresh=force_refresh,
+                )
+            except TypeError as type_error:
+                if "force_refresh" not in str(type_error):
+                    raise
+                resolved_url = self._detect_live_broadcast(driver, url)
             if isinstance(resolved_url, str):
                 resolved_url = resolved_url.strip()
             if resolved_url and resolved_url != url:
@@ -312,6 +337,9 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
     def _extraction_worker(self, url, selector, headless, run_id: int | None = None):
         """자막 추출 워커 스레드 (Legacy Logic Restoration)"""
         driver = None
+        terminal_success = True
+        terminal_error = ""
+        terminal_finalize_preview = True
         run_id = int(run_id) if run_id is not None else self._ensure_active_capture_run()
         set_worker_run_id = getattr(self.message_queue, "set_worker_run_id", None)
         clear_worker_run_id = getattr(self.message_queue, "clear_worker_run_id", None)
@@ -338,7 +366,9 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                     reconnecting=False,
                 )
             except Exception as e:
-                self.message_queue.put(("error", str(e)))
+                terminal_success = False
+                terminal_error = str(e)
+                terminal_finalize_preview = False
                 return
 
             observer_retry_interval = 3.0
@@ -562,19 +592,16 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                                 logger.error(f"재연결 실패: {reconnect_error}")
                                 driver = None
                         else:
-                            self.message_queue.put(
-                                (
-                                    "error",
-                                    f"최대 재연결 시도 횟수({Config.MAX_RECONNECT_ATTEMPTS}) 초과",
-                                )
+                            terminal_success = False
+                            terminal_error = (
+                                f"최대 재연결 시도 횟수({Config.MAX_RECONNECT_ATTEMPTS}) 초과"
                             )
                             break
                     elif recoverable_error:
                         logger.error("재연결 비활성 상태에서 WebDriver 오류로 수집 종료: %s", e)
                         self.message_queue.put(("connection_status", {"status": "disconnected"}))
-                        self.message_queue.put(
-                            ("error", f"Chrome 연결이 끊겨 수집을 종료합니다: {e}")
-                        )
+                        terminal_success = False
+                        terminal_error = f"Chrome 연결이 끊겨 수집을 종료합니다: {e}"
                         break
                     else:
                         logger.warning(f"모니터링 중 오류: {e}")
@@ -582,10 +609,29 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
 
         except Exception as e:
             if not self.stop_event.is_set():
-                self.message_queue.put(("error", str(e)))
+                terminal_success = False
+                terminal_error = str(e)
 
         finally:
-            self._dispose_driver(driver, source="worker_finally")
+            preserve_driver = False
+            if driver is not None and bool(
+                self.__dict__.get("_preserve_driver_on_worker_stop", False)
+            ):
+                try:
+                    preserve_driver = self._get_current_driver() is driver
+                except Exception:
+                    preserve_driver = False
+            if not preserve_driver:
+                self._dispose_driver(driver, source="worker_finally")
             if callable(clear_worker_run_id):
                 clear_worker_run_id()
-            self.message_queue.put(("finished", ""))
+            self.message_queue.put(
+                (
+                    "finished",
+                    {
+                        "success": terminal_success,
+                        "error": terminal_error,
+                        "finalize_preview": terminal_finalize_preview,
+                    },
+                )
+            )

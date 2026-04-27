@@ -237,10 +237,37 @@ def test_extraction_worker_respects_auto_reconnect_setting(monkeypatch):
 
     assert delay_calls == []
     assert any(
-        msg_type == "error" and "Chrome 연결이 끊겨 수집을 종료합니다" in str(payload)
+        msg_type == "finished"
+        and isinstance(payload, dict)
+        and payload.get("success") is False
+        and "Chrome 연결이 끊겨 수집을 종료합니다" in str(payload.get("error", ""))
         for msg_type, payload in queued
         if isinstance((msg_type, payload), tuple)
     )
+    assert not any(msg_type == "error" for msg_type, _payload in queued)
+
+
+def test_extraction_worker_preserves_driver_on_manual_stop_when_enabled(monkeypatch):
+    driver = _FakeDriver()
+    win = _build_window(auto_reconnect_enabled=False, stop_event=_StopAfterFirstWaitEvent())
+    win._preserve_driver_on_worker_stop = True
+    _configure_basic_worker_stubs(win)
+    win._get_current_driver = lambda: driver
+    dispose_calls: list[object] = []
+    win._dispose_driver = lambda drv, source="": dispose_calls.append((drv, source)) or True
+
+    monkeypatch.setattr(mw_mod.webdriver, "Chrome", lambda options=None: driver)
+    monkeypatch.setattr(mw_mod, "WebDriverWait", _FakeWebDriverWait)
+
+    MainWindow._extraction_worker(
+        win,
+        "https://example.com/live?xcode=10&xcgcd=DCM0000101234567890",
+        "#viewSubtit",
+        False,
+    )
+
+    assert dispose_calls == []
+    assert driver.quit_calls == 0
 
 
 def test_dispose_driver_uses_timeout_wrapper_and_quarantines_failed_driver():
@@ -381,6 +408,46 @@ def test_extraction_worker_reconnect_reuses_detected_url(monkeypatch):
     while not win.message_queue.empty():
         queued.append(win.message_queue.get_nowait())
     assert any(msg_type == "reconnected" for msg_type, _payload in queued)
+
+
+def test_reconnect_with_stale_xcgcd_force_refreshes_live_url():
+    stale_url = "https://example.com/live?xcode=25&xcgcd=OLD"
+    fresh_url = "https://example.com/live?xcode=25&xcgcd=DCM0000259999999999"
+    driver = _FakeDriver()
+    win = _build_window(auto_reconnect_enabled=True)
+    _configure_basic_worker_stubs(win)
+    win._create_chrome_driver = lambda _options: driver
+    win._configure_driver_timeouts = lambda _driver: None
+    win._set_current_driver = lambda _driver: setattr(win, "driver", _driver)
+    win._inject_mutation_observer = lambda _driver, _selector: (False, ())
+
+    selector_calls = []
+
+    def resolve_active(_driver, candidates):
+        selector_calls.append(True)
+        return candidates, "" if len(selector_calls) == 1 else candidates[0]
+
+    detect_calls = []
+
+    def detect_live(_driver, url, *, force_refresh=False):
+        detect_calls.append((url, force_refresh))
+        return fresh_url if force_refresh else url
+
+    win._resolve_active_selector = resolve_active
+    win._detect_live_broadcast = detect_live
+
+    result = MainWindow._open_capture_driver_session(
+        win,
+        object(),
+        stale_url,
+        "#viewSubtit",
+        reconnecting=True,
+        cached_live_url=stale_url,
+    )
+
+    assert result[1] == fresh_url
+    assert detect_calls == [(stale_url, True)]
+    assert driver.get_calls == [stale_url, fresh_url]
 
 
 def test_extraction_worker_reconnects_after_healthcheck_failures(monkeypatch):

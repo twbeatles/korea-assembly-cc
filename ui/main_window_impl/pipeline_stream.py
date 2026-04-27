@@ -368,6 +368,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         )
         self.search_matches = []
         self.search_idx = 0
+        self._cancel_runtime_search()
         self._runtime_search_revision += 1
         self._runtime_search_in_progress = False
         self._runtime_search_query = ""

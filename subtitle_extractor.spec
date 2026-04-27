@@ -7,7 +7,7 @@
 `portable.flag`, `settings.ini`, `session_recovery.json`, `.storage_probe` 같은 저장소/runtime state는 런타임 전용이며 번들에 포함하지 않습니다.
 생중계 목록 자동 갱신과 프리셋 도메인 검증은 런타임 로직 변경만 포함하며, 추가 datas/hidden import는 필요하지 않습니다.
 
-빌드 명령: pyinstaller subtitle_extractor.spec
+빌드 명령: pyinstaller --clean subtitle_extractor.spec
 """
 
 import re
@@ -111,6 +111,14 @@ HIDDEN_IMPORTS = [
     'ui.main_window_impl.runtime_driver',
     'ui.main_window_impl.runtime_lifecycle',
     'ui.main_window_impl.runtime_state',
+    'ui.main_window_impl.ui',
+    'ui.main_window_impl.ui.help',
+    'ui.main_window_impl.ui.history_presets',
+    'ui.main_window_impl.ui.layout',
+    'ui.main_window_impl.ui.menus',
+    'ui.main_window_impl.ui.runtime_controls',
+    'ui.main_window_impl.ui.theme_status',
+    'ui.main_window_impl.ui.tray',
     'ui.main_window_impl.view_editing',
     'ui.main_window_impl.view_render',
     'ui.main_window_impl.view_search',

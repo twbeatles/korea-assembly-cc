@@ -19,6 +19,52 @@ RuntimeBase = object
 
 
 class MainWindowRuntimeDriverMixin(RuntimeBase):
+    @staticmethod
+    def _is_settings_status_ok(status_value: object) -> bool:
+        if status_value is None:
+            return True
+        status_name = str(getattr(status_value, "name", "") or "")
+        if status_name == "NoError":
+            return True
+        try:
+            if int(status_value) == 0:
+                return True
+        except Exception:
+            pass
+        return str(status_value) in {"0", "NoError", "Status.NoError", "QSettings.Status.NoError"}
+
+    def _save_setting_value(
+        self,
+        key: str,
+        value: object,
+        *,
+        context: str = "설정 저장",
+    ) -> bool:
+        settings = self.__dict__.get("settings")
+        if settings is None:
+            return False
+        try:
+            settings.setValue(key, value)
+            sync = getattr(settings, "sync", None)
+            if callable(sync):
+                sync()
+            status = getattr(settings, "status", None)
+            if callable(status):
+                status_value = status()
+                if not self._is_settings_status_ok(status_value):
+                    raise RuntimeError(f"QSettings status={status_value}")
+            return True
+        except Exception as exc:
+            logger.warning("%s 실패 (%s): %s", context, key, exc)
+            reporter = getattr(self, "_report_user_visible_warning", None)
+            if callable(reporter):
+                reporter(f"{context} 실패: {exc}")
+            else:
+                toaster = getattr(self, "_show_toast", None)
+                if callable(toaster):
+                    toaster(f"{context} 실패: {exc}", "warning", 4000)
+            return False
+
     def _clear_session_db_identity(self) -> None:
         self.current_session_lineage_id = ""
         self.current_db_session_id = None
@@ -413,9 +459,11 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
     def _toggle_auto_clean_newlines_option(self) -> None:
         enabled = self._is_auto_clean_newlines_enabled()
         self.auto_clean_newlines_enabled = enabled
-        settings = self.__dict__.get("settings")
-        if settings is not None:
-            settings.setValue("auto_clean_newlines", enabled)
+        self._save_setting_value(
+            "auto_clean_newlines",
+            enabled,
+            context="자동 줄넘김 설정 저장",
+        )
 
     def _next_capture_run_id(self) -> int:
         next_run_id = int(self.__dict__.get("_capture_run_sequence", 0)) + 1

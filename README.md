@@ -46,10 +46,10 @@
 - `ui/main_window_impl/`는 capture/browser/dom/observer, pipeline/state/queue/stream/messages, runtime/state/lifecycle/driver, view/render/search/editing 책임을 나눠 `MainWindow`의 직접 의존을 줄였습니다.
 - `ui/main_window_database.py`와 `ui/main_window_persistence.py`는 공개 facade 겸 조합 레이어만 유지하고, 실제 DB worker/dialog 책임은 `ui/main_window_impl/database_*.py`, runtime/session/export 책임은 `ui/main_window_impl/persistence_*.py`로 재배치했습니다.
 - `core/live_capture.py`는 호환 facade로 유지하고, ledger/model/reconcile 구현은 `core/live_capture_impl/`로 이동했습니다.
-- `ui/main_window_ui.py`는 이번 배치에서 공개 UI mixin 경로를 유지하며 shell/preset/help 계층은 후속 분리 대상으로 남깁니다.
+- `ui/main_window_ui.py`는 공개 UI facade만 유지하고, 실제 tray/menu/layout/theme/status/history/preset/help 책임은 `ui/main_window_impl/ui/` 하위 mixin으로 분리했습니다.
 
 ### 📦 문서 / 빌드 / 저장소 정합성
-- `subtitle_extractor.spec`는 `ui.main_window_impl.*`, `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`, `core.live_capture_impl.*` hidden import를 명시해 frozen 빌드에서 facade 뒤 구현 모듈이 누락되지 않도록 맞췄습니다.
+- `subtitle_extractor.spec`는 `ui.main_window_impl.*`, `ui.main_window_impl.ui.*`, `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`, `core.live_capture_impl.*` hidden import를 명시해 frozen 빌드에서 facade 뒤 구현 모듈이 누락되지 않도록 맞췄습니다.
 - `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`를 현재 구조와 버전(`v16.14.7`) 기준으로 동기화했습니다.
 - `.gitignore`는 PyInstaller 빌드 중 루트에 남을 수 있는 보조 산출물(`*.manifest`, `*.pyz`)까지 무시하도록 보강했습니다.
 
@@ -88,6 +88,18 @@
 - `ui/main_window_impl/persistence_exports.py`와 `ui/main_window_impl/pipeline_messages.py`의 dead branch를 정리했고, URL 히스토리/프리셋 load-save 실패는 더 이상 로그에만 남기지 않고 사용자 경고로도 노출합니다.
 - `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 이번 배치 기준으로 다시 맞췄습니다.
 - 현재 전체 기준선: `pytest -q` `187 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+
+### 🧪 기능 구현 정합성 보강 추가 반영 (2026-04-27)
+- Worker 종료는 `finished` terminal payload(`success`, `error`, `finalize_preview`)로 통일되어 fatal 실패가 성공 완료 문구로 덮이지 않습니다.
+- 보기 메뉴의 `중지 시 Chrome 창 유지` 옵션은 수동 중지에만 적용되며 기본값은 꺼짐입니다. 앱 종료 또는 다음 추출 시작 전에는 남아 있는 Chrome driver를 정리합니다.
+- DB 세션 저장은 generator를 전체 materialize하지 않고 세션 row 생성 후 자막 row를 chunk insert하고 totals를 갱신합니다. 세션 저장 worker의 DB 저장은 timeout 없이 완료를 기다립니다.
+- runtime 전체 검색은 새 검색마다 이전 검색 cancel token을 set하고, segment/tail batch 단위로 stale 작업을 중단합니다.
+- portable preflight는 `settings.ini` 파일 surface까지 확인하고, 주요 QSettings 저장 경로는 `sync/status` 실패를 상태바/토스트 경고로 노출합니다.
+- stale `xcgcd` URL 재연결 후 자막 selector를 찾지 못하면 그때만 live list를 강제 재해결합니다.
+- DB 히스토리는 `created_at DESC, id DESC`로 정렬하고, 삭제 후 열린 히스토리 다이얼로그는 DB 재조회로 lineage badge를 다시 렌더합니다.
+- UI DB 검색은 명시적으로 literal 부분문자열 검색을 요청하며, FTS는 선택 확장/fallback 기반으로만 유지합니다.
+- UI 구현은 `ui/main_window_ui.py` facade 뒤로 `tray`, `menus`, `layout`, `theme_status`, `history_presets`, `runtime_controls`, `help` 모듈을 분리해 메뉴/상태/프리셋/도움말 책임을 독립 mixin으로 유지합니다.
+- 현재 검증: `pytest -q` `200 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### 🧱 코드 분할 리팩토링 정합화 (2026-04-05)
 - `ui/main_window_database.py`는 facade만 남기고 `database_worker.py` / `database_dialogs.py` 조합으로 분리해 DB 실행 경로와 다이얼로그 UI 경로를 분리했습니다.
@@ -660,7 +672,7 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
-- `python-docx`, `pywin32`, `core.subtitle_processor`, 공유 `core.live_list`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
+- `python-docx`, `pywin32`, `core.subtitle_processor`, 공유 `core.live_list`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.ui.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
 - frozen 기본 실행은 `%LOCALAPPDATA%\\AssemblySubtitle\\Extractor`를 storage root로 사용하고, EXE 옆에 `portable.flag`를 두면 로그/세션/DB/설정(`settings.ini`)을 EXE 폴더에 저장합니다.
 - `typings/`, `.pytest_tmp`, `portable.flag`, `settings.ini`, `session_recovery.json`, `backups/runtime_sessions/` 같은 정적 분석/portable/runtime 산출물은 frozen 번들에 포함하지 않습니다.
 - 빌드 산출물은 `.gitignore`의 `build/`, `dist/` 규칙으로, portable 실행 보조 파일은 `/portable.flag`, `/settings.ini`, `.storage_probe` 규칙으로 관리합니다.

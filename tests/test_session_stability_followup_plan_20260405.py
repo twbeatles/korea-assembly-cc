@@ -9,6 +9,7 @@ import pytest
 
 from core.live_list import select_live_broadcast_row
 from core.models import SubtitleEntry
+from core.subtitle_pipeline import create_empty_capture_state
 
 mw_mod = pytest.importorskip("ui.main_window")
 dialogs_mod = pytest.importorskip("ui.dialogs")
@@ -292,6 +293,109 @@ def test_db_worker_serializes_async_and_sync_tasks():
     assert checkpoints
 
     MainWindow._shutdown_db_worker(win, timeout=1.0)
+
+
+def test_db_worker_sync_can_wait_without_timeout(monkeypatch):
+    win = MainWindow.__new__(MainWindow)
+    win.db = SimpleNamespace(checkpoint=lambda mode="PASSIVE": True)
+    win._show_toast = lambda *_args, **_kwargs: None
+    win._set_status = lambda *_args, **_kwargs: None
+    win._is_background_shutdown_active = lambda: False
+    win._db_tasks_inflight = set()
+    win._emit_control_message = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(mw_mod.Config, "DB_SYNC_TASK_TIMEOUT_SECONDS", 0.01)
+
+    result = MainWindow._run_db_task_sync(
+        win,
+        "db_session_save",
+        worker=lambda: time.sleep(0.05) or 456,
+        write_task=True,
+        timeout=None,
+    )
+
+    assert result == 456
+    MainWindow._shutdown_db_worker(win, timeout=1.0)
+
+
+def test_runtime_search_cancel_token_stops_stale_worker(monkeypatch):
+    win = MainWindow.__new__(MainWindow)
+    win._runtime_segment_manifest = [{"start_index": 0}]
+    win._runtime_search_revision = 7
+    win._runtime_search_cancel_event = threading.Event()
+    win._runtime_archived_count = 1
+    win.subtitle_lock = threading.Lock()
+    win.subtitles = [SubtitleEntry("alpha tail")]
+    win._normalize_subtitle_text_for_option = lambda text: str(text)
+    monkeypatch.setattr(mw_mod.Config, "RUNTIME_SEARCH_MATCH_LIMIT", 100)
+
+    first_cancel = MainWindow._new_runtime_search_cancel_event(win)
+    emitted: list[tuple[str, object]] = []
+    win._emit_control_message = lambda msg_type, payload: emitted.append((msg_type, payload))
+
+    def load_segment(_segment_info):
+        first_cancel.set()
+        return ["alpha archived"]
+
+    win._get_runtime_segment_search_texts = load_segment
+
+    matches, truncated, cancelled = MainWindow._search_full_session_entries(
+        win,
+        "alpha",
+        cancel_event=first_cancel,
+        revision=7,
+    )
+
+    assert matches == []
+    assert truncated is False
+    assert cancelled is True
+    assert emitted == []
+
+
+def test_stop_respects_manual_keep_browser_setting():
+    class _StopEvent:
+        def __init__(self) -> None:
+            self.set_calls = 0
+
+        def set(self) -> None:
+            self.set_calls += 1
+
+    for keep_browser, expected_force_quits in ((True, 0), (False, 1)):
+        win = MainWindow.__new__(MainWindow)
+        driver = object()
+        win.is_running = True
+        win.keep_browser_on_stop = keep_browser
+        win.stop_event = _StopEvent()
+        win.capture_state = create_empty_capture_state()
+        win.last_subtitle = ""
+        win.worker = None
+        win._set_status = lambda *_args, **_kwargs: None
+        win._cancel_scheduled_subtitle_reset = lambda: None
+        win._drain_pending_previews = lambda **_kwargs: None
+        win._materialize_pending_preview = lambda: None
+        win._current_capture_settings = lambda: {}
+        win._sync_capture_state_entries = lambda **_kwargs: None
+        win._finalize_pending_subtitle = lambda: None
+        win._clear_preview = lambda: None
+        win._close_realtime_save_file = lambda: None
+        win._reset_realtime_save_run_state = lambda: None
+        win._cleanup_detached_drivers_with_timeout = lambda **_kwargs: None
+        win._retire_capture_run = lambda: None
+        win._clear_message_queue = lambda: None
+        win._reset_ui = lambda: None
+        win._update_tray_status = lambda *_args, **_kwargs: None
+        win._wait_worker_shutdown = lambda timeout: True
+        take_calls: list[bool] = []
+        force_quit_calls: list[object] = []
+        win._take_current_driver = lambda: take_calls.append(True) or driver
+        win._force_quit_driver_with_timeout = (
+            lambda drv, **_kwargs: force_quit_calls.append(drv) or True
+        )
+
+        MainWindow._stop(win)
+
+        assert len(force_quit_calls) == expected_force_quits
+        assert bool(take_calls) is (not keep_browser)
+        assert win._preserve_driver_on_worker_stop is False
 
 
 def test_shutdown_diagnostic_includes_runtime_and_queue_metadata(tmp_path):

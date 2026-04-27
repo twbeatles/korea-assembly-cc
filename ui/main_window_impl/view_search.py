@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import threading
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QInputDialog
@@ -51,19 +52,58 @@ class MainWindowViewSearchMixin(ViewSearchBase):
     def _update_search_count_label(self, current_index: int | None = None) -> None:
         self._update_search_count_label_now(current_index)
 
-    def _search_full_session_entries(self, query: str) -> tuple[list[SearchMatch], bool]:
+    def _cancel_runtime_search(self) -> None:
+        cancel_event = self.__dict__.get("_runtime_search_cancel_event")
+        if cancel_event is not None:
+            try:
+                cancel_event.set()
+            except Exception:
+                pass
+
+    def _new_runtime_search_cancel_event(self):
+        self._cancel_runtime_search()
+        cancel_event = threading.Event()
+        self._runtime_search_cancel_event = cancel_event
+        return cancel_event
+
+    def _search_full_session_entries(
+        self,
+        query: str,
+        *,
+        cancel_event: object | None = None,
+        revision: int | None = None,
+    ) -> tuple[list[SearchMatch], bool, bool]:
         query_l = str(query or "").lower()
         if not query_l:
-            return [], False
+            return [], False, False
+
+        def cancelled() -> bool:
+            if cancel_event is not None:
+                is_set = getattr(cancel_event, "is_set", None)
+                if callable(is_set) and bool(is_set()):
+                    return True
+            if revision is not None and revision != int(
+                self.__dict__.get("_runtime_search_revision", 0) or 0
+            ):
+                return True
+            return False
 
         matches: list[SearchMatch] = []
         limit = max(1, int(Config.RUNTIME_SEARCH_MATCH_LIMIT))
         for segment_info in list(self.__dict__.get("_runtime_segment_manifest", [])):
+            if cancelled():
+                return matches, False, True
             start_index = int(segment_info.get("start_index", 0) or 0)
             lowered_texts = self._get_runtime_segment_search_texts(segment_info)
+            if cancelled():
+                return matches, False, True
             for offset, lowered_text in enumerate(lowered_texts):
+                if offset % 64 == 0 and cancelled():
+                    return matches, False, True
                 start = 0
                 while True:
+                    if cancelled():
+                        return matches, False, True
                     idx = lowered_text.find(query_l, start)
                     if idx == -1:
                         break
@@ -71,9 +111,11 @@ class MainWindowViewSearchMixin(ViewSearchBase):
                         SearchMatch(start_index + offset, idx, len(query))
                     )
                     if len(matches) >= limit:
-                        return matches, True
+                        return matches, True, False
                     start = idx + 1
 
+        if cancelled():
+            return matches, False, True
         subtitle_lock = self.__dict__.get("subtitle_lock")
         subtitles = getattr(self, "subtitles", [])
         if subtitle_lock is not None:
@@ -83,9 +125,13 @@ class MainWindowViewSearchMixin(ViewSearchBase):
             tail_entries = list(subtitles)
         tail_start_index = int(self.__dict__.get("_runtime_archived_count", 0) or 0)
         for offset, entry in enumerate(tail_entries):
+            if offset % 64 == 0 and cancelled():
+                return matches, False, True
             lowered_text = self._normalize_subtitle_text_for_option(entry.text).lower()
             start = 0
             while True:
+                if cancelled():
+                    return matches, False, True
                 idx = lowered_text.find(query_l, start)
                 if idx == -1:
                     break
@@ -93,9 +139,9 @@ class MainWindowViewSearchMixin(ViewSearchBase):
                     SearchMatch(tail_start_index + offset, idx, len(query))
                 )
                 if len(matches) >= limit:
-                    return matches, True
+                    return matches, True, False
                 start = idx + 1
-        return matches, False
+        return matches, False, False
 
     def _handle_runtime_search_done(self, payload: dict[str, object]) -> None:
         if not isinstance(payload, dict):
@@ -170,7 +216,11 @@ class MainWindowViewSearchMixin(ViewSearchBase):
             self._keyword_pattern = None
 
         if update_settings:
-            self.settings.setValue("highlight_keywords", ", ".join(self.keywords))
+            self._save_setting_value(
+                "highlight_keywords",
+                ", ".join(self.keywords),
+                context="하이라이트 키워드 설정 저장",
+            )
 
         if refresh and hasattr(self, "subtitle_text"):
             self._schedule_ui_refresh(render=True, force_full=True)
@@ -230,6 +280,10 @@ class MainWindowViewSearchMixin(ViewSearchBase):
         self.search_input.selectAll()
 
     def _hide_search(self):
+        self._cancel_runtime_search()
+        self._runtime_search_revision = int(
+            self.__dict__.get("_runtime_search_revision", 0) or 0
+        ) + 1
         self.search_matches = []
         self.search_idx = 0
         self._runtime_search_in_progress = False
@@ -244,6 +298,10 @@ class MainWindowViewSearchMixin(ViewSearchBase):
     def _do_search(self):
         query = self.search_input.text().strip()
         if not query:
+            self._cancel_runtime_search()
+            self._runtime_search_revision = int(
+                self.__dict__.get("_runtime_search_revision", 0) or 0
+            ) + 1
             self.search_matches = []
             self.search_idx = 0
             self._runtime_search_in_progress = False
@@ -252,20 +310,29 @@ class MainWindowViewSearchMixin(ViewSearchBase):
             self._schedule_ui_refresh(search_count=True, render=True, force_full=True)
             return
 
+        self._runtime_search_revision = int(
+            self.__dict__.get("_runtime_search_revision", 0) or 0
+        ) + 1
+        search_revision = int(self._runtime_search_revision)
+        cancel_event = self._new_runtime_search_cancel_event()
         self._runtime_search_query = query
         self._runtime_search_truncated = False
         self.search_matches = []
         self.search_idx = 0
 
         if self._has_runtime_archived_segments():
-            self._runtime_search_revision += 1
             self._runtime_search_in_progress = True
-            search_revision = int(self._runtime_search_revision)
             self._schedule_ui_refresh(search_count=True)
 
             def background_search() -> None:
                 try:
-                    matches, truncated = self._search_full_session_entries(query)
+                    matches, truncated, was_cancelled = self._search_full_session_entries(
+                        query,
+                        cancel_event=cancel_event,
+                        revision=search_revision,
+                    )
+                    if was_cancelled or cancel_event.is_set():
+                        return
                     self._emit_control_message(
                         "runtime_search_done",
                         {
@@ -283,6 +350,8 @@ class MainWindowViewSearchMixin(ViewSearchBase):
                         },
                     )
                 except Exception as e:
+                    if cancel_event.is_set():
+                        return
                     logger.error("runtime search failed: %s", e)
                     self._emit_control_message(
                         "runtime_search_failed",
@@ -302,7 +371,13 @@ class MainWindowViewSearchMixin(ViewSearchBase):
                 return
             self._runtime_search_in_progress = False
 
-        matches, truncated = self._search_full_session_entries(query)
+        matches, truncated, was_cancelled = self._search_full_session_entries(
+            query,
+            cancel_event=cancel_event,
+            revision=search_revision,
+        )
+        if was_cancelled:
+            return
         self.search_matches = matches
         self._runtime_search_truncated = truncated
 
@@ -360,7 +435,11 @@ class MainWindowViewSearchMixin(ViewSearchBase):
         self.alert_keywords = cleaned
         self._alert_keywords_cache = [(k, k.lower()) for k in cleaned]
         if update_settings:
-            self.settings.setValue("alert_keywords", ", ".join(cleaned))
+            self._save_setting_value(
+                "alert_keywords",
+                ", ".join(cleaned),
+                context="알림 키워드 설정 저장",
+            )
 
     def _set_alert_keywords(self):
         current = ", ".join(self.alert_keywords)

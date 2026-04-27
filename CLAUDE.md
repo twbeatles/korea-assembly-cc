@@ -136,9 +136,10 @@ korea-assembly-cc/
     main_window_persistence.py
     main_window_pipeline.py
     main_window_types.py
-    main_window_ui.py
+    main_window_ui.py          # 공개 UI facade
     main_window_view.py
-    main_window_impl/           # capture/pipeline/view/runtime 내부 구현
+    main_window_impl/           # capture/pipeline/view/runtime/ui 내부 구현
+      ui/                       # tray/menu/layout/theme/history/preset/help UI mixin
     themes.py
     widgets.py
     main_window.py              # MainWindow 파사드
@@ -224,7 +225,7 @@ korea-assembly-cc/
 - **내부 구조 분리**: `ui/main_window_impl/`에 capture/browser/dom/observer, pipeline/state/queue/stream/messages, runtime/state/lifecycle/driver, view/render/search/editing 구현을 분리
 - **코어 분리 고도화**: `core/live_capture.py`는 호환 facade로 유지하고, ledger/model/reconcile 구현은 `core/live_capture_impl/`로 이동
 - **빌드/문서 동기화**: `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장하고, `.gitignore`는 루트 `*.manifest`, `*.pyz` 산출물까지 무시
-- **주의점**: `ui/main_window_ui.py`는 이번 배치에서 공개 UI mixin 경로를 유지하며 shell/preset/help 책임은 후속 분리 대상으로 남음
+- **UI facade 분리**: `ui/main_window_ui.py`는 공개 import와 monkeypatch 표면만 유지하고, tray/menu/layout/theme/status/history/preset/help 책임은 `ui/main_window_impl/ui/` 하위 mixin으로 분리
 
 ### v16.14.7 장시간 세션 안정성 후속 보강 메모 (2026-04-05)
 - **runtime segmented session**: 장시간 캡처는 `backups/runtime_sessions/<run_id>/manifest.json` + `segment_*.json` + `tail_checkpoint.json`으로 내부 보관하고, 메모리에는 최근 tail만 유지한다.
@@ -272,6 +273,17 @@ korea-assembly-cc/
 - **사용자 경고 정합화**: URL 히스토리/프리셋 load-save 실패는 status/toast에도 노출되고, `persistence_exports.py` / `pipeline_messages.py`의 dead branch는 제거되었다.
 - **패키징/문서 동기화**: `subtitle_extractor.spec` hidden import에 `core.live_list`를 추가했고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시하도록 맞췄다.
 - **회귀 기준선**: `pytest -q` 187 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+
+### v16.14.7 기능 구현 정합성 추가 반영 메모 (2026-04-27)
+- **terminal worker event**: fatal worker failure는 `error` 뒤 success `finished`를 중복 발행하지 않고, `finished` payload의 `success/error/finalize_preview`로 단일 종료 상태를 전달한다.
+- **Chrome stop policy**: `keep_browser_on_stop` QSettings 옵션은 보기 메뉴 `중지 시 Chrome 창 유지`로 노출한다. 기본값은 `False`이며 수동 중지에만 적용하고 앱 종료/다음 시작 전에는 driver를 종료한다.
+- **bounded DB session save**: `DatabaseManager.save_session()`은 subtitle generator를 `tuple()`로 펼치지 않고 chunk insert 후 totals를 update한다. 세션 저장 worker의 DB sync save는 timeout 없이 DB worker 완료를 기다린다.
+- **runtime search cancellation**: inline full-session search는 새 query마다 이전 cancel token을 set하고 segment/tail batch 단위로 cancel/revision을 확인한다.
+- **settings durability**: portable preflight는 `settings.ini` 파일 surface까지 검증하고, 주요 QSettings 저장은 `setValue -> sync -> status` helper를 통해 실패를 status/toast로 노출한다.
+- **stale xcgcd recovery**: 기존 `xcode+xcgcd` URL은 일반 시작에서 자동 감지를 건너뛰되, 재연결 후 selector를 찾지 못한 경우에만 `force_refresh=True`로 live list를 재해결한다.
+- **DB history/search policy**: 히스토리는 `ORDER BY created_at DESC, id DESC`, 삭제 후 열린 다이얼로그는 DB 재조회로 badge를 갱신한다. UI DB 검색은 `syntax="literal"`을 명시한다.
+- **UI responsibility split**: `ui/main_window_impl/ui/` 패키지에 tray, menus, layout, theme_status, history_presets, runtime_controls, help mixin을 두고 `main_window_ui.py`는 facade로만 유지한다.
+- **회귀 기준선**: `pytest -q` 200 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
