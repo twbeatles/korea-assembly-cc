@@ -22,6 +22,7 @@
 > **v16.14.7(2026-04-08) 저장소 / 세션 안전성 정합성 반영**: storage root 분리(`development/repo`, `portable/EXE`, `frozen default/%LOCALAPPDATA%`), startup preflight, deferred dirty-save, background hydrate, live list timeout/schema validation, DB lineage/history badge가 추가되었지만, 이는 저장·UI·DB 안전성 보강이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
 > **v16.14.7(2026-04-14) 기능 구현 정합성 반영**: storage preflight v2(file surface + SQLite WAL), shared `core/live_list.py`, ambiguous multi-live no-auto-select, DB degraded UI/FTS->LIKE fallback, export/message dead-branch cleanup, URL history/preset warning surface가 반영되었지만, 이는 저장·UI·DB·패키징 정합성 보강이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
 > 후속 Pylance/인코딩 위생 보강(`ui/main_window_types.py`, 로컬 `typings/`, `pytest.ini --basetemp=.pytest_tmp`, 확장된 `tests/test_encoding_hygiene.py`)과 HWP 저장의 missing-dependency fallback 정렬은 이 문서가 분석하는 자막 추출 알고리즘 자체를 바꾸지 않습니다.
+> **v16.14.7(2026-04-29) 기능 리스크 hardening 반영**: `subtitle_reset` pending grace는 유지하되 다음 preview 직전에 완전 리셋을 먼저 커밋하고, merge boundary는 `source_node_key`뿐 아니라 speaker color/channel과 container fallback source mode를 함께 봅니다. Observer broad clear는 reset으로 즉시 확정하지 않고 probe 재확인을 거치며, runtime manifest path confinement와 segment flush fingerprint guard도 추가되었습니다.
 
 ---
 
@@ -81,28 +82,30 @@ pos = raw_compact.rfind(self._trailing_suffix)
 
 **현행**:
 - desync/ambiguous 임계값 초과 시 `_soft_resync()`로 최근 확정 자막 기반 복원
-- `subtitle_reset`(자막 클리어 감지) 시에만 완전 리셋 적용
+- `subtitle_reset`(자막 클리어 감지) 시에만 완전 리셋 적용. reset marker는 grace window에 pending으로 보관될 수 있지만, 새 preview 처리 전에는 반드시 먼저 커밋된다.
 
 **코드 위치**: `_prepare_preview_raw`, `subtitle_reset` 핸들러
 ```python
 # desync/ambiguous
 self._soft_resync()
 
-# subtitle_reset
-self._confirmed_compact = ""
-self._trailing_suffix = ""
+# subtitle_reset commit
+self.capture_state.preview_text = ""
+self.capture_state.confirmed_segments = []
+self.capture_state.last_processed_raw = ""
+self.capture_state.last_committed_reset_at = now.timestamp()
 ```
 
 **시나리오**:
 1. 네트워크 지연이나 DOM 변동으로 10회 연속 desync 발생
 2. 히스토리가 최근 자막 기준으로 복원됨 (대부분 케이스)
 3. 리셋 직후 들어오는 raw에는 **이미 수집한 텍스트**가 포함되어 있을 가능성이 높음
-4. 발언자 전환(`subtitle_reset`) 시에는 의도적으로 전체 문맥을 초기화
+4. 발언자 전환(`subtitle_reset`) 시에는 의도적으로 전체 문맥을 초기화하고, 다음 preview 앞에서 reset boundary를 먼저 확정
 
 **영향**: 과거 대비 대량 중복 위험은 크게 감소했지만, 네트워크 급변 구간에서 짧은 중복 조각은 여전히 발생할 수 있습니다.
 
 > [!IMPORTANT]
-> 완전 리셋은 `subtitle_reset`에 한정되며, 이는 자막 영역 클리어가 확인된 발언자 전환 상황을 전제로 합니다.
+> 완전 리셋은 `subtitle_reset`에 한정되며, 이는 자막 영역 클리어가 확인된 발언자 전환 상황을 전제로 합니다. broad container clear는 reset으로 확정하지 않고 structured probe 재확인을 거칩니다.
 
 ---
 
@@ -291,7 +294,7 @@ if SPEAKER_PATTERN.search(text[:20]):
 ## 6. 결론
 
 현재 글로벌 히스토리 + Suffix 알고리즘은 DOM 루핑에 대한 면역성이 검증된 구조이며, §5.1/§5.2 제안은 현행 코드에 반영된 상태입니다.
-잔여 과제는 코어 변경이 아닌 주변 레이어 튜닝(선택자/프레임 적중률, 게이트 임계값, 병합 정책 정밀화)입니다.
+2026-04-29 hardening으로 speaker metadata/source mode 기반 merge suppression도 적용되었습니다. 잔여 과제는 코어 변경이 아닌 주변 레이어 튜닝(선택자/프레임 적중률, 게이트 임계값, 실제 DOM 변화 로그 기반 selector 조건 세분화)입니다.
 
 정확성 관점에서 가장 큰 위험은 **"중복"** 방향이며, **"누락"** 방향의 위험은 상대적으로 잘 관리되고 있습니다. 다만 후단 정제(`get_word_diff`)가 지나치게 공격적으로 필터링하는 경우의 미세 누락은 운영 로그 분석을 통해 지속적으로 관찰할 필요가 있습니다.
 

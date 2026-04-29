@@ -110,4 +110,5 @@ def test_extraction_worker_emits_structured_preview_payload(monkeypatch):
     assert isinstance(preview_payload, dict)
     assert preview_payload["raw"] == "첫 문장 보정"
     assert preview_payload["selector"] == "#viewSubtit .smi_word"
+    assert preview_payload["source_mode"] == ""
     assert preview_payload["rows"][0]["nodeKey"] == "row_1"

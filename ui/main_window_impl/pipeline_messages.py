@@ -220,8 +220,9 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self._apply_structured_preview_payload(data)
                 return
             if msg_type == "subtitle_reset":
-                logger.info("subtitle_reset 감지: %s", data)
-                self._schedule_deferred_subtitle_reset(str(data or "subtitle_reset"))
+                reset_source = self._format_subtitle_reset_source(data)
+                logger.info("subtitle_reset 감지: %s", reset_source)
+                self._schedule_deferred_subtitle_reset(reset_source)
                 return
             if msg_type == "keepalive":
                 self._handle_keepalive(str(data or ""))

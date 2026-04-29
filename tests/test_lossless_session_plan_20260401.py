@@ -820,6 +820,78 @@ def test_load_runtime_manifest_payload_salvages_from_sibling_files_when_manifest
     assert any("manifest 복구 전환" in item for item in payload["recovery_warnings"])
 
 
+def test_load_runtime_manifest_payload_rejects_traversal_segment_path(tmp_path):
+    runtime_root = tmp_path / "runtime_traversal_segment"
+    runtime_root.mkdir()
+    _write_runtime_entries_file(
+        runtime_root / "tail_checkpoint.json",
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=[SubtitleEntry("tail 자막")],
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "tail_checkpoint": "tail_checkpoint.json",
+                "segments": [{"path": "../outside.json"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="runtime root 밖"):
+        MainWindow._load_runtime_manifest_payload(
+            _build_runtime_manifest_loader_window(),
+            manifest_path,
+            allow_salvage=False,
+        )
+
+
+def test_load_runtime_manifest_payload_salvages_invalid_manifest_paths(tmp_path):
+    runtime_root = tmp_path / "runtime_salvage_invalid_paths"
+    runtime_root.mkdir()
+    outside_tail = tmp_path / "outside_tail.json"
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=[SubtitleEntry("정상 세그먼트")],
+    )
+    _write_runtime_entries_file(
+        outside_tail,
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=[SubtitleEntry("외부 tail")],
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "tail_checkpoint": str(outside_tail.resolve()),
+                "segments": [
+                    {"path": "segment_000001.json"},
+                    {"path": "../outside_segment.json"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = MainWindow._load_runtime_manifest_payload(
+        _build_runtime_manifest_loader_window(),
+        manifest_path,
+        allow_salvage=True,
+    )
+
+    assert [entry.text for entry in payload["subtitles"]] == ["정상 세그먼트"]
+    assert payload["skipped_files"] == 2
+    assert all("runtime root 밖" in item for item in payload["recovery_warnings"])
+
+
 def test_clean_newlines_uses_prepared_snapshot_and_applies_result(monkeypatch):
     prepared_entry = SubtitleEntry("정리 전 준비 스냅샷")
     current_entry = SubtitleEntry("현재 화면 자막")

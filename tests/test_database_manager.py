@@ -82,6 +82,21 @@ def test_database_cleans_stale_thread_connections(tmp_path):
         db.close_all()
 
 
+def test_database_checkpoint_accepts_only_known_modes(tmp_path):
+    db_path = tmp_path / "subtitle_history.db"
+    db = DatabaseManager(str(db_path))
+    try:
+        assert db.checkpoint("PASSIVE") is True
+        assert db.checkpoint("full") is True
+        try:
+            db.checkpoint("PASSIVE); VACUUM; --")
+            assert False, "허용되지 않은 checkpoint mode는 ValueError가 발생해야 함"
+        except ValueError:
+            pass
+    finally:
+        db.close_all()
+
+
 def test_database_default_path_uses_config(monkeypatch, tmp_path):
     expected = tmp_path / "default_history.db"
     monkeypatch.setattr(Config, "DATABASE_PATH", str(expected), raising=False)

@@ -289,7 +289,9 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
                             if forced:
                                 self._process_raw_text(forced)
                 elif msg_type == "subtitle_reset":
-                    self._schedule_deferred_subtitle_reset(str(data or "drain"))
+                    self._schedule_deferred_subtitle_reset(
+                        self._format_subtitle_reset_source(data, default="drain")
+                    )
                 elif msg_type == "keepalive":
                     self._handle_keepalive(str(data or ""))
                 elif msg_type == "subtitle_segments":

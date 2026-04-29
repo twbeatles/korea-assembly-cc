@@ -334,6 +334,31 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                 logger.warning("생중계 자동 감지 실패: %s", live_err)
         return url
 
+    def _coerce_observer_reset_event(self, change: object) -> dict[str, Any] | None:
+        if change == "__SUBTITLE_CLEARED__":
+            return {
+                "kind": "reset",
+                "source": "observer_cleared",
+                "selector": "",
+                "previous_length": 0,
+            }
+        if not isinstance(change, dict):
+            return None
+        if str(change.get("kind") or "").strip() != "reset":
+            return None
+        return {
+            "kind": "reset",
+            "source": str(change.get("source") or "observer_cleared"),
+            "selector": str(change.get("selector") or "").strip(),
+            "previous_length": int(
+                change.get("previousLength") or change.get("previous_length") or 0
+            ),
+        }
+
+    def _is_trusted_observer_reset_event(self, event: dict[str, Any]) -> bool:
+        selector = str(event.get("selector") or "").strip()
+        return not selector or ".smi_word" in selector
+
     def _extraction_worker(self, url, selector, headless, run_id: int | None = None):
         """자막 추출 워커 스레드 (Legacy Logic Restoration)"""
         driver = None
@@ -427,22 +452,50 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                                 observer_active = False
                                 logger.warning("MutationObserver 비활성화, polling fallback")
                             elif observer_changes:
-                                should_reset = any(
-                                    change == "__SUBTITLE_CLEARED__"
-                                    or (
-                                        isinstance(change, dict)
-                                        and str(change.get("kind") or "").strip() == "reset"
-                                    )
+                                reset_events = [
+                                    event
                                     for change in observer_changes
-                                )
-                                if should_reset:
+                                    if (event := self._coerce_observer_reset_event(change))
+                                    is not None
+                                ]
+                                trusted_reset_events = [
+                                    event
+                                    for event in reset_events
+                                    if self._is_trusted_observer_reset_event(event)
+                                ]
+                                broad_reset_events = [
+                                    event
+                                    for event in reset_events
+                                    if not self._is_trusted_observer_reset_event(event)
+                                ]
+                                if broad_reset_events:
+                                    logger.info(
+                                        "broad observer clear 재확인: frame_path=%s events=%s",
+                                        observer_frame_path,
+                                        broad_reset_events,
+                                    )
+                                if trusted_reset_events:
+                                    reset_event = dict(trusted_reset_events[-1])
+                                    reset_event["frame_path"] = list(observer_frame_path)
+                                    logger.info(
+                                        "observer subtitle_reset 확정: %s",
+                                        reset_event,
+                                    )
                                     used_structured_probe = True
                                     self.message_queue.put(
-                                        ("subtitle_reset", "observer_cleared")
+                                        ("subtitle_reset", reset_event)
                                     )
                                     worker_last_raw_text = ""
                                     worker_last_raw_compact = ""
                                     last_keepalive_emit = 0.0
+                                elif any(
+                                    not self._coerce_observer_reset_event(change)
+                                    for change in observer_changes
+                                ):
+                                    logger.debug(
+                                        "observer text change 수신: count=%s",
+                                        len(observer_changes),
+                                    )
 
                         if not used_structured_probe:
                             preferred_frame_path = (

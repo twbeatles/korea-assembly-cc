@@ -54,8 +54,9 @@
 - `.gitignore`는 PyInstaller 빌드 중 루트에 남을 수 있는 보조 산출물(`*.manifest`, `*.pyz`)까지 무시하도록 보강했습니다.
 
 ### ✅ 현재 검증 상태
-- `pytest -q tests/test_review_20260323_regressions.py tests/test_live_capture.py tests/test_worker_stability.py tests/test_worker_probe_payload.py tests/test_feature_plan_20260325.py tests/test_ui_ux_plan_20260327.py tests/test_lossless_session_plan_20260401.py tests/test_compat_imports.py tests/test_pyright_regression.py`: `51 passed`
-- import smoke: `MainWindow`, `reconcile_live_capture` 공개 경로 확인
+- `pytest -q`: `210 passed`
+- `python -m pyright --outputjson`: `0 errors / 0 warnings`
+- import smoke: `MainWindow`, `Config.VERSION`, `reconcile_live_capture` 공개 경로 확인
 - `pyinstaller --clean subtitle_extractor.spec`: 빌드 성공 (`dist/국회의사중계자막추출기 v16.14.7.exe`)
 
 ### ⏱️ 장시간 세션 안정성 후속 보강 (2026-04-05)
@@ -87,7 +88,7 @@
 - DB 초기화는 base schema와 FTS를 분리해 처리하며, `db_available`, `fts_available`, `db_degraded_reason` 상태를 UI에 노출합니다. FTS를 쓸 수 없으면 검색은 literal `LIKE`로 fallback되고, DB 기능 버튼은 제한 상태에 맞게 비활성화됩니다.
 - `ui/main_window_impl/persistence_exports.py`와 `ui/main_window_impl/pipeline_messages.py`의 dead branch를 정리했고, URL 히스토리/프리셋 load-save 실패는 더 이상 로그에만 남기지 않고 사용자 경고로도 노출합니다.
 - `subtitle_extractor.spec`, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 이번 배치 기준으로 다시 맞췄습니다.
-- 현재 전체 기준선: `pytest -q` `187 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+- 현재 전체 기준선: `pytest -q` `210 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, import smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### 🧪 기능 구현 정합성 보강 추가 반영 (2026-04-27)
 - Worker 종료는 `finished` terminal payload(`success`, `error`, `finalize_preview`)로 통일되어 fatal 실패가 성공 완료 문구로 덮이지 않습니다.
@@ -99,7 +100,16 @@
 - DB 히스토리는 `created_at DESC, id DESC`로 정렬하고, 삭제 후 열린 히스토리 다이얼로그는 DB 재조회로 lineage badge를 다시 렌더합니다.
 - UI DB 검색은 명시적으로 literal 부분문자열 검색을 요청하며, FTS는 선택 확장/fallback 기반으로만 유지합니다.
 - UI 구현은 `ui/main_window_ui.py` facade 뒤로 `tray`, `menus`, `layout`, `theme_status`, `history_presets`, `runtime_controls`, `help` 모듈을 분리해 메뉴/상태/프리셋/도움말 책임을 독립 mixin으로 유지합니다.
-- 현재 검증: `pytest -q` `200 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+- 현재 검증: `pytest -q` `210 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, import smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+
+### 🛡️ 기능 리스크 Hardening 추가 반영 (2026-04-29)
+- `subtitle_reset`은 1초 grace를 유지하되, 새 structured preview 처리 전 pending reset을 먼저 커밋해 발언자 전환 경계를 보장합니다.
+- merge boundary는 `source_node_key`, speaker color/channel, container fallback source mode를 함께 사용해 fallback preview가 직전 발언자 entry에 붙는 상황을 줄였습니다.
+- Observer clear 이벤트는 구조화 payload와 legacy sentinel을 모두 지원하며, `.smi_word` clear만 즉시 reset으로 신뢰하고 broad container clear는 probe 재확인으로 보냅니다.
+- runtime segment flush는 entry fingerprint가 현재 active prefix와 일치할 때만 prefix를 삭제하고, runtime manifest segment/tail path는 runtime root 내부 relative path만 허용합니다.
+- `DatabaseManager.checkpoint()`는 허용된 WAL checkpoint mode만 실행하며, 깨진 docstring과 encoding hygiene 검사를 정리했습니다.
+- `subtitle_extractor.spec` hidden import와 `.gitignore`의 build/runtime 산출물 제외 규칙을 현재 코드 구조에 맞춰 재확인했습니다.
+- 현재 검증: `pytest -q` `210 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, import/version smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### 🧱 코드 분할 리팩토링 정합화 (2026-04-05)
 - `ui/main_window_database.py`는 facade만 남기고 `database_worker.py` / `database_dialogs.py` 조합으로 분리해 DB 실행 경로와 다이얼로그 UI 경로를 분리했습니다.
@@ -670,6 +680,7 @@ pyinstaller subtitle_extractor.spec
 dist/국회의사중계자막추출기 v16.14.7.exe
 ```
 
+- 릴리스 전에는 `pyinstaller --clean subtitle_extractor.spec`로 clean build를 수행하고, 생성된 EXE의 기본 실행 smoke와 `portable.flag` 실행 smoke를 확인합니다.
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
 - `python-docx`, `pywin32`, `core.subtitle_processor`, 공유 `core.live_list`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.ui.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
@@ -695,7 +706,8 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - DB 초기화를 base schema와 FTS로 분리해 degraded mode를 허용하고, `db_available`/`fts_available`/`db_degraded_reason` 상태와 persistent warning UI를 추가
 - URL 히스토리/프리셋 load-save 실패를 사용자 경고로 노출하고, export/message 계층의 dead branch를 정리
 - `pyrightconfig.json` / `.vscode/settings.json` / `typings/PyQt6/QtNetwork.pyi` / `tests/test_encoding_hygiene.py`를 갱신해 Pylance/CLI `pyright`와 UTF-8 위생 기준을 현재 코드에 맞게 고정
-- 검증 기준선: `pytest -q` 187 pass, `pyright --outputjson` 0 errors / 0 warnings
+- `subtitle_reset` pending grace의 preview 직전 커밋, metadata 기반 merge suppression, observer reset 신뢰 경계, runtime segment flush fingerprint, manifest path confinement를 추가
+- 검증 기준선: `pytest -q` 210 pass, `pyright --outputjson` 0 errors / 0 warnings
 
 ### v16.14.6 (2026-04-01)
 - recovery state(`session_recovery.json`) 기반 최신 복구 가능 세션 제안, 종료 직전 저장/자동 백업 메타데이터 정리

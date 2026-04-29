@@ -3,6 +3,7 @@ from __future__ import annotations
 import codecs
 from pathlib import Path
 import json
+import unicodedata
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -78,6 +79,18 @@ def test_repo_text_files_are_utf8_without_bom_or_replacement_chars():
 
         if "\ufffd" in text:
             failures.append(f"{rel_path}: contains replacement character U+FFFD")
+
+        control_chars = sorted(
+            {
+                f"U+{ord(ch):04X}"
+                for ch in text
+                if unicodedata.category(ch) == "Cc" and ch not in "\t\n\r"
+            }
+        )
+        if control_chars:
+            failures.append(
+                f"{rel_path}: contains unexpected control characters {', '.join(control_chars)}"
+            )
 
     assert not failures, "\n".join(failures)
 

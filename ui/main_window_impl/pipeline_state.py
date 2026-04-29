@@ -147,8 +147,14 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
 
     def _commit_scheduled_subtitle_reset(self) -> None:
         self._ensure_capture_runtime_state()
+        reset_timer = self._pending_subtitle_reset_timer
+        timer_was_active = bool(reset_timer.isActive())
+        if timer_was_active:
+            reset_timer.stop()
         source = self._pending_subtitle_reset_source
         self._pending_subtitle_reset_source = ""
+        if not source and not timer_was_active:
+            return
         if not self.is_running:
             return
         apply_reset(
@@ -160,6 +166,39 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
         self._sync_capture_state_entries(force_refresh=False)
         if source:
             logger.info("subtitle_reset 적용: %s", source)
+
+    def _commit_scheduled_subtitle_reset_before_preview(self) -> None:
+        self._ensure_capture_runtime_state()
+        reset_timer = self.__dict__.get("_pending_subtitle_reset_timer")
+        if reset_timer is None:
+            return
+        try:
+            is_active = bool(reset_timer.isActive())
+        except Exception:
+            is_active = False
+        if not is_active:
+            return
+        self._commit_scheduled_subtitle_reset()
+
+    def _format_subtitle_reset_source(
+        self,
+        data: object,
+        default: str = "subtitle_reset",
+    ) -> str:
+        if not isinstance(data, dict):
+            return str(data or default)
+        source = str(data.get("source") or data.get("kind") or default)
+        selector = str(data.get("selector") or "").strip()
+        frame_path = data.get("frame_path", data.get("framePath", ""))
+        previous_length = data.get("previous_length", data.get("previousLength", ""))
+        parts = [source]
+        if selector:
+            parts.append(f"selector={selector}")
+        if frame_path not in ("", None):
+            parts.append(f"frame_path={frame_path}")
+        if previous_length not in ("", None):
+            parts.append(f"previous_length={previous_length}")
+        return " ".join(parts)
 
     def _build_prepared_capture_state(self) -> CaptureSessionState:
         self._ensure_capture_runtime_state()
@@ -271,6 +310,9 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             "frame_path": self._coerce_frame_path(
                 probe_result.get("frame_path") or probe_result.get("framePath")
             ),
+            "source_mode": str(
+                probe_result.get("source_mode") or probe_result.get("sourceMode") or ""
+            ),
         }
 
     def _apply_structured_preview_payload(
@@ -291,10 +333,13 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
         raw = self._normalize_subtitle_text_for_option(
             payload.get("raw") or payload.get("text") or ""
         ).strip()
+        source_mode = str(
+            payload.get("source_mode") or payload.get("sourceMode") or ""
+        ).strip()
 
         self._ensure_capture_runtime_state()
         now = now or datetime.now()
-        self._cancel_scheduled_subtitle_reset()
+        self._commit_scheduled_subtitle_reset_before_preview()
 
         event = normalize_capture_event(
             raw=raw,
@@ -328,6 +373,7 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
                     source_entry_id=live_row.committed_entry_id or "",
                     speaker_color=live_row.speaker_color,
                     speaker_channel=live_row.speaker_channel,
+                    source_mode=source_mode or event.capture_mode,
                     baseline_compact=baseline_compact,
                 )
                 result = commit_live_row(
@@ -351,6 +397,7 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
                             source_node_key=meta.source_node_key,
                             speaker_color=meta.speaker_color,
                             speaker_channel=meta.speaker_channel,
+                            source_mode=meta.source_mode,
                             baseline_compact=meta.baseline_compact,
                         ),
                     )
@@ -396,6 +443,7 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
                 meta=PipelineSourceMeta(
                     selector=selector,
                     frame_path=frame_path,
+                    source_mode=source_mode or event.capture_mode,
                 ),
             )
             changed = changed or preview_result.changed

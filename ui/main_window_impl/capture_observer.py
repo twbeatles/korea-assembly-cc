@@ -62,28 +62,32 @@ class MainWindowCaptureObserverMixin(CaptureObserverBase):
                     }
                     arr.push(value);
                 }
-                var containerFirst = [
+                for (var s = 0; s < selectors.length; s++) {
+                    pushUnique(targetSelectors, selectors[s]);
+                }
+                var containerFallback = [
                     '#viewSubtit .incont',
                     '#viewSubtit',
                     '.subtitle_area',
                     '.ai_subtitle',
                     "[class*='subtitle']"
                 ];
-                for (var c = 0; c < containerFirst.length; c++) {
-                    pushUnique(targetSelectors, containerFirst[c]);
-                }
-                for (var s = 0; s < selectors.length; s++) {
-                    pushUnique(targetSelectors, selectors[s]);
+                for (var c = 0; c < containerFallback.length; c++) {
+                    pushUnique(targetSelectors, containerFallback[c]);
                 }
 
                 var target = null;
+                var matchedTargetSelector = '';
                 for (var i = 0; i < targetSelectors.length; i++) {
                     try {
                         target = document.querySelector(targetSelectors[i]);
                     } catch (e) {
                         target = null;
                     }
-                    if (target) break;
+                    if (target) {
+                        matchedTargetSelector = targetSelectors[i];
+                        break;
+                    }
                 }
 
                 function normalizeText(text) {
@@ -96,6 +100,15 @@ class MainWindowCaptureObserverMixin(CaptureObserverBase):
                     if (!/[가-힣A-Za-z]/.test(text)) return false;
                     if (/^[\\d\\s:.,\\-_/()%]+$/.test(text)) return false;
                     return true;
+                }
+
+                function pushResetEvent(selector, previousText) {
+                    window.__subtitleBuffer.push({
+                        kind: 'reset',
+                        source: 'observer_cleared',
+                        selector: selector || '',
+                        previousLength: String(previousText || '').length
+                    });
                 }
 
                 if (target) {
@@ -112,7 +125,7 @@ class MainWindowCaptureObserverMixin(CaptureObserverBase):
                                 }
                             }
                             if (!text && window.__subtitleLastText) {
-                                window.__subtitleBuffer.push('__SUBTITLE_CLEARED__');
+                                pushResetEvent(matchedTargetSelector, window.__subtitleLastText);
                                 window.__subtitleLastText = '';
                                 return;
                             }
@@ -159,7 +172,7 @@ class MainWindowCaptureObserverMixin(CaptureObserverBase):
 
                         var text = normalizeText(liveTarget.innerText || liveTarget.textContent || '');
                         if (!text && window.__subtitleLastText) {
-                            window.__subtitleBuffer.push('__SUBTITLE_CLEARED__');
+                            pushResetEvent('', window.__subtitleLastText);
                             window.__subtitleLastText = '';
                             window.__subtitleLastEmitTs = now;
                             return;

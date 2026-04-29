@@ -45,6 +45,7 @@
 - `core/config.py`/`core/logging_utils.py`/`국회의사중계 자막.py`: v16.14.7(2026-04-08)에서 storage root를 `development/repo`, `portable/EXE`, `frozen default/%LOCALAPPDATA%`로 분리하고 startup storage preflight를 추가했지만, 이는 저장소/배포 경로 안전성 보강일 뿐 코어 파이프라인 의미론을 바꾸지 않는다.
 - `core/config.py`/`core/live_list.py`/`ui/dialogs.py`/`ui/main_window_impl/capture_live.py`/`core/database_manager.py`/`ui/main_window_impl/runtime_state.py`/`ui/main_window_impl/runtime_driver.py`/`ui/main_window_ui.py`/`ui/main_window_impl/persistence_exports.py`/`ui/main_window_impl/pipeline_messages.py`: v16.14.7(2026-04-14)에서 storage preflight를 실제 파일 surface + SQLite WAL probe로 확장하고, `live_list.asp` 파서/선택 정책을 `core.live_list`로 일원화했으며, ambiguous multi-live는 자동 선택하지 않도록 바꿨다. DB degraded mode UI, FTS->LIKE fallback, export/message dead branch cleanup, URL history/preset warning surface는 저장/네트워크/UI hygiene 변경일 뿐 코어 자막 의미론은 바꾸지 않는다.
 - `ui/main_window_impl/persistence_session.py`/`runtime_lifecycle.py`/`database_dialogs.py`/`database_worker.py`/`persistence_runtime.py`/`view_editing.py`/`persistence_tools.py`: dirty-session save는 `저장 후 원래 액션 재개` deferred flow로 통일되고, archived session hydrate는 background worker + progress/cancel로 옮겨졌지만 이는 저장/편집 UX 보강이며 코어의 글로벌 히스토리 + suffix 추출 규칙은 유지된다.
+- `core/subtitle_pipeline.py`/`ui/main_window_impl/pipeline_state.py`/`capture_browser.py`/`capture_observer.py`/`persistence_runtime.py`: v16.14.7(2026-04-29)에서 `subtitle_reset`은 grace window를 유지하되 다음 preview 처리 전에 pending reset을 먼저 커밋하도록 고정했다. merge boundary는 `source_node_key`, speaker color/channel, container fallback source mode를 함께 사용하고, observer clear는 `.smi_word` 계열만 즉시 reset으로 신뢰한다. runtime segment flush는 entry fingerprint가 일치할 때만 active prefix를 삭제하며, manifest relative path는 runtime root 내부로 제한한다.
 - `ui/dialogs.py`/`ui/main_window_impl/capture_live.py`/`core/database_manager.py`: live list timeout/schema validation, malformed row drop, DB lineage(`lineage_id`, `parent_session_id`, `is_latest_in_lineage`)와 history badge가 추가되었지만 이는 네트워크/DB 메타데이터 레이어 보강이며 코어 자막 추출 알고리즘 자체는 바꾸지 않는다.
 - `ui/main_window.py`/`ui/main_window_capture.py`: `self.driver` 접근을 `_driver_lock` + identity helper로 일원화하고, 시작 시 1회 live URL 감지 + 재연결 URL 재사용으로 handoff race를 줄임
 - `ui/main_window_common.py`/`ui/main_window_pipeline.py`: `MainWindowMessageQueue(maxsize=500)`와 `run_id` envelope, 고빈도 메시지 coalescing, stale run drop 도입
@@ -64,7 +65,7 @@
 - `_extract_new_part`: `find()` → `rfind()` 전환 — suffix 충돌 시 과잉 추출 방지
 - `_prepare_preview_raw`: 전체 리셋 → `_soft_resync()` 소프트 리셋 — 대량 중복 유입 방지
 - `_extraction_worker`: MutationObserver 하이브리드 아키텍처 도입
-- `subtitle_reset` 메커니즘: 발언자 전환(자막 영역 클리어) 감지 시 즉시 완전 리셋 + 버퍼 확정
+- `subtitle_reset` 메커니즘: 발언자 전환(자막 영역 클리어) 감지 시 grace window를 두되, 다음 preview 처리 전 또는 timer 만료 시 완전 리셋을 먼저 커밋
 - `_extraction_worker`: 시작/재연결 시 `_detect_live_broadcast` 실연결 (`xcode` → `xcgcd` 보완 URL 반영)
 - `_extraction_worker`/`_handle_keepalive`: 동일 raw 유지 시 keepalive 큐 발행 및 end_time 주기 갱신 활성화
 - `is_meaningful_subtitle_text`: 의미 있는 1~2자 발화 허용, 숫자/기호-only 문자열 차단
@@ -144,21 +145,22 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 - compact 기준으로 동일 입력 반복 전송 억제
 - 동일 raw 유지 시 keepalive 주기 발행 (`Config.SUBTITLE_KEEPALIVE_INTERVAL`)
 - **자막 영역 클리어 감지 (발언자 전환)**
-  - Observer: `__SUBTITLE_CLEARED__` 마커 → `subtitle_reset` 메시지
+  - Observer: `{kind:"reset", selector, previousLength}` 이벤트 또는 legacy `__SUBTITLE_CLEARED__` 마커 → 신뢰 가능한 `.smi_word` clear만 `subtitle_reset` 메시지
+  - Broad container clear는 즉시 reset하지 않고 structured probe 재확인 경로로 유지
   - 폴링: 텍스트 빈 문자열 + 이전에 내용 있었음 → `subtitle_reset` 메시지
 
 ### 4.2 발언자 전환 처리 (`subtitle_reset`)
-메시지: `("subtitle_reset", source)`
+메시지: `("subtitle_reset", source)` 또는 `("subtitle_reset", {"source": ..., "selector": ..., "frame_path": ..., "previous_length": ...})`
 
 핸들러 동작 (순서 중요):
-1. `last_subtitle` 버퍼가 있으면 **즉시 확정** (`_finalize_subtitle`)
-2. `_confirmed_compact = ""`, `_trailing_suffix = ""` (완전 리셋)
-3. `_last_raw_text = ""`, `_last_processed_raw = ""`
-4. `_preview_desync_count = 0`, `_preview_ambiguous_skip_count = 0`
+1. reset marker 수신 시 `Config.SUBTITLE_RESET_GRACE_MS` 동안 pending reset으로 보관
+2. timer 만료 또는 다음 structured preview 처리 직전 `_commit_scheduled_subtitle_reset()` 실행
+3. `CaptureSessionState`의 preview/confirmed history/last raw/desync counter를 완전 리셋하고 `last_committed_reset_at`을 기록
+4. 새 preview는 reset 커밋 이후 처리되므로 이전 발언자 entry와 merge되지 않음
 
 > ⚠️ 여기서는 `_soft_resync()` 대신 **완전 리셋**을 사용합니다.
 > 소프트 리셋은 이전 발언자의 suffix를 복원하므로 새 발언자 텍스트에서 desync가 반복됩니다.
-> 자막 영역이 실제로 클리어된 상황이므로 중복 유입 위험이 없습니다.
+> grace window는 false reset 완화용이며, 새 preview 앞에서는 반드시 reset을 먼저 커밋합니다.
 
 ### 4.3 Preview 게이트
 함수: `_prepare_preview_raw`
@@ -261,7 +263,8 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 ## 8. 로그 기반 운영
 
 관측 로그
-- `subtitle_reset 감지: observer_cleared` — Observer가 발언자 전환 감지
+- `subtitle_reset 감지: observer_cleared selector=... frame_path=... previous_length=...` — Observer가 신뢰 가능한 `.smi_word` clear 감지
+- `broad observer clear 재확인` — broad container clear를 reset으로 확정하지 않고 probe 재확인
 - `subtitle_reset 감지: polling_cleared` — 폴링이 발언자 전환 감지
 - `preview suffix desync reset` — desync 임계값 도달, 소프트 리셋
 - `preview ambiguous suffix reset` — ambiguous 임계값 도달, 소프트 리셋
@@ -367,7 +370,7 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 - 기대 효과: 불안정 구간 복구 속도 개선 + 과도한 재주입 감소
 
 3. 발언자 전환 병합 억제 힌트
-- 목표: `_add_text_to_subtitles` 병합 조건에 발언자 전환 신호(`subtitle_reset` 직후 N초) 가중치 반영
+- 2026-04-29 반영: structured preview의 pending reset 선커밋, source node/speaker metadata/container fallback 기반 merge suppression을 적용했다. 이후 조정은 실제 국회 DOM 변화 로그를 근거로 selector/source mode 조건을 세분화한다.
 - 기대 효과: 서로 다른 발화가 같은 엔트리로 붙는 케이스 감소
 
 4. 게이트 임계값 프로파일 프리셋

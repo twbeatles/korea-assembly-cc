@@ -38,6 +38,10 @@ dist/
 *.spec.bak
 /*.manifest
 /*.pyz
+/*.pdb
+/*.toc
+/*.xref
+/warn-*.txt
 pip-wheel-metadata/
 
 # -----------------------------------------------------------------------------
@@ -47,6 +51,7 @@ logs/
 sessions/
 realtime_output/
 backups/
+runtime_sessions/
 tmp_extension_unpacked/
 tmp_extension.crx
 *.tmp

@@ -32,6 +32,7 @@ class PipelineSourceMeta:
     speaker_color: str = ""
     speaker_channel: SpeakerChannel = "unknown"
     force_new_entry: bool = False
+    source_mode: str = ""
 
 
 @dataclass(slots=True)
@@ -418,11 +419,39 @@ def _append_or_merge_entry(
             and last_entry.source_node_key
             and last_entry.source_node_key != meta.source_node_key
         )
+        speaker_color_boundary = bool(
+            meta
+            and meta.speaker_color
+            and last_entry.speaker_color
+            and meta.speaker_color != last_entry.speaker_color
+        )
+        known_meta_channel = bool(
+            meta and meta.speaker_channel in ("primary", "secondary")
+        )
+        known_last_channel = last_entry.speaker_channel in ("primary", "secondary")
+        speaker_channel_boundary = bool(
+            meta
+            and known_meta_channel
+            and known_last_channel
+            and meta.speaker_channel != last_entry.speaker_channel
+        )
+        fallback_boundary = bool(
+            meta
+            and meta.source_mode == "container"
+            and (
+                last_entry.source_node_key
+                or last_entry.speaker_color
+                or last_entry.speaker_channel in ("primary", "secondary")
+            )
+        )
         last_end_time = last_entry.end_time or last_entry.timestamp
         exceeds_merge_gap = (now - last_end_time).total_seconds() > merge_gap_seconds
         can_merge = (
             not exceeds_merge_gap
             and not structured_boundary
+            and not speaker_color_boundary
+            and not speaker_channel_boundary
+            and not fallback_boundary
             and len(last_entry.text) + len(text) < merge_max_chars
         )
         if can_merge:
@@ -593,6 +622,7 @@ def commit_live_row(
             speaker_color=meta.speaker_color if meta else "",
             speaker_channel=meta.speaker_channel if meta else "unknown",
             force_new_entry=True,
+            source_mode=meta.source_mode if meta else "",
         ),
     )
     state.last_processed_raw = _normalize_runtime_text(row_text, settings)
@@ -633,16 +663,17 @@ def apply_structured_entry(
             preview_text,
             now,
             settings,
-            meta=LiveRowCommitMeta(
-                selector=meta.selector,
-                frame_path=meta.frame_path,
-                source_node_key=meta.source_node_key,
-                source_entry_id=last_entry.entry_id or "",
-                speaker_color=meta.speaker_color,
-                speaker_channel=meta.speaker_channel,
-                baseline_compact=baseline_compact,
-            ),
-        )
+        meta=LiveRowCommitMeta(
+            selector=meta.selector,
+            frame_path=meta.frame_path,
+            source_node_key=meta.source_node_key,
+            source_entry_id=last_entry.entry_id or "",
+            speaker_color=meta.speaker_color,
+            speaker_channel=meta.speaker_channel,
+            source_mode=meta.source_mode,
+            baseline_compact=baseline_compact,
+        ),
+    )
 
     return commit_live_row(
         state,
@@ -656,6 +687,7 @@ def apply_structured_entry(
             source_node_key=meta.source_node_key if meta else "",
             speaker_color=meta.speaker_color if meta else "",
             speaker_channel=meta.speaker_channel if meta else "unknown",
+            source_mode=meta.source_mode if meta else "",
             baseline_compact=state.confirmed_compact,
         ),
     )

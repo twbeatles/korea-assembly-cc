@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import hashlib
 import bisect
 import shutil
 from typing import Any, Iterable, cast
@@ -248,6 +249,56 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             if current_run_id is None or candidate_run_id is None:
                 return False
             return current_run_id == candidate_run_id
+
+    def _build_runtime_entries_fingerprint(
+            self,
+            entries: Iterable[SubtitleEntry],
+        ) -> dict[str, Any]:
+            entry_list = list(entries)
+            digest = hashlib.sha256()
+            for entry in entry_list:
+                digest.update(
+                    json.dumps(
+                        entry.to_dict(),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        default=str,
+                    ).encode("utf-8")
+                )
+                digest.update(b"\n")
+            first_entry = entry_list[0] if entry_list else None
+            last_entry = entry_list[-1] if entry_list else None
+            return {
+                "entry_count": len(entry_list),
+                "first_entry_id": str(first_entry.entry_id or "") if first_entry else "",
+                "last_entry_id": str(last_entry.entry_id or "") if last_entry else "",
+                "entries_digest": digest.hexdigest(),
+            }
+
+    def _payload_has_runtime_entries_fingerprint(
+            self,
+            payload: dict[str, Any],
+        ) -> bool:
+            return bool(
+                payload.get("entries_digest")
+                or payload.get("first_entry_id")
+                or payload.get("last_entry_id")
+            )
+
+    def _runtime_entries_fingerprint_matches(
+            self,
+            entries: Iterable[SubtitleEntry],
+            expected: dict[str, Any],
+        ) -> bool:
+            if not self._payload_has_runtime_entries_fingerprint(expected):
+                return True
+            current = self._build_runtime_entries_fingerprint(entries)
+            return (
+                int(current["entry_count"]) == int(expected.get("entry_count", 0) or 0)
+                and current["first_entry_id"] == str(expected.get("first_entry_id") or "")
+                and current["last_entry_id"] == str(expected.get("last_entry_id") or "")
+                and current["entries_digest"] == str(expected.get("entries_digest") or "")
+            )
 
     def _build_runtime_archive_snapshot(self) -> dict[str, Any] | None:
             runtime_root = self.__dict__.get("_runtime_session_root")
@@ -750,6 +801,7 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             if not flush_entries:
                 return False
 
+            flush_fingerprint = self._build_runtime_entries_fingerprint(flush_entries)
             self._runtime_segment_flush_in_progress = True
             segment_index = int(self._runtime_next_segment_index)
             segment_path = self._runtime_session_root / f"segment_{segment_index:06d}.json"
@@ -774,6 +826,9 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                         ("segment_index", segment_index),
                         ("start_index", start_index),
                         ("entry_count", flush_count),
+                        ("first_entry_id", flush_fingerprint["first_entry_id"]),
+                        ("last_entry_id", flush_fingerprint["last_entry_id"]),
+                        ("entries_digest", flush_fingerprint["entries_digest"]),
                     ]
                     if archive_token:
                         head_items.append(("archive_token", archive_token))
@@ -797,6 +852,9 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                             "char_count": char_count,
                             "word_count": word_count,
                             "start_index": start_index,
+                            "first_entry_id": flush_fingerprint["first_entry_id"],
+                            "last_entry_id": flush_fingerprint["last_entry_id"],
+                            "entries_digest": flush_fingerprint["entries_digest"],
                         },
                     )
                 except Exception as e:
@@ -843,10 +901,27 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             if flush_count <= 0 or not relative_path:
                 return
 
+            fingerprint_mismatch = False
             with self.subtitle_lock:
                 removable = min(flush_count, len(self.subtitles))
+                current_prefix = list(self.subtitles[:removable])
+                fingerprint_mismatch = removable != flush_count or not self._runtime_entries_fingerprint_matches(
+                    current_prefix,
+                    payload,
+                )
+                if fingerprint_mismatch:
+                    removable = 0
                 if removable > 0:
                     del self.subtitles[:removable]
+
+            if fingerprint_mismatch:
+                logger.warning(
+                    "stale runtime segment flush fingerprint 불일치: segment=%s path=%s",
+                    segment_index,
+                    relative_path,
+                )
+                self._maybe_schedule_runtime_segment_flush()
+                return
 
             self._cached_total_chars = max(0, int(self._cached_total_chars) - char_count)
             self._cached_total_words = max(0, int(self._cached_total_words) - word_count)
@@ -862,6 +937,9 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                     "word_count": word_count,
                     "start_index": start_index,
                     "end_index": start_index + flush_count,
+                    "first_entry_id": str(payload.get("first_entry_id") or ""),
+                    "last_entry_id": str(payload.get("last_entry_id") or ""),
+                    "entries_digest": str(payload.get("entries_digest") or ""),
                 }
             )
             self._rebuild_runtime_segment_locator()
@@ -1041,6 +1119,29 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                 if segment_path.is_file()
             ]
 
+    def _resolve_runtime_relative_path(
+            self,
+            runtime_root: Path,
+            relative_path: object,
+            *,
+            source: str,
+        ) -> tuple[Path, str]:
+            raw_path = str(relative_path or "").strip()
+            if not raw_path:
+                raise ValueError(f"{source} path가 비어 있습니다.")
+            candidate = Path(raw_path)
+            if candidate.is_absolute() or candidate.drive:
+                raise ValueError(f"{source} path가 runtime root 밖을 가리킵니다: {raw_path}")
+            runtime_root_resolved = runtime_root.resolve()
+            resolved_path = (runtime_root / candidate).resolve()
+            try:
+                resolved_path.relative_to(runtime_root_resolved)
+            except ValueError as exc:
+                raise ValueError(
+                    f"{source} path가 runtime root 밖을 가리킵니다: {raw_path}"
+                ) from exc
+            return resolved_path, raw_path
+
     def _load_runtime_segment_entries(
             self,
             segment_info: dict[str, Any],
@@ -1057,7 +1158,15 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             relative_path = str(segment_info.get("path", "") or "").strip()
             if not relative_path:
                 return []
-            segment_path = runtime_root / relative_path
+            try:
+                segment_path, relative_path = self._resolve_runtime_relative_path(
+                    Path(runtime_root),
+                    relative_path,
+                    source="runtime segment",
+                )
+            except ValueError:
+                logger.warning("runtime segment path 거부: %s", relative_path)
+                return []
             if not segment_path.exists():
                 return []
             return self._load_segment_file_entries(
@@ -1075,7 +1184,16 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             relative_path = str(segment_info.get("path", "") or "").strip()
             if not relative_path:
                 return []
-            cache_key = str((runtime_root / relative_path).resolve())
+            try:
+                segment_path, _relative_path = self._resolve_runtime_relative_path(
+                    Path(runtime_root),
+                    relative_path,
+                    source="runtime segment",
+                )
+            except ValueError:
+                logger.warning("runtime segment search path 거부: %s", relative_path)
+                return []
+            cache_key = str(segment_path.resolve())
             search_cache = dict(self.__dict__.get("_runtime_segment_search_text_cache", {}))
             if cache_key in search_cache:
                 return search_cache[cache_key]
@@ -1356,10 +1474,22 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                         skipped_files += 1
                         warnings.append("path가 없는 runtime segment를 건너뜁니다.")
                     continue
+                try:
+                    segment_path, safe_relative_path = self._resolve_runtime_relative_path(
+                        runtime_root,
+                        relative_path,
+                        source="runtime segment",
+                    )
+                except ValueError as exc:
+                    if not allow_salvage:
+                        raise
+                    skipped_files += 1
+                    warnings.append(str(exc))
+                    continue
                 raw_data, segment_entries, segment_skipped, segment_error = (
                     self._try_load_runtime_entries_file(
-                        runtime_root / relative_path,
-                        source=f"runtime_manifest:{relative_path}",
+                        segment_path,
+                        source=f"runtime_manifest:{safe_relative_path}",
                         cache_result=True,
                     )
                 )
@@ -1377,8 +1507,20 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                 manifest.get("tail_checkpoint", "tail_checkpoint.json")
                 or "tail_checkpoint.json"
             )
-            checkpoint_path = runtime_root / checkpoint_relative
-            if checkpoint_path.exists():
+            checkpoint_path: Path | None = None
+            try:
+                checkpoint_path, safe_checkpoint_relative = self._resolve_runtime_relative_path(
+                    runtime_root,
+                    checkpoint_relative,
+                    source="runtime tail checkpoint",
+                )
+            except ValueError as exc:
+                if not allow_salvage:
+                    raise
+                skipped_files += 1
+                warnings.append(str(exc))
+                safe_checkpoint_relative = checkpoint_relative
+            if checkpoint_path is not None and checkpoint_path.exists():
                 checkpoint_data, tail_entries, tail_skipped, checkpoint_error = (
                     self._try_load_runtime_entries_file(
                         checkpoint_path,
@@ -1394,11 +1536,11 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                     adopt_meta(checkpoint_data)
                     skipped += tail_skipped
                     all_entries.extend(tail_entries)
-            elif allow_salvage:
+            elif checkpoint_path is not None and allow_salvage:
                 skipped_files += 1
-                warnings.append(f"{checkpoint_relative} 이(가) 없어 tail 복구를 건너뜁니다.")
-            elif manifest_loaded:
-                raise ValueError(f"{checkpoint_relative} 이(가) 없습니다.")
+                warnings.append(f"{safe_checkpoint_relative} 이(가) 없어 tail 복구를 건너뜁니다.")
+            elif checkpoint_path is not None and manifest_loaded:
+                raise ValueError(f"{safe_checkpoint_relative} 이(가) 없습니다.")
 
             if not all_entries:
                 warning_text = " / ".join(warnings)

@@ -27,6 +27,7 @@ class DatabaseManager:
     DEFAULT_DB_PATH = "subtitle_history.db"
     MAX_QUERY_LIMIT = 500
     INSERT_BATCH_SIZE = 500
+    ALLOWED_CHECKPOINT_MODES = frozenset({"PASSIVE", "FULL", "RESTART", "TRUNCATE"})
     STALE_CONNECTION_CLEANUP_INTERVAL = 2.0
     STALE_CONNECTION_CLEANUP_EVERY = 32
     
@@ -65,6 +66,8 @@ class DatabaseManager:
     def checkpoint(self, mode: str = "PASSIVE") -> bool:
         """WAL checkpoint를 수행한다."""
         checkpoint_mode = str(mode or "PASSIVE").strip().upper() or "PASSIVE"
+        if checkpoint_mode not in self.ALLOWED_CHECKPOINT_MODES:
+            raise ValueError(f"지원하지 않는 WAL checkpoint mode: {checkpoint_mode}")
         with self.lock:
             conn = self._get_connection()
             try:

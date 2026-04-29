@@ -469,7 +469,17 @@ pip install -r requirements-dev.txt
 - `DatabaseManager`는 base schema와 FTS 초기화를 분리하고, `db_available`, `fts_available`, `db_degraded_reason`를 UI에 노출한다. FTS를 사용할 수 없으면 검색은 literal `LIKE`로 fallback한다.
 - URL 히스토리/프리셋 load-save 실패는 더 이상 로그에만 남지 않고 사용자 경고로 노출되며, `persistence_exports.py` / `pipeline_messages.py` dead branch는 정리되었다.
 - `subtitle_extractor.spec` hidden import에 `core.live_list`가 추가되었고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시한다.
-- 최신 기준선은 `pytest -q` 187 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공이다.
+- 최신 기준선은 `pytest -q` 210 pass, `pyright --outputjson` 0 errors / 0 warnings, import smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공이다.
+
+## 9.9.10 v16.14.7 기능 리스크 hardening (2026-04-29)
+- `subtitle_reset`은 `Config.SUBTITLE_RESET_GRACE_MS` grace를 유지하지만, 새 structured preview 처리 전 pending reset을 먼저 커밋해 발언자 전환 경계를 보장한다.
+- merge boundary는 기존 `source_node_key` mismatch 외에 speaker color/channel mismatch와 container fallback `source_mode`를 사용해 fallback preview가 이전 structured entry에 붙는 일을 막는다.
+- Observer clear 이벤트는 `{kind:"reset", selector, previousLength}` 구조를 사용하며, legacy `__SUBTITLE_CLEARED__`도 계속 허용한다. `.smi_word` 계열 clear만 즉시 reset으로 신뢰하고 broad container clear는 probe 재확인으로 보낸다.
+- runtime segment flush는 `first_entry_id`, `last_entry_id`, `entries_digest` fingerprint가 현재 active prefix와 일치할 때만 prefix를 삭제한다.
+- runtime manifest의 segment/tail path는 runtime root 내부 relative path로 제한하고, salvage mode에서는 잘못된 path를 warning과 함께 skip한다.
+- `DatabaseManager.checkpoint()`는 `PASSIVE`, `FULL`, `RESTART`, `TRUNCATE`만 허용한다.
+- `subtitle_extractor.spec`는 현재 hidden import 목록에 `core.config`를 명시하고, `.gitignore`는 PyInstaller/root-level 보조 산출물과 root `runtime_sessions/`를 추가로 제외한다.
+- 검증 기준선은 `pytest -q` 210 pass, `pyright --outputjson` 0 errors / 0 warnings, import/version smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

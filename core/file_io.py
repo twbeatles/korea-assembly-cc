@@ -145,7 +145,7 @@ def atomic_write_text_via_writer(
     encoding: str = "utf-8",
     newline: Optional[str] = None,
 ) -> None:
-    """?띿뒪?몃? ?щ컮???곗꽌 ?앹꽦???먯옄?곸쑝濡???ν븳??"""
+    """writer 콜백으로 텍스트 파일을 원자적으로 저장한다."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -193,7 +193,7 @@ def atomic_write_bytes_via_writer(
     path: Union[str, Path],
     writer: Callable[[BinaryIO], None],
 ) -> None:
-    """諛붿씠?덈━瑜? ?щ컮???곗꽌 ?앹꽦???먯옄?곸쑝濡???ν븳??"""
+    """writer 콜백으로 바이너리 파일을 원자적으로 저장한다."""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
 

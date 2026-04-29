@@ -272,7 +272,7 @@ korea-assembly-cc/
 - **DB degraded mode**: `DatabaseManager`는 base schema와 FTS 초기화를 분리하고, `db_available` / `fts_available` / `db_degraded_reason`를 UI에 노출한다. FTS를 쓸 수 없으면 검색은 literal `LIKE`로 fallback하고 DB 액션은 제한 상태에 맞게 비활성화된다.
 - **사용자 경고 정합화**: URL 히스토리/프리셋 load-save 실패는 status/toast에도 노출되고, `persistence_exports.py` / `pipeline_messages.py`의 dead branch는 제거되었다.
 - **패키징/문서 동기화**: `subtitle_extractor.spec` hidden import에 `core.live_list`를 추가했고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시하도록 맞췄다.
-- **회귀 기준선**: `pytest -q` 187 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+- **회귀 기준선**: `pytest -q` 210 pass, `pyright --outputjson` 0 errors / 0 warnings, import smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### v16.14.7 기능 구현 정합성 추가 반영 메모 (2026-04-27)
 - **terminal worker event**: fatal worker failure는 `error` 뒤 success `finished`를 중복 발행하지 않고, `finished` payload의 `success/error/finalize_preview`로 단일 종료 상태를 전달한다.
@@ -283,7 +283,15 @@ korea-assembly-cc/
 - **stale xcgcd recovery**: 기존 `xcode+xcgcd` URL은 일반 시작에서 자동 감지를 건너뛰되, 재연결 후 selector를 찾지 못한 경우에만 `force_refresh=True`로 live list를 재해결한다.
 - **DB history/search policy**: 히스토리는 `ORDER BY created_at DESC, id DESC`, 삭제 후 열린 다이얼로그는 DB 재조회로 badge를 갱신한다. UI DB 검색은 `syntax="literal"`을 명시한다.
 - **UI responsibility split**: `ui/main_window_impl/ui/` 패키지에 tray, menus, layout, theme_status, history_presets, runtime_controls, help mixin을 두고 `main_window_ui.py`는 facade로만 유지한다.
-- **회귀 기준선**: `pytest -q` 200 pass, `pyright --outputjson` 0 errors / 0 warnings, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+- **회귀 기준선**: `pytest -q` 210 pass, `pyright --outputjson` 0 errors / 0 warnings, import smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
+
+### v16.14.7 기능 리스크 hardening 메모 (2026-04-29)
+- **reset boundary**: `subtitle_reset` grace는 유지하지만 다음 structured preview 처리 전 pending reset을 먼저 커밋해 새 발언자가 이전 entry와 merge되지 않도록 한다.
+- **merge suppression**: `source_node_key` mismatch 외에 speaker color/channel mismatch와 container fallback `source_mode`를 merge boundary로 사용한다.
+- **observer reset trust**: Observer clear는 구조화 payload를 사용하고 legacy sentinel을 유지한다. `.smi_word` clear만 reset으로 신뢰하며 broad container clear는 probe 재확인으로 제한한다.
+- **runtime archive integrity**: segment flush 완료 시 entry fingerprint가 현재 active prefix와 일치할 때만 prefix를 삭제하고, runtime manifest path는 runtime root 내부 relative path만 허용한다.
+- **tooling/docs**: `DatabaseManager.checkpoint()` mode whitelist, mojibake docstring 정리, `subtitle_extractor.spec` hidden import와 `.gitignore` build/runtime ignore 규칙 재점검을 반영했다.
+- **회귀 기준선**: `pytest -q` 210 pass, `pyright --outputjson` 0 errors / 0 warnings, import/version smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
@@ -486,7 +494,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 3. **타입 품질 유지**: 새 코드 추가 시 `pyright 0 errors` 기준 유지
 4. **다국어 지원**: i18n 프레임워크 도입
 5. ~~설정 UI~~: 메뉴에서 대부분 설정 가능
-6. **PyInstaller 패키징**: 독립 실행 파일 생성
+6. **PyInstaller 패키징**: 릴리스 전 `pyinstaller --clean subtitle_extractor.spec` clean build와 frozen 실행 smoke 확인
 
 ## 10-1. v16.12.1 안정화 패치 (2026-02-25)
 
