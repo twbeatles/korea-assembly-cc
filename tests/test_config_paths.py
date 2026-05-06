@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+import subprocess
+import sys
 
 import core.config as config_mod
 from core.config import Config, resolve_storage_resolution, run_storage_preflight
@@ -139,6 +142,29 @@ def test_storage_preflight_returns_failure_details_when_db_probe_fails(
     assert ok is False
     assert "wal denied" in error
     assert "subtitle_history.db" in error
+
+
+def test_entrypoint_storage_preflight_smoke_outputs_json(tmp_path):
+    target = tmp_path / "smoke-storage"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "국회의사중계 자막.py",
+            "--smoke-storage-preflight",
+            "--smoke-storage-dir",
+            str(target),
+        ],
+        check=False,
+        capture_output=True,
+        encoding="utf-8",
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(result.stdout.strip())
+    assert payload["ok"] is True
+    assert payload["kind"] == "storage_preflight"
+    assert payload["storage"]["storage_mode"] == "override"
+    assert Path(payload["storage"]["storage_dir"]) == target.resolve()
 
 
 def test_merge_and_streaming_config_defaults():

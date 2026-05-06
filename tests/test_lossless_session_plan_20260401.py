@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import threading
 import time
 from pathlib import Path
@@ -476,11 +477,12 @@ def test_schedule_initial_recovery_snapshot_runs_only_once():
     assert calls == [(["첫 자막"], "InitialRecoverySnapshotWorker")]
 
 
-def test_start_backup_snapshot_write_reuses_prepared_entries_without_full_clone(
+def test_start_backup_snapshot_write_freezes_prepared_entries_before_worker_runs(
     tmp_path, monkeypatch
 ):
     entry = _CloneTrackingEntry("첫 자막")
     written: dict[str, object] = {}
+    pending_worker: dict[str, Any] = {}
 
     win = MainWindow.__new__(MainWindow)
     win._auto_backup_lock = threading.Lock()
@@ -490,7 +492,9 @@ def test_start_backup_snapshot_write_reuses_prepared_entries_without_full_clone(
     )
     win._record_recovery_snapshot = lambda *_args, **_kwargs: None
     win._cleanup_old_backups = lambda: None
-    win._start_background_thread = lambda target, _name: target() or True
+    win._start_background_thread = (
+        lambda target, _name: pending_worker.update(target=target) or True
+    )
 
     monkeypatch.setattr(persistence_mod.Config, "BACKUP_DIR", str(tmp_path))
     monkeypatch.setattr(
@@ -503,9 +507,54 @@ def test_start_backup_snapshot_write_reuses_prepared_entries_without_full_clone(
     )
 
     assert MainWindow._start_backup_snapshot_write(win, [entry]) is True
-    assert entry.clone_calls == 0
-    assert str(written["path"]).endswith(".json")
-    assert written["subtitles"] == [entry.to_dict()]
+    entry.update_text("변경된 자막")
+    pending_worker["target"]()
+
+    assert entry.clone_calls == 1
+    assert str(written.get("path", "")).endswith(".json")
+    subtitles = written.get("subtitles")
+    assert isinstance(subtitles, list)
+    assert isinstance(subtitles[0], dict)
+    assert subtitles[0]["text"] == "첫 자막"
+
+
+class _AlwaysFullQueue:
+    def put_nowait(self, _item: object) -> None:
+        raise queue.Full
+
+    def put(self, _item: object, *args: object, **kwargs: object) -> None:
+        raise queue.Full
+
+
+def test_terminal_worker_messages_use_priority_passthrough_when_queue_is_full():
+    win = MainWindow.__new__(MainWindow)
+    win.message_queue = _AlwaysFullQueue()
+    win._active_capture_run_id = 7
+    win._is_active_capture_run = lambda run_id: run_id == 7
+    handled: list[tuple[str, object]] = []
+
+    MainWindow._emit_worker_message(win, "finished", {"success": True}, run_id=7)
+
+    assert win.__dict__.get("_terminal_worker_messages")
+    processed = MainWindow._drain_terminal_worker_messages(
+        win,
+        max_items=10,
+        handler=lambda msg_type, data: handled.append((msg_type, data)),
+    )
+
+    assert processed == 1
+    assert handled == [("finished", {"success": True})]
+
+
+def test_nonterminal_worker_message_overflows_without_raising_when_queue_stays_full():
+    win = MainWindow.__new__(MainWindow)
+    win.message_queue = _AlwaysFullQueue()
+    win._active_capture_run_id = 7
+    win._is_active_capture_run = lambda run_id: run_id == 7
+
+    MainWindow._emit_worker_message(win, "subtitle_reset", {"source": "test"}, run_id=7)
+
+    assert win.__dict__.get("_overflow_passthrough_messages")
 
 
 def test_start_db_session_load_respects_dirty_confirmation():
@@ -927,7 +976,8 @@ def test_clean_newlines_uses_prepared_snapshot_and_applies_result(monkeypatch):
 
     MainWindow._clean_newlines(win)
 
-    assert captured_inputs == [[prepared_entry]]
+    assert captured_inputs[0][0] is not prepared_entry
+    assert captured_inputs[0][0].text == "정리 전 준비 스냅샷"
     assert [entry.text for entry in replaced[0]] == ["정리 완료"]
     assert dirty_marks == [True]
     assert win._reflow_in_progress is False

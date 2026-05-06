@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
 
 from __future__ import annotations
 
 from datetime import datetime
 from importlib import import_module
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QTimer
 
@@ -39,7 +38,7 @@ def _pipeline_public() -> Any:
     return import_module("ui.main_window_pipeline")
 
 
-PipelineStateBase = object
+PipelineStateBase = PipelineStateHost if TYPE_CHECKING else object
 
 
 class MainWindowPipelineStateMixin(PipelineStateBase):
@@ -215,6 +214,9 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
 
     def _build_prepared_entries_snapshot(self) -> list[SubtitleEntry]:
         return self._build_prepared_capture_state().entries
+
+    def _build_persistent_entries_snapshot(self) -> list[SubtitleEntry]:
+        return [entry.clone() for entry in self._build_prepared_entries_snapshot()]
 
     def _coerce_frame_path(self, value: object) -> tuple[int, ...]:
         if isinstance(value, tuple):

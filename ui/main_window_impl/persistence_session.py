@@ -77,6 +77,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             if on_success is not None:
                 self._set_pending_deferred_action(action_name, on_success)
 
+            snapshot_entries = [entry.clone() for entry in prepared_entries]
             self._session_save_in_progress = True
             self._set_status("세션 저장 중...", "running")
 
@@ -84,7 +85,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 try:
                     info = self._write_session_snapshot(
                         path,
-                        prepared_entries,
+                        snapshot_entries,
                         include_db=True,
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
@@ -323,6 +324,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             runtime_manifest: list[dict[str, Any]] | None = None,
         ) -> dict[str, Any]:
             """현재 세션 스냅샷을 JSON(+선택적 DB)으로 동기 저장한다."""
+            snapshot_entries = [entry.clone() for entry in prepared_entries]
             current_url, committee_name, duration = self._build_session_save_context()
             created_at = datetime.now().isoformat()
             lineage_id = self._ensure_session_lineage_id()
@@ -334,7 +336,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             saved_count = sum(
                 int(item.get("entry_count", 0) or 0)
                 for item in manifest_items
-            ) + len(prepared_entries)
+            ) + len(snapshot_entries)
             utils.atomic_write_json_stream(
                 path,
                 head_items=[
@@ -346,7 +348,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 ],
                 sequence_key="subtitles",
                 sequence_items=self._iter_full_session_serialized_items(
-                    prepared_entries,
+                    snapshot_entries,
                     runtime_root=runtime_root,
                     runtime_manifest=manifest_items,
                 ),
@@ -373,7 +375,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                         db_data = {
                             "url": current_url,
                             "committee_name": committee_name,
-                            "prepared_entries": prepared_entries,
+                            "prepared_entries": snapshot_entries,
                             "runtime_root": runtime_root,
                             "runtime_manifest": [dict(item) for item in manifest_items],
                             "version": Config.VERSION,
@@ -484,7 +486,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                     on_continue()
                 return True
 
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             subtitle_count = len(prepared_entries)
             action_label = str(action_name or "작업").strip() or "작업"
 
@@ -571,7 +573,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 source_url, committee_name, _duration = self._build_session_save_context()
                 created_at = datetime.now().isoformat()
                 lineage_id = self._ensure_session_lineage_id()
-                snapshot_entries = list(prepared_entries)
+                snapshot_entries = [entry.clone() for entry in prepared_entries]
             except Exception as e:
                 try:
                     self._auto_backup_lock.release()
@@ -640,7 +642,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             entries = (
                 prepared_entries
                 if prepared_entries is not None
-                else self._build_prepared_entries_snapshot()
+                else self._build_persistent_entries_snapshot()
             )
             if not entries:
                 return False
@@ -658,7 +660,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
 
     def _auto_backup(self):
             """자동 백업 실행"""
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             if not prepared_entries:
                 return
             if not self._start_backup_snapshot_write(

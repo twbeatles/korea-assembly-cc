@@ -111,6 +111,14 @@
 - `subtitle_extractor.spec` hidden import와 `.gitignore`의 build/runtime 산출물 제외 규칙을 현재 코드 구조에 맞춰 재확인했습니다.
 - 현재 검증: `pytest -q` `210 passed`, `python -m pyright --outputjson` `0 errors / 0 warnings`, import/version smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
+### 🛡️ 기능 구현 리스크 개선 전체 배치 (2026-05-06)
+- 저장/내보내기/자동백업/리플로우 background 작업은 `_build_persistent_entries_snapshot()`을 통해 `SubtitleEntry.clone()` 기반 불변 snapshot을 사용합니다.
+- bounded worker queue 포화 시에도 `finished`, `error`, `subtitle_not_found` terminal message는 priority passthrough 경로에 보존되어 UI 종료 상태 갱신이 유실되지 않습니다.
+- `DatabaseManager` FTS5 초기화는 최초 생성, 인덱스 접근 오류, sample probe 누락 등 rebuild 필요 시에만 `rebuild`를 수행하고 정상 재시작은 `PRAGMA optimize` 중심으로 끝냅니다.
+- 진입점에 GUI 없는 `--smoke`, `--smoke-storage-preflight`, `--smoke-storage-dir` 옵션을 추가해 source/frozen/portable storage smoke를 자동화했습니다.
+- `RUN_LIVE_SMOKE=1` opt-in live contract smoke를 추가하고, 수정한 pipeline queue/state/messages/runtime driver 모듈은 `TYPE_CHECKING` Host base로 파일 단위 blanket pyright suppression을 줄였습니다.
+- 현재 검증: `pytest -q` `217 passed, 1 skipped`, `python -m pyright --outputjson` `0 errors / 0 warnings`, import smoke 통과, source smoke 2종 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공, frozen EXE 기본 `--smoke` 및 `portable.flag` `--smoke-storage-preflight` exit code `0`.
+
 ### 🧱 코드 분할 리팩토링 정합화 (2026-04-05)
 - `ui/main_window_database.py`는 facade만 남기고 `database_worker.py` / `database_dialogs.py` 조합으로 분리해 DB 실행 경로와 다이얼로그 UI 경로를 분리했습니다.
 - `ui/main_window_persistence.py`는 facade만 남기고 `persistence_runtime.py` / `persistence_session.py` / `persistence_exports.py` / `persistence_tools.py`로 나눠 runtime archive, 세션/복구, export, 유틸 책임을 구분했습니다.
@@ -676,11 +684,16 @@ pip install pyinstaller
 # 빌드 실행
 pyinstaller subtitle_extractor.spec
 
+# source smoke
+python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage
+python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage
+
 # 결과물
 dist/국회의사중계자막추출기 v16.14.7.exe
 ```
 
 - 릴리스 전에는 `pyinstaller --clean subtitle_extractor.spec`로 clean build를 수행하고, 생성된 EXE의 기본 실행 smoke와 `portable.flag` 실행 smoke를 확인합니다.
+- frozen 검증은 생성된 EXE에 `--smoke`를 실행하고, EXE 옆에 `portable.flag`를 둔 상태에서 `--smoke-storage-preflight` exit code가 `0`인지 확인합니다. smoke는 GUI를 띄우지 않고 JSON 한 줄을 출력하며, release 검증에서는 exit code `0`도 함께 확인합니다.
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
 - `python-docx`, `pywin32`, `core.subtitle_processor`, 공유 `core.live_list`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.ui.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.

@@ -146,7 +146,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         self._mark_session_dirty()
         self._invalidate_destructive_undo()
         self._schedule_initial_recovery_snapshot_if_needed(
-            self._build_prepared_entries_snapshot()
+            self._build_persistent_entries_snapshot()
         )
         self._schedule_ui_refresh(count=True)
         if refresh:

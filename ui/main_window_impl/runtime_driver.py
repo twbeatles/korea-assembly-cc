@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
 
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from core import utils
@@ -15,7 +14,7 @@ from core.models import SubtitleEntry
 from ui.main_window_impl.contracts import RuntimeHost
 
 
-RuntimeBase = object
+RuntimeBase = RuntimeHost if TYPE_CHECKING else object
 
 
 class MainWindowRuntimeDriverMixin(RuntimeBase):
@@ -27,7 +26,7 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
         if status_name == "NoError":
             return True
         try:
-            if int(status_value) == 0:
+            if int(cast(Any, status_value)) == 0:
                 return True
         except Exception:
             pass
@@ -268,7 +267,7 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
         if bool(self.__dict__.get("_restoring_destructive_undo", False)):
             return False
 
-        entries = [entry.clone() for entry in self._build_prepared_entries_snapshot()]
+        entries = self._build_persistent_entries_snapshot()
         self._destructive_undo_snapshot = {
             "subtitles": entries,
             "capture_source_url": str(self.__dict__.get("_capture_source_url", "") or ""),
@@ -438,7 +437,7 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
         if isinstance(value, str) and not value.strip():
             return -1
         try:
-            return int(value)
+            return int(cast(Any, value))
         except Exception:
             return -1
 

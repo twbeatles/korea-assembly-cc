@@ -293,6 +293,15 @@ korea-assembly-cc/
 - **tooling/docs**: `DatabaseManager.checkpoint()` mode whitelist, mojibake docstring 정리, `subtitle_extractor.spec` hidden import와 `.gitignore` build/runtime ignore 규칙 재점검을 반영했다.
 - **회귀 기준선**: `pytest -q` 210 pass, `pyright --outputjson` 0 errors / 0 warnings, import/version smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공.
 
+### v16.14.7 기능 구현 리스크 개선 전체 배치 메모 (2026-05-06)
+- **persistent snapshot**: 저장/export/자동백업/리플로우 background 경로는 `_build_persistent_entries_snapshot()`으로 active tail entry를 clone해 worker 시작 후 원본 변경이 저장물에 섞이지 않도록 한다.
+- **terminal queue priority**: `finished`, `error`, `subtitle_not_found`는 bounded queue 포화 시 `_terminal_worker_messages` priority passthrough에 보존하고 일반 overflow보다 먼저 drain한다. nonterminal non-coalesced 메시지는 두 번째 `queue.Full`에서도 worker 밖으로 예외를 흘리지 않는다.
+- **conditional FTS rebuild**: FTS5 table/trigger는 매 시작 보장하되, `rebuild`는 최초 생성, FTS 접근 오류, 최근 sample probe 누락 등 인덱스 drift가 의심될 때만 실행한다.
+- **smoke CLI**: `국회의사중계 자막.py --smoke`, `--smoke-storage-preflight`, `--smoke-storage-dir`를 추가해 GUI 없이 source/frozen/portable storage 검증을 수행한다.
+- **live contract smoke**: `RUN_LIVE_SMOKE=1 pytest tests/test_live_contract_smoke.py`는 실제 `live_list.asp` schema를 opt-in으로 확인하며 기본 회귀에서는 skip된다.
+- **typing hygiene**: 수정한 `pipeline_queue`, `pipeline_state`, `pipeline_messages`, `runtime_driver`는 `TYPE_CHECKING` Host base를 사용해 파일 단위 blanket pyright suppression을 제거했다.
+- **회귀 기준선**: `pytest -q` 217 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, import smoke 및 source smoke 2종 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공, frozen EXE 기본 `--smoke`와 `portable.flag` `--smoke-storage-preflight` exit code 0.
+
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
 - **실행 중 옵션 잠금 확대**: URL, 프리셋, 생중계 목록, 태그 편집, 실시간 저장, 헤드리스 모드를 `_sync_runtime_action_state()`로 함께 disable
@@ -453,6 +462,8 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
+- Source smoke check: `python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage`
+- Storage smoke check: `python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage`
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
@@ -495,6 +506,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 4. **다국어 지원**: i18n 프레임워크 도입
 5. ~~설정 UI~~: 메뉴에서 대부분 설정 가능
 6. **PyInstaller 패키징**: 릴리스 전 `pyinstaller --clean subtitle_extractor.spec` clean build와 frozen 실행 smoke 확인
+   - 생성된 EXE는 기본 `--smoke` exit code 0을 확인하고, EXE 옆 `portable.flag` 생성 후 `--smoke-storage-preflight` exit code 0을 확인한다.
 
 ## 10-1. v16.12.1 안정화 패치 (2026-02-25)
 

@@ -5,8 +5,10 @@
 버전과 EXE 이름은 README.md 첫 줄과 동기화됩니다.
 정적 분석 전용 `typings/`와 workspace temp(`.pytest_tmp`)는 번들에 포함하지 않습니다.
 `portable.flag`, `settings.ini`, `session_recovery.json`, `.storage_probe` 같은 저장소/runtime state는 런타임 전용이며 번들에 포함하지 않습니다.
-생중계 목록 자동 갱신, 프리셋 도메인 검증, reset/merge/runtime flush hardening은 런타임 로직 변경만 포함하며,
+생중계 목록 자동 갱신, 프리셋 도메인 검증, reset/merge/runtime flush hardening,
+persistent snapshot/terminal queue/conditional FTS rebuild/smoke CLI는 런타임 로직 변경만 포함하며,
 README/assets 외 추가 datas는 필요하지 않습니다.
+smoke CLI는 표준 라이브러리 argparse/json/ctypes와 기존 PyQt6/Selenium/Core import surface만 사용합니다.
 
 빌드 명령: pyinstaller --clean subtitle_extractor.spec
 """
@@ -62,6 +64,8 @@ HIDDEN_IMPORTS = [
     'docx',
     'docx.shared',
     'docx.enum.text',
+    'argparse',
+    'ctypes',
     'core.config',
     'core.database_manager',
     'core.file_io',

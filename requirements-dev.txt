@@ -3,6 +3,7 @@ PyQt6==6.10.2
 selenium==4.40.0
 pytest==9.0.2
 pyright==1.1.408
+pyinstaller==6.19.0
 
 # Optional export features
 python-docx==1.2.0

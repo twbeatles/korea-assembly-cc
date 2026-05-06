@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
 
 from __future__ import annotations
 
 import queue
 import threading
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from core.logging_utils import logger
 from ui.main_window_common import WorkerQueueMessage
@@ -20,6 +19,11 @@ COALESCED_WORKER_MESSAGE_TYPES = {
     "reconnecting",
     "resolved_url",
     "status",
+}
+TERMINAL_WORKER_MESSAGE_TYPES = {
+    "error",
+    "finished",
+    "subtitle_not_found",
 }
 COALESCED_WORKER_MESSAGE_ORDER = (
     "resolved_url",
@@ -53,7 +57,7 @@ COALESCED_CONTROL_MESSAGE_TYPES = {
 }
 
 
-PipelineQueueBase = object
+PipelineQueueBase = PipelineQueueHost if TYPE_CHECKING else object
 
 
 class MainWindowPipelineQueueMixin(PipelineQueueBase):
@@ -64,6 +68,13 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         if state.get("_overflow_passthrough_messages") is None:
             self._overflow_passthrough_messages = []
 
+    def _ensure_terminal_worker_message_state(self) -> None:
+        state = getattr(self, "__dict__", {})
+        if state.get("_terminal_worker_message_lock") is None:
+            self._terminal_worker_message_lock = threading.Lock()
+        if state.get("_terminal_worker_messages") is None:
+            self._terminal_worker_messages = []
+
     def _stash_overflow_passthrough_item(self, item: object) -> None:
         self._ensure_overflow_passthrough_state()
         with self._overflow_passthrough_lock:
@@ -71,6 +82,11 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             messages.append(item)
             if len(messages) > 64:
                 del messages[:-64]
+
+    def _stash_terminal_worker_message(self, item: WorkerQueueMessage) -> None:
+        self._ensure_terminal_worker_message_state()
+        with self._terminal_worker_message_lock:
+            self._terminal_worker_messages.append(item)
 
     def _ensure_control_message_state(self) -> None:
         state = getattr(self, "__dict__", {})
@@ -94,8 +110,19 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             self.message_queue.put_nowait(message)
             return
         except queue.Full:
+            if msg_type in TERMINAL_WORKER_MESSAGE_TYPES:
+                self._stash_terminal_worker_message(message)
+                return
             if msg_type not in COALESCED_WORKER_MESSAGE_TYPES:
-                self.message_queue.put(message, timeout=1.0)
+                try:
+                    self.message_queue.put(message, timeout=1.0)
+                    return
+                except queue.Full:
+                    logger.warning(
+                        "메시지 큐 포화로 worker 메시지를 overflow 경로에 보존: %s",
+                        msg_type,
+                    )
+                    self._stash_overflow_passthrough_item(message)
                 return
 
         lock = getattr(self, "_worker_message_lock", None)
@@ -158,6 +185,9 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             pass
 
         if isinstance(item, WorkerQueueMessage):
+            if item.msg_type in TERMINAL_WORKER_MESSAGE_TYPES:
+                self._stash_terminal_worker_message(item)
+                return
             if item.msg_type in COALESCED_WORKER_MESSAGE_TYPES:
                 lock = getattr(self, "_worker_message_lock", None)
                 if lock is not None:
@@ -177,6 +207,32 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
                 return
 
         self._stash_overflow_passthrough_item(item)
+
+    def _pop_terminal_worker_messages(self, *, max_items: int) -> list[object]:
+        if max_items <= 0:
+            return []
+        self._ensure_terminal_worker_message_state()
+        with self._terminal_worker_message_lock:
+            items = list(self._terminal_worker_messages[:max_items])
+            del self._terminal_worker_messages[:max_items]
+        return items
+
+    def _drain_terminal_worker_messages(
+        self,
+        *,
+        max_items: int,
+        handler: Callable[[str, Any], None] | None = None,
+    ) -> int:
+        processed = 0
+        drain_handler = handler or self._handle_message
+        for raw_item in self._pop_terminal_worker_messages(max_items=max_items):
+            decoded = self._unwrap_message_item(raw_item)
+            if decoded is None:
+                continue
+            msg_type, data = decoded
+            drain_handler(msg_type, data)
+            processed += 1
+        return processed
 
     def _pop_overflow_passthrough_items(self, *, max_items: int) -> list[object]:
         if max_items <= 0:
@@ -305,3 +361,6 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         self._ensure_overflow_passthrough_state()
         with self._overflow_passthrough_lock:
             self._overflow_passthrough_messages.clear()
+        self._ensure_terminal_worker_message_state()
+        with self._terminal_worker_message_lock:
+            self._terminal_worker_messages.clear()

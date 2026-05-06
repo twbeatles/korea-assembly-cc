@@ -23,6 +23,7 @@
 > **v16.14.7(2026-04-14) 기능 구현 정합성 반영**: storage preflight v2(file surface + SQLite WAL), shared `core/live_list.py`, ambiguous multi-live no-auto-select, DB degraded UI/FTS->LIKE fallback, export/message dead-branch cleanup, URL history/preset warning surface가 반영되었지만, 이는 저장·UI·DB·패키징 정합성 보강이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
 > 후속 Pylance/인코딩 위생 보강(`ui/main_window_types.py`, 로컬 `typings/`, `pytest.ini --basetemp=.pytest_tmp`, 확장된 `tests/test_encoding_hygiene.py`)과 HWP 저장의 missing-dependency fallback 정렬은 이 문서가 분석하는 자막 추출 알고리즘 자체를 바꾸지 않습니다.
 > **v16.14.7(2026-04-29) 기능 리스크 hardening 반영**: `subtitle_reset` pending grace는 유지하되 다음 preview 직전에 완전 리셋을 먼저 커밋하고, merge boundary는 `source_node_key`뿐 아니라 speaker color/channel과 container fallback source mode를 함께 봅니다. Observer broad clear는 reset으로 즉시 확정하지 않고 probe 재확인을 거치며, runtime manifest path confinement와 segment flush fingerprint guard도 추가되었습니다.
+> **v16.14.7(2026-05-06) 기능 구현 리스크 개선 반영**: 저장/export/자동백업/리플로우 worker는 clone 기반 persistent snapshot을 사용하고, bounded queue 포화 시 terminal worker message를 priority passthrough로 보존하며, FTS5 rebuild와 source/frozen smoke 검증 경로를 보강했습니다. 이는 저장·큐·DB·패키징 검증 레이어 변경이며 글로벌 히스토리 + suffix 코어 의미론은 바뀌지 않습니다.
 
 ---
 

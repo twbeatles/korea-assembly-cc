@@ -72,7 +72,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
 
     def _export_stats(self):
             """자막 통계 내보내기"""
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "내보낼 내용이 없습니다.")
@@ -181,7 +181,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
             return utils.generate_filename(committee_name, extension)
 
     def _save_txt(self):
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
@@ -216,7 +216,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
             self._save_in_background(do_save, path, "TXT 저장 완료!", "TXT 저장 실패")
 
     def _save_srt(self):
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
@@ -254,7 +254,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
             self._save_in_background(do_save, path, "SRT 저장 완료!", "SRT 저장 실패")
 
     def _save_vtt(self):
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
@@ -305,7 +305,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
 
     def _save_docx(self):
             """DOCX (Word) 파일로 저장"""
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
@@ -372,7 +372,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
 
     def _save_hwpx(self):
             """HWPX 파일로 저장"""
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
@@ -403,7 +403,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
 
     def _save_hwp(self):
             """HWP 파일로 저장 (Hancom Office 필요)"""
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
@@ -601,7 +601,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
 
     def _save_rtf(self):
             """RTF 파일로 저장 (HWP에서 열기 가능)"""
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
@@ -667,7 +667,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                 self._show_toast("종료 중이라 세션 저장을 시작할 수 없습니다.", "warning")
                 return
 
-            prepared_entries = self._build_prepared_entries_snapshot()
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             has_subtitles = bool(prepared_entries) or bool(runtime_manifest)
             if not has_subtitles:

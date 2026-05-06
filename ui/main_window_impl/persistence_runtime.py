@@ -111,7 +111,7 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
                 self._show_toast("종료 중이라 세션 전체 불러오기를 시작할 수 없습니다.", "warning")
                 return False
 
-            prepared_entries = [entry.clone() for entry in self._build_prepared_entries_snapshot()]
+            prepared_entries = self._build_persistent_entries_snapshot()
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             total_entries = sum(
                 int(item.get("entry_count", 0) or 0)
@@ -988,7 +988,7 @@ class MainWindowPersistenceRuntimeMixin(MainWindowHost):
             if not self._auto_backup_lock.acquire(blocking=False):
                 return False
 
-            snapshot_entries = list(prepared_entries)
+            snapshot_entries = [entry.clone() for entry in prepared_entries]
             archive_context = self._build_runtime_archive_snapshot()
             if archive_context is None:
                 try:

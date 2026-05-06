@@ -53,6 +53,18 @@ def _build_pipeline_window() -> Any:
     return win
 
 
+def test_persistent_entries_snapshot_clones_prepared_entries():
+    win = _build_pipeline_window()
+    entry = SubtitleEntry("저장 전", datetime(2026, 5, 6, 9, 0, 0))
+    win.capture_state.entries.append(entry)
+
+    snapshot = MainWindow._build_persistent_entries_snapshot(win)
+    entry.update_text("저장 후")
+
+    assert snapshot[0] is not entry
+    assert snapshot[0].text == "저장 전"
+
+
 def test_pending_subtitle_reset_commits_before_structured_preview():
     win = _build_pipeline_window()
     now = datetime(2026, 4, 29, 9, 0, 0)

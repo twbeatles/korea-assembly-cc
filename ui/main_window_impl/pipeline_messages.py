@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
 
 from __future__ import annotations
 
@@ -8,6 +7,7 @@ import queue
 import time
 from datetime import datetime
 from importlib import import_module
+from typing import TYPE_CHECKING, Any, cast
 
 from PyQt6.QtCore import QTimer
 
@@ -21,12 +21,14 @@ def _pipeline_public():
     return import_module("ui.main_window_pipeline")
 
 
-PipelineMessagesBase = object
+PipelineMessagesBase = PipelineMessagesHost if TYPE_CHECKING else object
 
 
 class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
     def _has_pending_message_backlog(self) -> bool:
         try:
+            if bool(self.__dict__.get("_terminal_worker_messages", [])):
+                return True
             if bool(self.__dict__.get("_overflow_passthrough_messages", [])):
                 return True
             if bool(self.__dict__.get("_coalesced_control_messages", {})):
@@ -35,7 +37,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 return True
             qsize = getattr(self.message_queue, "qsize", None)
             if callable(qsize):
-                return int(qsize()) > 0
+                return int(cast(Any, qsize)()) > 0
         except Exception:
             return False
         return False
@@ -70,11 +72,11 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
         created_at = str(payload.get("created_at", "") or "")
         loaded_subtitles = payload.get("subtitles", [])
         try:
-            skipped_items = int(payload.get("skipped", 0) or 0)
+            skipped_items = int(cast(Any, payload.get("skipped", 0) or 0))
         except Exception:
             skipped_items = 0
         try:
-            skipped_files = int(payload.get("skipped_files", 0) or 0)
+            skipped_files = int(cast(Any, payload.get("skipped_files", 0) or 0))
         except Exception:
             skipped_files = 0
         mark_dirty = bool(payload.get("mark_dirty", False))
@@ -112,7 +114,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
         self._initial_recovery_snapshot_done = False
         self.current_session_lineage_id = lineage_id
         try:
-            self.current_db_session_id = int(db_session_id)
+            self.current_db_session_id = int(cast(Any, db_session_id))
         except Exception:
             self.current_db_session_id = None
         self._set_capture_source_metadata(
@@ -169,8 +171,12 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             deadline = time.perf_counter() + 0.008
             processed = 0
             if time.perf_counter() <= deadline:
-                processed += self._drain_overflow_passthrough_items(
+                processed += self._drain_terminal_worker_messages(
                     max_items=50,
+                )
+            if processed < 50 and time.perf_counter() <= deadline:
+                processed += self._drain_overflow_passthrough_items(
+                    max_items=50 - processed,
                 )
             while processed < 50 and time.perf_counter() <= deadline:
                 try:

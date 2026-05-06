@@ -109,6 +109,7 @@
 | `_read_subtitle_text_by_selectors()` | 선택자 + 프레임 경로 순회 기반 자막 읽기 (`.smi_word` 창 수집 포함) |
 | `_activate_subtitle()` | AI 자막 레이어 활성화 |
 | `_process_message_queue()` | bounded queue + stale run filtering (100ms) |
+| `_build_persistent_entries_snapshot()` | 저장/export/자동백업/리플로우 worker용 clone 기반 불변 snapshot 생성 |
 | `_prepare_preview_raw()` | preview 입력 정규화/게이트/재동기화 |
 | `_soft_resync()` | 소프트 리셋 (최근 자막 기반 히스토리 복원) |
 | `_extract_stream_delta()` | 직전 raw 대비 증분 추출 fallback |
@@ -198,6 +199,7 @@ pip install -r requirements-dev.txt
 ```
 
 - `requirements-dev.txt`에는 DOCX(`python-docx`)와 HWP(`pywin32`) 저장용 optional 패키지가 함께 정리되어 있음
+- `pyinstaller==6.19.0`은 release/frozen smoke 검증용 개발 의존성으로 고정되어 있음
 - HWPX 저장은 기본 내장 기능이며 별도 외부 프로그램이 필요하지 않음
 
 ### 8.1 개발 품질 게이트
@@ -205,6 +207,9 @@ pip install -r requirements-dev.txt
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
+- Source smoke check: `python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage`
+- Storage smoke check: `python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage`
+- Frozen smoke check: `pyinstaller --clean subtitle_extractor.spec` 후 EXE `--smoke`, EXE 옆 `portable.flag` 생성 후 `--smoke-storage-preflight` exit code 0 확인
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
@@ -222,6 +227,7 @@ pip install -r requirements-dev.txt
 - `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)
 - `tests/test_encoding_hygiene.py`: UTF-8 without BOM, U+FFFD 금지, 핵심 한글 문자열 round-trip 검증
 - `tests/test_hwpx_export.py`: HWPX 패키지 구조, preview 텍스트, XML escape/줄바꿈 회귀 검증
+- `tests/test_live_contract_smoke.py`: `RUN_LIVE_SMOKE=1` opt-in 실제 `live_list.asp` schema smoke
 - `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
 
 ## 9. HWPX 기본 내보내기 추가 (2026-03-23)
@@ -480,6 +486,15 @@ pip install -r requirements-dev.txt
 - `DatabaseManager.checkpoint()`는 `PASSIVE`, `FULL`, `RESTART`, `TRUNCATE`만 허용한다.
 - `subtitle_extractor.spec`는 현재 hidden import 목록에 `core.config`를 명시하고, `.gitignore`는 PyInstaller/root-level 보조 산출물과 root `runtime_sessions/`를 추가로 제외한다.
 - 검증 기준선은 `pytest -q` 210 pass, `pyright --outputjson` 0 errors / 0 warnings, import/version smoke 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공이다.
+
+## 9.9.11 v16.14.7 기능 구현 리스크 개선 전체 배치 (2026-05-06)
+- 저장/export/자동백업/리플로우 background 경로는 `_build_persistent_entries_snapshot()`을 사용해 active tail entry를 `SubtitleEntry.clone()`으로 freeze한다.
+- bounded queue가 가득 찬 경우에도 `finished`, `error`, `subtitle_not_found` terminal worker message는 `_terminal_worker_messages` priority passthrough에 보존하고 일반 overflow보다 먼저 drain한다.
+- `DatabaseManager` FTS5 초기화는 table/trigger 보장과 rebuild 필요 판단을 분리한다. `rebuild`는 최초 생성, FTS 접근 오류, 최근 sample probe 누락 등 drift가 의심될 때만 실행한다.
+- `국회의사중계 자막.py`는 GUI 없는 `--smoke`, `--smoke-storage-preflight`, `--smoke-storage-dir`를 제공한다. source smoke는 JSON 한 줄을 출력하고 frozen smoke는 exit code 0을 기준으로 release 검증에 포함한다.
+- `tests/test_live_contract_smoke.py`는 `RUN_LIVE_SMOKE=1`일 때만 실제 `live_list.asp` 응답 schema를 확인한다.
+- 수정한 `pipeline_queue`, `pipeline_state`, `pipeline_messages`, `runtime_driver`는 `TYPE_CHECKING` Host base를 사용해 파일 단위 blanket pyright suppression을 제거했다.
+- 최신 기준선은 `pytest -q` 217 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, import smoke 및 source smoke 2종 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공, frozen EXE 기본 `--smoke`와 `portable.flag` `--smoke-storage-preflight` exit code 0이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

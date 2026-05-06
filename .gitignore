@@ -65,8 +65,13 @@ tmp_extension.crx
 *.db
 subtitle_history.db
 subtitle_history.db-*
+*.db-journal
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite3-journal
 url_history.json
 committee_presets.json
 session_recovery.json

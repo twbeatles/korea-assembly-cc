@@ -18,7 +18,7 @@ class MainWindowPersistenceToolsMixin(MainWindowHost):
                 return
 
             def continue_reflow() -> None:
-                prepared_entries = self._build_prepared_entries_snapshot()
+                prepared_entries = self._build_persistent_entries_snapshot()
                 if not prepared_entries:
                     self._show_toast("정리할 자막이 없습니다.", "warning")
                     return

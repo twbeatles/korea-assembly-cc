@@ -316,6 +316,34 @@ def test_save_srt_and_vtt_keep_fallback_when_end_time_is_missing(tmp_path, monke
     assert "09:00:00.000 --> 09:00:03.000" in vtt_path.read_text(encoding="utf-8")
 
 
+def test_save_txt_uses_frozen_snapshot_when_background_worker_runs_later(
+    tmp_path, monkeypatch
+):
+    win = _build_window()
+    entry = SubtitleEntry("저장 전 자막", datetime(2026, 5, 6, 9, 0, 0))
+    win._build_prepared_entries_snapshot = lambda: [entry]
+    win._generate_smart_filename = lambda extension: f"out.{extension}"
+
+    def delayed_background(save_func, path, *_args):
+        entry.update_text("저장 후 자막")
+        save_func(path)
+
+    win._save_in_background = delayed_background
+
+    target = tmp_path / "output.txt"
+    monkeypatch.setattr(
+        persistence_mod.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(target), ""),
+    )
+
+    MainWindow._save_txt(win)
+
+    saved_text = target.read_text(encoding="utf-8-sig")
+    assert "저장 전 자막" in saved_text
+    assert "저장 후 자막" not in saved_text
+
+
 def test_save_hwpx_writes_basic_package_with_preview_text(tmp_path, monkeypatch):
     win = _build_window()
     entries = [

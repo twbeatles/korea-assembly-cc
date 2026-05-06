@@ -592,3 +592,82 @@ def test_database_degrades_when_fts_initialization_fails(tmp_path, monkeypatch):
         assert [row["text"] for row in results] == ["alpha beta fallback"]
     finally:
         db.close_all()
+
+
+def test_database_reopen_skips_fts_rebuild_when_counts_match(tmp_path):
+    class TrackingDatabaseManager(DatabaseManager):
+        rebuild_calls = 0
+
+        def _rebuild_fts_index(self, cursor: sqlite3.Cursor) -> None:
+            type(self).rebuild_calls += 1
+            super()._rebuild_fts_index(cursor)
+
+    db_path = tmp_path / "subtitle_history.db"
+    db = TrackingDatabaseManager(str(db_path))
+    try:
+        db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("재시작 검색 자막")],
+                "duration_seconds": 3,
+                "version": "test",
+            }
+        )
+    finally:
+        db.close_all()
+
+    TrackingDatabaseManager.rebuild_calls = 0
+    reopened = TrackingDatabaseManager(str(db_path))
+    try:
+        assert TrackingDatabaseManager.rebuild_calls == 0
+        assert [row["text"] for row in reopened.search_subtitles("재시작 검색")] == [
+            "재시작 검색 자막"
+        ]
+    finally:
+        reopened.close_all()
+
+
+def test_database_rebuilds_fts_when_row_counts_drift(tmp_path):
+    class TrackingDatabaseManager(DatabaseManager):
+        rebuild_calls = 0
+
+        def _rebuild_fts_index(self, cursor: sqlite3.Cursor) -> None:
+            type(self).rebuild_calls += 1
+            super()._rebuild_fts_index(cursor)
+
+    db_path = tmp_path / "subtitle_history.db"
+    db = TrackingDatabaseManager(str(db_path))
+    try:
+        session_id = db.save_session(
+            {
+                "url": "https://example.com/live",
+                "committee_name": "테스트위원회",
+                "subtitles": [SubtitleEntry("기존 FTS 자막")],
+                "duration_seconds": 3,
+                "version": "test",
+            }
+        )
+    finally:
+        db.close_all()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TRIGGER subtitles_ai")
+        conn.execute(
+            """
+            INSERT INTO subtitles (session_id, text, timestamp, sequence)
+            VALUES (?, ?, ?, ?)
+            """,
+            (session_id, "누락 후 rebuild 자막", "2026-05-06T09:00:00", 99),
+        )
+        conn.commit()
+
+    TrackingDatabaseManager.rebuild_calls = 0
+    reopened = TrackingDatabaseManager(str(db_path))
+    try:
+        assert TrackingDatabaseManager.rebuild_calls == 1
+        assert [row["text"] for row in reopened.search_subtitles("rebuild 자막")] == [
+            "누락 후 rebuild 자막"
+        ]
+    finally:
+        reopened.close_all()
