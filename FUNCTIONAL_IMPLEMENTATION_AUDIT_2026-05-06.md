@@ -39,7 +39,7 @@
 - `README.md`, `CLAUDE.md`, `GEMINI.md`에 2026-05-06 hardening, smoke 명령, 최신 검증 기준선을 반영했다.
 - `PIPELINE_LOCK.md`와 `ALGORITHM_ANALYSIS.md`에는 이번 변경이 저장/큐/DB/검증 레이어 보강이며 글로벌 히스토리 + suffix 코어 의미론을 바꾸지 않는다고 명시했다.
 - `subtitle_extractor.spec`에는 persistent snapshot/terminal queue/conditional FTS/smoke CLI가 추가 data 없이 동작한다는 설명과 smoke CLI 표준 라이브러리 hidden import를 반영했다.
-- `requirements-dev.txt`에는 release/frozen build 검증에 사용하는 `pyinstaller==6.19.0`을 추가했다.
+- `requirements-dev.txt`에는 release/frozen build 검증에 사용하는 `pyinstaller==6.20.0`을 반영했다.
 - `.gitignore`에는 SQLite rollback journal 계열(`*.db-journal`, `*.sqlite*`)을 추가해 smoke/DB 검증 산출물이 실수로 올라가지 않도록 보강했다.
 
 ## 검증 기준선
@@ -53,3 +53,9 @@
 - frozen EXE 기본 `--smoke`: exit code `0`
 - frozen EXE + `portable.flag` `--smoke-storage-preflight`: exit code `0`
 
+## 2026-05-11 후속 구조 분리 정합성
+
+- `ui/main_window_impl/persistence_runtime.py`, `core/database_manager.py`, `core/subtitle_pipeline.py`는 공개 facade/API와 기존 private 테스트 진입점을 유지하면서 내부 구현을 책임별 모듈로 나눴다.
+- PyInstaller spec은 새 내부 패키지(`core.database_impl.*`, `core.subtitle_pipeline_impl.*`, `ui.main_window_impl.persistence_runtime_*`)를 hidden import에 명시해 frozen 빌드에서 facade 뒤 구현이 누락되지 않도록 갱신했다.
+- `.gitignore`와 `pytest.ini`는 `.claude/` scratch worktree가 전체 테스트 수집과 publish scope에 섞이지 않도록 맞췄다.
+- 후속 검증 기준선은 `pytest -q` `217 passed, 1 skipped`, source smoke 2종 통과다.

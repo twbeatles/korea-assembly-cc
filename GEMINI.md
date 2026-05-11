@@ -137,6 +137,7 @@ korea-assembly-cc/
   core/                         # 공통 로직/설정
     config.py
     database_manager.py
+    database_impl/             # DatabaseManager 내부 connection/schema/FTS/session/search 구현
     file_io.py
     live_capture.py
     live_capture_impl/          # ledger/model/reconcile 내부 구현
@@ -145,6 +146,7 @@ korea-assembly-cc/
     models.py
     reflow.py
     subtitle_pipeline.py
+    subtitle_pipeline_impl/     # pipeline type/history/incremental/entry helper 내부 구현
     subtitle_processor.py
     text_utils.py
     hwpx_export.py              # 기본 HWPX 내보내기
@@ -160,6 +162,7 @@ korea-assembly-cc/
     main_window_ui.py
     main_window_view.py
     main_window_impl/           # capture/pipeline/view/runtime 내부 구현
+      persistence_runtime_*.py  # runtime hydrate/archive/segment/reader/manifest 세부 mixin
     themes.py
     widgets.py
     main_window.py              # MainWindow 파사드
@@ -199,7 +202,7 @@ pip install -r requirements-dev.txt
 ```
 
 - `requirements-dev.txt`에는 DOCX(`python-docx`)와 HWP(`pywin32`) 저장용 optional 패키지가 함께 정리되어 있음
-- `pyinstaller==6.19.0`은 release/frozen smoke 검증용 개발 의존성으로 고정되어 있음
+- `pyinstaller==6.20.0`은 release/frozen smoke 검증용 개발 의존성으로 고정되어 있음
 - HWPX 저장은 기본 내장 기능이며 별도 외부 프로그램이 필요하지 않음
 
 ### 8.1 개발 품질 게이트
@@ -215,6 +218,7 @@ pip install -r requirements-dev.txt
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
 - `pyrightconfig.json`은 `stubPath=typings`, `executionEnvironments[].extraPaths=["typings"]`, `.pytest_tmp` exclude, `reportMissingModuleSource=none`를 공통 기준으로 사용
 - `tests/test_encoding_hygiene.py`는 repo tracked 파일만 검사하고, BOM이 허용되는 `.pytest_tmp` workspace temp 산출물은 제외한다
+- `.claude/`는 로컬 Codex scratch/worktree 전용 경로로 `.gitignore`와 `pytest.ini norecursedirs`에 포함해 테스트 수집과 publish scope에서 제외한다
 - Windows PowerShell 5.x 콘솔에서는 UTF-8 without BOM이 깨져 보일 수 있으나 파일 자체는 UTF-8 유지
 
 ### 8.2 저장소 기준 파일
@@ -449,6 +453,14 @@ pip install -r requirements-dev.txt
 - `ui/main_window_persistence.py`는 facade만 유지하고 runtime archive는 `persistence_runtime.py`, 세션/복구는 `persistence_session.py`, export는 `persistence_exports.py`, 유틸은 `persistence_tools.py`로 재분리했다.
 - `subtitle_extractor.spec` hidden import에는 `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`를 추가해 frozen 빌드에서도 facade 뒤 구현이 누락되지 않도록 맞췄다.
 - `pyinstaller --clean subtitle_extractor.spec`로 `dist/국회의사중계자막추출기 v16.14.7.exe` 빌드를 다시 검증했다.
+
+## 9.9.6a v16.14.7 보존형 책임 분리 후속 정합화 (2026-05-11)
+- `ui/main_window_impl/persistence_runtime.py`는 `MainWindowPersistenceRuntimeMixin` 조합 facade로 유지하고 hydrate/progress, archive lifecycle/manifest/checkpoint, segment flush/cache/load, full-session reader, manifest salvage loader 책임을 `persistence_runtime_*.py`로 분리했다.
+- `core/database_manager.py`와 root `database.py` 공개 import 경로는 유지하고 connection/schema/FTS/session/search-stat 구현은 `core/database_impl/` mixin으로 나눴다. 기존 private/static 메서드 호출 표면은 유지한다.
+- `core/subtitle_pipeline.py`는 dataclass/상수/함수 export를 유지하고 내부 helper만 `core/subtitle_pipeline_impl/`의 types/history/incremental/entries로 나눴다.
+- `subtitle_extractor.spec` hidden import에는 `core.database_impl.*`, `core.subtitle_pipeline_impl.*`, `ui.main_window_impl.persistence_runtime_*`를 추가해 frozen 빌드에서도 facade 뒤 구현이 누락되지 않도록 맞췄다.
+- `.gitignore`와 `pytest.ini`는 `.claude/` scratch worktree를 제외해 전체 테스트와 publish scope에 중복 테스트 파일이 섞이지 않게 한다.
+- 최신 기준선은 `pytest -q` 217 pass / 1 skipped, source smoke 2종 통과이다.
 
 ## 9.9.7 v16.14.7 세션 안정성 / 도구 체인 정합화 (2026-04-06)
 - 실행 중 수동 `세션 저장`은 runtime archive를 정리하지 않고 snapshot-only로 처리되며, 이후 segment flush/search/render/export는 같은 archive를 계속 사용한다.

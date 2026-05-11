@@ -9,6 +9,8 @@
 persistent snapshot/terminal queue/conditional FTS rebuild/smoke CLI는 런타임 로직 변경만 포함하며,
 README/assets 외 추가 datas는 필요하지 않습니다.
 smoke CLI는 표준 라이브러리 argparse/json/ctypes와 기존 PyQt6/Selenium/Core import surface만 사용합니다.
+facade 뒤 내부 구현은 `core.database_impl`, `core.subtitle_pipeline_impl`,
+`ui.main_window_impl.persistence_runtime_*` hidden import로 고정합니다.
 
 빌드 명령: pyinstaller --clean subtitle_extractor.spec
 """
@@ -68,6 +70,12 @@ HIDDEN_IMPORTS = [
     'ctypes',
     'core.config',
     'core.database_manager',
+    'core.database_impl',
+    'core.database_impl.core',
+    'core.database_impl.fts',
+    'core.database_impl.schema',
+    'core.database_impl.search_stats',
+    'core.database_impl.sessions',
     'core.file_io',
     'core.hwpx_export',
     'core.live_capture',
@@ -80,6 +88,11 @@ HIDDEN_IMPORTS = [
     'core.models',
     'core.reflow',
     'core.subtitle_pipeline',
+    'core.subtitle_pipeline_impl',
+    'core.subtitle_pipeline_impl.entries',
+    'core.subtitle_pipeline_impl.history',
+    'core.subtitle_pipeline_impl.incremental',
+    'core.subtitle_pipeline_impl.types',
     'core.subtitle_processor',
     'core.text_utils',
     'core.utils',
@@ -112,6 +125,11 @@ HIDDEN_IMPORTS = [
     'ui.main_window_impl.pipeline_stream',
     'ui.main_window_impl.persistence_exports',
     'ui.main_window_impl.persistence_runtime',
+    'ui.main_window_impl.persistence_runtime_archive',
+    'ui.main_window_impl.persistence_runtime_hydration',
+    'ui.main_window_impl.persistence_runtime_manifest',
+    'ui.main_window_impl.persistence_runtime_readers',
+    'ui.main_window_impl.persistence_runtime_segments',
     'ui.main_window_impl.persistence_session',
     'ui.main_window_impl.persistence_tools',
     'ui.main_window_impl.runtime_driver',

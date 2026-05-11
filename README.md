@@ -45,16 +45,17 @@
 - 공개 import 경로(`ui.main_window`, `ui.main_window_capture`, `ui.main_window_pipeline`, `ui.main_window_view`, `core.live_capture`)는 그대로 유지하고, 실제 구현은 `ui/main_window_impl/`와 `core/live_capture_impl/`로 분리했습니다.
 - `ui/main_window_impl/`는 capture/browser/dom/observer, pipeline/state/queue/stream/messages, runtime/state/lifecycle/driver, view/render/search/editing 책임을 나눠 `MainWindow`의 직접 의존을 줄였습니다.
 - `ui/main_window_database.py`와 `ui/main_window_persistence.py`는 공개 facade 겸 조합 레이어만 유지하고, 실제 DB worker/dialog 책임은 `ui/main_window_impl/database_*.py`, runtime/session/export 책임은 `ui/main_window_impl/persistence_*.py`로 재배치했습니다.
+- `ui/main_window_impl/persistence_runtime.py`, `core/database_manager.py`, `core/subtitle_pipeline.py`는 공개 facade를 유지하고 실제 구현을 `persistence_runtime_*`, `core/database_impl/`, `core/subtitle_pipeline_impl/`로 추가 분리했습니다.
 - `core/live_capture.py`는 호환 facade로 유지하고, ledger/model/reconcile 구현은 `core/live_capture_impl/`로 이동했습니다.
 - `ui/main_window_ui.py`는 공개 UI facade만 유지하고, 실제 tray/menu/layout/theme/status/history/preset/help 책임은 `ui/main_window_impl/ui/` 하위 mixin으로 분리했습니다.
 
 ### 📦 문서 / 빌드 / 저장소 정합성
-- `subtitle_extractor.spec`는 `ui.main_window_impl.*`, `ui.main_window_impl.ui.*`, `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`, `core.live_capture_impl.*` hidden import를 명시해 frozen 빌드에서 facade 뒤 구현 모듈이 누락되지 않도록 맞췄습니다.
+- `subtitle_extractor.spec`는 `ui.main_window_impl.*`, `ui.main_window_impl.ui.*`, `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`, `ui.main_window_impl.persistence_runtime_*`, `core.live_capture_impl.*`, `core.database_impl.*`, `core.subtitle_pipeline_impl.*` hidden import를 명시해 frozen 빌드에서 facade 뒤 구현 모듈이 누락되지 않도록 맞췄습니다.
 - `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`를 현재 구조와 버전(`v16.14.7`) 기준으로 동기화했습니다.
 - `.gitignore`는 PyInstaller 빌드 중 루트에 남을 수 있는 보조 산출물(`*.manifest`, `*.pyz`)까지 무시하도록 보강했습니다.
 
 ### ✅ 현재 검증 상태
-- `pytest -q`: `210 passed`
+- `pytest -q`: `217 passed, 1 skipped`
 - `python -m pyright --outputjson`: `0 errors / 0 warnings`
 - import smoke: `MainWindow`, `Config.VERSION`, `reconcile_live_capture` 공개 경로 확인
 - `pyinstaller --clean subtitle_extractor.spec`: 빌드 성공 (`dist/국회의사중계자막추출기 v16.14.7.exe`)
@@ -124,6 +125,13 @@
 - `ui/main_window_persistence.py`는 facade만 남기고 `persistence_runtime.py` / `persistence_session.py` / `persistence_exports.py` / `persistence_tools.py`로 나눠 runtime archive, 세션/복구, export, 유틸 책임을 구분했습니다.
 - 공개 import 경로와 테스트의 monkeypatch 경로는 유지해 외부 호출 지점을 깨지 않으면서 긴 파일을 줄였습니다.
 - `pyinstaller --clean subtitle_extractor.spec`를 다시 검증했고, `dist/국회의사중계자막추출기 v16.14.7.exe` 빌드가 성공했습니다.
+
+### 🧱 보존형 책임 분리 후속 정합화 (2026-05-11)
+- `ui/main_window_impl/persistence_runtime.py`는 facade 조합 레이어로 유지하고, hydrate/progress, archive lifecycle/manifest/checkpoint, segment flush/cache/load, full-session reader, manifest salvage loader 책임을 `persistence_runtime_*.py`로 나눴습니다.
+- `core/database_manager.py`는 `DatabaseManager` 공개 경로와 테스트가 호출하는 private/static 메서드 표면을 유지하면서 connection/schema/FTS/session/search-stat 책임을 `core/database_impl/` mixin으로 분리했습니다.
+- `core/subtitle_pipeline.py`는 기존 dataclass/상수/함수 export를 유지하고, 내부 helper를 `core/subtitle_pipeline_impl/`의 types/history/incremental/entries로 나눴습니다.
+- `.gitignore`와 `pytest.ini`는 `.claude/` scratch worktree가 전체 테스트 수집이나 publish scope에 섞이지 않도록 명시했습니다.
+- 현재 검증: `pytest -q` `217 passed, 1 skipped`, source smoke 2종 통과.
 
 ### 🧱 세션 안정성 / 타입·인코딩 위생 보강 (2026-04-06)
 - 실행 중 수동 `세션 저장`은 더 이상 현재 run의 runtime archive를 정리하지 않으며, 같은 archive가 이후 segment flush/search/render/export까지 계속 이어집니다.
@@ -696,7 +704,7 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - frozen 검증은 생성된 EXE에 `--smoke`를 실행하고, EXE 옆에 `portable.flag`를 둔 상태에서 `--smoke-storage-preflight` exit code가 `0`인지 확인합니다. smoke는 GUI를 띄우지 않고 JSON 한 줄을 출력하며, release 검증에서는 exit code `0`도 함께 확인합니다.
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
-- `python-docx`, `pywin32`, `core.subtitle_processor`, 공유 `core.live_list`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.ui.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `core.live_capture_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
+- `python-docx`, `pywin32`, `core.subtitle_processor`, 공유 `core.live_list`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.ui.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `ui.main_window_impl.persistence_runtime_*` / `core.live_capture_impl.*` / `core.database_impl.*` / `core.subtitle_pipeline_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
 - frozen 기본 실행은 `%LOCALAPPDATA%\\AssemblySubtitle\\Extractor`를 storage root로 사용하고, EXE 옆에 `portable.flag`를 두면 로그/세션/DB/설정(`settings.ini`)을 EXE 폴더에 저장합니다.
 - `typings/`, `.pytest_tmp`, `portable.flag`, `settings.ini`, `session_recovery.json`, `backups/runtime_sessions/` 같은 정적 분석/portable/runtime 산출물은 frozen 번들에 포함하지 않습니다.
 - 빌드 산출물은 `.gitignore`의 `build/`, `dist/` 규칙으로, portable 실행 보조 파일은 `/portable.flag`, `/settings.ini`, `.storage_probe` 규칙으로 관리합니다.
@@ -709,6 +717,7 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - 브라우저 헬스체크, Chrome 세션 자동 재기동, `reconnected` 상태 반영으로 장시간 수집 중 창 종료 복구를 보강
 - `ui/main_window_impl/`와 `core/live_capture_impl/`로 capture/pipeline/view/runtime/live capture 내부 구현을 재배치하고 공개 facade import 경로는 유지
 - `ui/main_window_database.py`, `ui/main_window_persistence.py`는 facade 조합 레이어로 축소하고 실제 DB/persistence 구현은 `ui/main_window_impl/database_*`, `ui/main_window_impl/persistence_*`로 재분리
+- `persistence_runtime.py`, `database_manager.py`, `subtitle_pipeline.py`는 facade/API 표면을 유지하면서 세부 구현을 `ui/main_window_impl/persistence_runtime_*`, `core/database_impl/`, `core/subtitle_pipeline_impl/`로 추가 분리
 - `subtitle_extractor.spec` hidden import를 내부 모듈 구조에 맞게 확장하고, `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`, `.gitignore`를 현재 구조 기준으로 재동기화
 - `archive_token` + `run_id` 기반 runtime archive identity, best-effort runtime manifest salvage, blank-URL 세션 로드 hygiene, recovery pointer 유지 정책을 추가해 장시간 세션 안정성을 보강
 - frozen 기본 저장소를 `%LOCALAPPDATA%\\AssemblySubtitle\\Extractor`로 분리하고, `portable.flag`가 있으면 EXE 폴더 기준 `settings.ini`/로그/세션/DB를 사용하는 portable 모드를 추가
