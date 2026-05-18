@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
 
 import re
 import threading
+from typing import TYPE_CHECKING, Any, cast
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QInputDialog
@@ -15,7 +14,7 @@ from ui.main_window_common import SearchMatch
 from ui.main_window_impl.contracts import ViewSearchHost
 
 
-ViewSearchBase = object
+ViewSearchBase = ViewSearchHost if TYPE_CHECKING else object
 
 
 class MainWindowViewSearchMixin(ViewSearchBase):
@@ -147,7 +146,7 @@ class MainWindowViewSearchMixin(ViewSearchBase):
         if not isinstance(payload, dict):
             return
 
-        payload_revision = int(payload.get("revision", -1) or -1)
+        payload_revision = int(cast(Any, payload.get("revision", -1)) or -1)
         if payload_revision != int(self.__dict__.get("_runtime_search_revision", 0)):
             return
 
@@ -188,7 +187,7 @@ class MainWindowViewSearchMixin(ViewSearchBase):
         if not isinstance(payload, dict):
             return
 
-        payload_revision = int(payload.get("revision", -1) or -1)
+        payload_revision = int(cast(Any, payload.get("revision", -1)) or -1)
         if payload_revision != int(self.__dict__.get("_runtime_search_revision", 0)):
             return
 

@@ -97,7 +97,7 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                     self._try_load_runtime_entries_file(
                         segment_path,
                         source=f"runtime_manifest:{safe_relative_path}",
-                        cache_result=True,
+                        cache_result=False,
                     )
                 )
                 if segment_error:
@@ -106,6 +106,40 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                     skipped_files += 1
                     warnings.append(segment_error)
                     continue
+                integrity_errors = [
+                    error
+                    for error in (
+                        self._runtime_entries_integrity_error(
+                            segment_entries,
+                            segment if isinstance(segment, dict) else None,
+                            source=f"{safe_relative_path} manifest",
+                        ),
+                        self._runtime_entries_integrity_error(
+                            segment_entries,
+                            raw_data,
+                            source=f"{safe_relative_path} file",
+                        ),
+                    )
+                    if error
+                ]
+                if integrity_errors:
+                    integrity_error = " / ".join(integrity_errors)
+                    if not allow_salvage:
+                        raise ValueError(integrity_error)
+                    skipped_files += 1
+                    warnings.append(integrity_error)
+                    continue
+                try:
+                    self._cache_runtime_segment_entries(
+                        str(segment_path.resolve()),
+                        segment_entries,
+                    )
+                except Exception:
+                    logger.debug(
+                        "runtime segment cache 반영 실패: %s",
+                        segment_path,
+                        exc_info=True,
+                    )
                 adopt_meta(raw_data)
                 skipped += segment_skipped
                 all_entries.extend(entry.clone() for entry in segment_entries)
@@ -140,9 +174,20 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                     skipped_files += 1
                     warnings.append(checkpoint_error)
                 else:
-                    adopt_meta(checkpoint_data)
-                    skipped += tail_skipped
-                    all_entries.extend(tail_entries)
+                    integrity_error = self._runtime_entries_integrity_error(
+                        tail_entries,
+                        checkpoint_data,
+                        source=f"{safe_checkpoint_relative} file",
+                    )
+                    if integrity_error:
+                        if not allow_salvage:
+                            raise ValueError(integrity_error)
+                        skipped_files += 1
+                        warnings.append(integrity_error)
+                    else:
+                        adopt_meta(checkpoint_data)
+                        skipped += tail_skipped
+                        all_entries.extend(tail_entries)
             elif checkpoint_path is not None and allow_salvage:
                 skipped_files += 1
                 warnings.append(f"{safe_checkpoint_relative} 이(가) 없어 tail 복구를 건너뜁니다.")

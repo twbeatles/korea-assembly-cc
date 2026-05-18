@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
 
 import queue
 import threading
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from PyQt6.QtCore import QSettings, QTimer
 from PyQt6.QtGui import QColor, QFont, QIcon, QTextCharFormat
@@ -32,7 +30,7 @@ from ui.main_window_common import (
 from ui.main_window_impl.contracts import RuntimeHost
 
 
-RuntimeStateBase = object
+RuntimeStateBase = RuntimeHost if TYPE_CHECKING else object
 
 
 class MainWindowRuntimeStateMixin(RuntimeStateBase):

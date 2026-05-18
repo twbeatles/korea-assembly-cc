@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
 
 import time
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QTextCursor
@@ -15,7 +14,7 @@ from core.models import SubtitleEntry
 from ui.main_window_impl.contracts import ViewRenderHost
 
 
-ViewRenderBase = object
+ViewRenderBase = ViewRenderHost if TYPE_CHECKING else object
 
 UI_REFRESH_RENDER = 1
 UI_REFRESH_COUNT = 2

@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
 
 import time
 from importlib import import_module
-from typing import Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from selenium.webdriver.chrome.options import Options
 
@@ -20,7 +18,7 @@ def _capture_public() -> Any:
     return import_module("ui.main_window_capture")
 
 
-CaptureBrowserBase = object
+CaptureBrowserBase = CaptureBrowserHost if TYPE_CHECKING else object
 
 
 class MainWindowCaptureBrowserMixin(CaptureBrowserBase):

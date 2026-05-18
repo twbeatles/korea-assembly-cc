@@ -319,13 +319,13 @@ class Config:
     ]
     
     # 기본 URL
-    DEFAULT_URL = "https://assembly.webcast.go.kr/main/player.asp"
+    DEFAULT_URL = "https://assembly.webcast.go.kr/main/player.asp?xcode=10"
     
     # 상임위원회 기본 프리셋 (v16.0 기준 동작하는 xcode 값)
     # xcode: 위원회(채널) 구분 고정 값
     # xcgcd: 해당 회의의 고유 방송 ID (매 회의마다 변경)
     DEFAULT_COMMITTEE_PRESETS = {
-        "본회의": "https://assembly.webcast.go.kr/main/player.asp",
+        "본회의": "https://assembly.webcast.go.kr/main/player.asp?xcode=10",
         "국회운영위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=24",
         "법제사법위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=25",
         "정무위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=26",
@@ -343,15 +343,13 @@ class Config:
         "국토교통위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=54",
         "성평등가족위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=63",
         "예산결산특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=21",
-        # 특별위원회 (문자열 xcode 사용)
-        "국정감사": "https://assembly.webcast.go.kr/main/player.asp?xcode=IO",
-        "국정조사": "https://assembly.webcast.go.kr/main/player.asp?xcode=IO",
-        "국회정보나침반": "https://assembly.webcast.go.kr/main/player.asp?xcode=IO",
+        "특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=91",
+        "청문회/공청회": "https://assembly.webcast.go.kr/main/player.asp?xcode=99",
     }
     
     # 상임위원회 xcode 값 매핑 (v16.0 기준 동작하는 값)
     COMMITTEE_XCODE_MAP = {
-        "본회의": None,  # 본회의는 xcode 없이 접근
+        "본회의": 10,
         "국회운영위원회": 24,
         "법제사법위원회": 25,
         "정무위원회": 26,
@@ -369,16 +367,14 @@ class Config:
         "국토교통위원회": 54,
         "성평등가족위원회": 63,
         "예산결산특별위원회": 21,
-        # 특별위원회 (문자열 xcode)
-        "국정감사": "IO",
-        "국정조사": "IO",
-        "국회정보나침반": "IO",
+        "특별위원회": 91,
+        "청문회/공청회": 99,
     }
     
     # 특별위원회 문자열 xcode 목록 (숫자가 아닌 코드들)
-    SPECIAL_COMMITTEE_XCODES = {
-        "IO": "국정감사/국정조사",
-    }
+    # 현재 기본값에는 검증된 문자열 xcode가 없다. 사용자가 직접 저장한
+    # 기존 프리셋 JSON은 유지하되, 새 기본 프리셋에는 stale 코드를 넣지 않는다.
+    SPECIAL_COMMITTEE_XCODES = {}
 
     # 정보위원회 xcode/생중계 여부는 이번 배치에서 외부 검증하지 않는다.
     # 사용자가 직접 확인한 URL은 사용자 프리셋/직접 입력으로 사용할 수 있다.
@@ -408,6 +404,8 @@ class Config:
         "성평등가족위": "성평등가족위원회",  # 사이트 내 타이틀 표기
         "예결위": "예산결산특별위원회",
         "특별위": "특별위원회",
+        "청문회": "청문회/공청회",
+        "공청회": "청문회/공청회",
     }
     
     # 폰트 설정

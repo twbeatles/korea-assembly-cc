@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
 
 import json
@@ -10,6 +8,7 @@ import time
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QCloseEvent
@@ -26,7 +25,7 @@ def _main_window_public():
     return import_module("ui.main_window")
 
 
-RuntimeLifecycleBase = object
+RuntimeLifecycleBase = RuntimeHost if TYPE_CHECKING else object
 
 
 class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):

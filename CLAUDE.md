@@ -278,7 +278,7 @@ korea-assembly-cc/
 ### v16.14.7 기능 구현 정합성 보강 메모 (2026-04-14)
 - **storage preflight v2**: startup preflight는 디렉터리 probe만이 아니라 `subtitle_history.db`, `committee_presets.json`, `url_history.json`, `session_recovery.json`의 실제 파일 surface와 SQLite `PRAGMA journal_mode=WAL`까지 검증한다.
 - **shared live list service**: `core/live_list.py`가 `live_list.asp` URL 생성, payload 파싱, row 정규화, 오류 분류, 자동 선택 정책을 담당하고, `LiveBroadcastDialog`와 `capture_live`가 이를 함께 사용한다.
-- **안전 우선 자동 선택**: `xcode`가 없고 진행 중인 생중계 후보가 여러 개인 경우 첫 후보를 자동 선택하지 않고 원래 URL을 유지한다. 상태바/토스트는 `생중계 목록`에서 직접 선택하라고 안내한다.
+- **안전 우선 자동 선택**: `xcode`가 없으면 진행 중인 생중계 후보가 한 개뿐이어도 자동 선택하지 않고 원래 URL을 유지한다. 상태바/토스트는 위원회 프리셋 또는 `생중계 목록`에서 직접 선택하라고 안내한다.
 - **DB degraded mode**: `DatabaseManager`는 base schema와 FTS 초기화를 분리하고, `db_available` / `fts_available` / `db_degraded_reason`를 UI에 노출한다. FTS를 쓸 수 없으면 검색은 literal `LIKE`로 fallback하고 DB 액션은 제한 상태에 맞게 비활성화된다.
 - **사용자 경고 정합화**: URL 히스토리/프리셋 load-save 실패는 status/toast에도 노출되고, `persistence_exports.py` / `pipeline_messages.py`의 dead branch는 제거되었다.
 - **패키징/문서 동기화**: `subtitle_extractor.spec` hidden import에 `core.live_list`를 추가했고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시하도록 맞췄다.
@@ -312,10 +312,19 @@ korea-assembly-cc/
 - **typing hygiene**: 수정한 `pipeline_queue`, `pipeline_state`, `pipeline_messages`, `runtime_driver`는 `TYPE_CHECKING` Host base를 사용해 파일 단위 blanket pyright suppression을 제거했다.
 - **회귀 기준선**: `pytest -q` 217 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, import smoke 및 source smoke 2종 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공, frozen EXE 기본 `--smoke`와 `portable.flag` `--smoke-storage-preflight` exit code 0.
 
+### v16.14.7 기능 리스크 개선 전체 반영 메모 (2026-05-18)
+- **live xcode policy**: 기본 URL/본회의 프리셋은 `xcode=10`으로 고정하고, `특별위원회(91)`, `청문회/공청회(99)` 프리셋과 약칭을 추가했다. stale `IO` 기본 프리셋은 제거하되 사용자 저장 프리셋 JSON은 강제 삭제하지 않는다.
+- **safe live selection**: `target_xcode`가 없으면 단일 live row도 자동 선택하지 않는다. `resolved_url` 메시지는 `current_url`/history와 함께 `_capture_source_url`, `_capture_source_committee`도 resolved URL 기준으로 갱신한다.
+- **live list dialog**: `LiveBroadcastDialog`는 `생중계`와 `종료/예정` row를 모두 표시한다. `xcgcd`가 없는 row는 회색 안내 row로 남기고 URL 적용을 차단하며, `xcgcd`가 있는 non-live row는 기존 확인 prompt 뒤 URL만 입력한다.
+- **runtime archive integrity**: segment/tail load는 `entry_count`, `first_entry_id`, `last_entry_id`, `entries_digest`를 실제 entries fingerprint와 대조한다. strict load는 실패, salvage는 해당 파일 제외와 `무결성 불일치` 경고로 처리한다.
+- **release verification**: `scripts/check_live_list_drift.py`는 live-list xcode drift를 JSON으로 보고하고, `scripts/run_release_verification.py`는 pytest/pyright/source smoke/live smoke/drift report/PyInstaller/frozen smoke/portable preflight를 순서대로 실행한다.
+- **typing policy**: 파일 단위 `# pyright:` directive는 금지한다. 남은 mixin 계약은 `ui/main_window_impl/contracts.py`, `ui/main_window_types.py`, `core/database_impl/contracts.py`와 `tests/test_pyright_suppression_policy.py`로 관리한다.
+- **회귀 기준선**: `python scripts/run_release_verification.py` 통과. `pytest` 228 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list drift 없음, clean build 및 frozen/portable smoke exit code 0.
+
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
 - **실행 중 옵션 잠금 확대**: URL, 프리셋, 생중계 목록, 태그 편집, 실시간 저장, 헤드리스 모드를 `_sync_runtime_action_state()`로 함께 disable
-- **생중계 목록 정책 분리**: 수동 목록은 `생중계`와 `종료/예정`을 모두 보여주되, 자동 감지/URL 보완은 `xstat == "1"` live-only로 제한
+- **생중계 목록 정책 분리**: 수동 목록은 `생중계`와 `종료/예정`을 모두 보여주되, `xcgcd`가 없는 row는 URL 적용을 차단하고 자동 감지/URL 보완은 `xstat == "1"` live-only로 제한
 - **LiveBroadcastDialog 비차단 종료**: persistent `QThread`를 제거하고 요청당 1회성 fetch + request token으로 다이얼로그 종료 후 늦은 응답을 무시
 - **DB/자막 목록 점진 로드**: 세션 히스토리 50건, 자막 검색 100건, 편집/삭제 200개 단위 `더 보기` 로딩과 원본 index 매핑 helper 도입
 - **dirty session 종료 기준 정리**: 세션 JSON 저장 성공만 clean으로 간주하고, 종료 프롬프트는 `_session_dirty` + 자막 수 기준으로 `Save / Discard / Cancel` 또는 `Discard / Cancel`을 선택
@@ -406,7 +415,7 @@ korea-assembly-cc/
 - **스마트 `xcgcd` 감지**: `xcode`만 입력해도 `live_list.asp` API 및 페이지 분석을 통해 생중계 주소 자동 확보
 - **연결 지점 명확화**: 감지는 `xcgcd`가 없는 URL에서만 시작/재연결 루프에 연결되며, 기존 `xcgcd`가 있으면 원 URL을 유지
 - **리다이렉트 대응**: 메인 페이지로 이동 시 해당 위원회의 '생중계' 버튼 자동 클릭
-- **생중계 목록 선택 UI**: '📡 생중계 목록' 버튼을 통해 현재/종료 방송을 함께 확인할 수 있고, `종료/예정` 항목은 확인 후 URL만 채우며 dialog가 열려 있는 동안 목록은 자동 새로고침된다 (`LiveBroadcastDialog`)
+- **생중계 목록 선택 UI**: '📡 생중계 목록' 버튼을 통해 현재/종료 방송을 함께 확인할 수 있고, `xcgcd`가 있는 `종료/예정` 항목은 확인 후 URL만 채우며 dialog가 열려 있는 동안 목록은 자동 새로고침된다 (`LiveBroadcastDialog`)
 
 ### 6.3 자동 파일명 생성 (#28)
 - 형식: `{날짜}_{위원회명}_{시간}.확장자`
@@ -471,9 +480,12 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors`
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
+- pyright suppression policy: `tests/test_pyright_suppression_policy.py`가 파일 단위 `# pyright:` directive 재도입을 차단
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
 - Source smoke check: `python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage`
 - Storage smoke check: `python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage`
+- Release verification: `python scripts/run_release_verification.py`
+- Live-list drift report: `python scripts/check_live_list_drift.py`
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
@@ -493,6 +505,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - `tests/test_encoding_hygiene.py`: UTF-8 without BOM, U+FFFD 금지, 핵심 한글 문자열 round-trip 검증
 - `tests/test_hwpx_export.py`: HWPX 패키지 구조, preview 텍스트, XML escape/줄바꿈 회귀 검증
 - `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
+- `tests/test_pyright_suppression_policy.py`: 파일 단위 pyright directive 금지 정책 검증
 
 ## 9. 성능 최적화 (v16.8)
 

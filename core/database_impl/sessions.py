@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false
-
 from collections.abc import Iterable
 import json
 import logging
@@ -14,12 +12,13 @@ from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 from core.config import Config
+from core.database_impl.contracts import DatabaseMixinHost
 from core.models import SubtitleEntry
 
 logger = logging.getLogger("SubtitleExtractor")
 
 
-class DatabaseSessionMixin:
+class DatabaseSessionMixin(DatabaseMixinHost):
 
     def save_session(self, session_data: object) -> int:
         """세션 저장

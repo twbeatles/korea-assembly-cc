@@ -273,7 +273,7 @@ pip install -r requirements-dev.txt
 
 ### 특별위원회 프리셋 추가
 - `Config.DEFAULT_COMMITTEE_PRESETS`: 국정감사, 국정조사, 국회정보나침반 URL
-- `Config.SPECIAL_COMMITTEE_XCODES`: 현재 검증된 문자열 xcode는 `IO`만 유지
+- `Config.SPECIAL_COMMITTEE_XCODES`: 현재 기본값에는 검증된 문자열 xcode가 없으며, stale `IO` 기본 프리셋은 제거됨
 
 ### 사용자 안내 개선
 - `subtitle_not_found` 메시지 상세화: 가능한 원인, 해결 방법, URL 예시 포함
@@ -483,7 +483,7 @@ pip install -r requirements-dev.txt
 ## 9.9.9 v16.14.7 기능 구현 정합성 보강 (2026-04-14)
 - storage preflight는 이제 디렉터리 probe뿐 아니라 `subtitle_history.db`, `committee_presets.json`, `url_history.json`, `session_recovery.json`의 실제 파일 surface와 SQLite `PRAGMA journal_mode=WAL`까지 검증한다.
 - `core/live_list.py`가 `live_list.asp` URL 생성, payload 파싱, row 정규화, 오류 분류, 자동 선택 정책을 공통화하고, `LiveBroadcastDialog`와 `capture_live`는 같은 helper를 사용한다.
-- `xcode`가 없고 진행 중인 생중계 후보가 여러 개인 경우 첫 후보를 자동 선택하지 않고 원래 URL을 유지하며, 상태바/토스트로 `생중계 목록` 수동 선택을 유도한다.
+- `xcode`가 없으면 진행 중인 생중계 후보가 한 개뿐이어도 자동 선택하지 않고 원래 URL을 유지하며, 상태바/토스트로 위원회 프리셋 또는 `생중계 목록` 수동 선택을 유도한다.
 - `DatabaseManager`는 base schema와 FTS 초기화를 분리하고, `db_available`, `fts_available`, `db_degraded_reason`를 UI에 노출한다. FTS를 사용할 수 없으면 검색은 literal `LIKE`로 fallback한다.
 - URL 히스토리/프리셋 load-save 실패는 더 이상 로그에만 남지 않고 사용자 경고로 노출되며, `persistence_exports.py` / `pipeline_messages.py` dead branch는 정리되었다.
 - `subtitle_extractor.spec` hidden import에 `core.live_list`가 추가되었고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시한다.
@@ -507,6 +507,15 @@ pip install -r requirements-dev.txt
 - `tests/test_live_contract_smoke.py`는 `RUN_LIVE_SMOKE=1`일 때만 실제 `live_list.asp` 응답 schema를 확인한다.
 - 수정한 `pipeline_queue`, `pipeline_state`, `pipeline_messages`, `runtime_driver`는 `TYPE_CHECKING` Host base를 사용해 파일 단위 blanket pyright suppression을 제거했다.
 - 최신 기준선은 `pytest -q` 217 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, import smoke 및 source smoke 2종 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공, frozen EXE 기본 `--smoke`와 `portable.flag` `--smoke-storage-preflight` exit code 0이다.
+
+## 9.9.12 v16.14.7 기능 리스크 개선 전체 반영 (2026-05-18)
+- 기본 URL/본회의 프리셋은 `xcode=10`으로 고정하고, `특별위원회(91)`, `청문회/공청회(99)` 프리셋과 약칭을 추가했다. stale `IO` 기본 프리셋은 제거하되 사용자 저장 프리셋 JSON은 유지한다.
+- `target_xcode`가 없으면 단일 live row도 자동 선택하지 않는다. `resolved_url` 메시지는 `current_url`/history와 `_capture_source_url`, `_capture_source_committee`를 함께 resolved URL 기준으로 갱신한다.
+- `LiveBroadcastDialog`는 `생중계`와 `종료/예정` row를 모두 표시한다. `xcgcd`가 없는 row는 회색 안내 row로 표시하고 URL 적용을 차단한다.
+- runtime archive load는 segment/tail checkpoint fingerprint를 실제 entries와 대조한다. strict load는 실패, salvage는 해당 파일 제외와 `무결성 불일치` 경고로 처리한다.
+- `scripts/check_live_list_drift.py`는 live-list xcode drift를 JSON으로 보고하고, `scripts/run_release_verification.py`는 pytest/pyright/source smoke/live smoke/drift report/PyInstaller/frozen smoke/portable preflight를 순서대로 실행한다.
+- 파일 단위 `# pyright:` directive는 금지하며 `tests/test_pyright_suppression_policy.py`로 회귀를 차단한다.
+- 검증 기준선은 `python scripts/run_release_verification.py` 통과, `pytest` 228 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list drift 없음, clean build 및 frozen/portable smoke exit code 0이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

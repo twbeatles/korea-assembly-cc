@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
-
 from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QCloseEvent
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -9,6 +7,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -235,16 +234,20 @@ class LiveBroadcastDialog(QDialog):
             self.msg_label.show()
         else:
             self.msg_label.hide()
-        sorted_list = sorted(result, key=lambda x: str(x.get("xstat", "")) != "1")
+        sorted_list = sorted(
+            result,
+            key=lambda x: (
+                str(x.get("xstat", "")) != "1",
+                not bool(str(x.get("xcgcd", "")).strip()),
+                str(x.get("xname", "")),
+            ),
+        )
 
         added = 0
-        skipped_without_xcgcd = 0
         for item in sorted_list:
             xstat = str(item.get("xstat", "")).strip()
             xcgcd = str(item.get("xcgcd", "")).strip()
-            if not xcgcd:
-                skipped_without_xcgcd += 1
-                continue
+            can_build_url = bool(xcgcd)
 
             status_text = "생중계" if xstat == "1" else "종료/예정"
             time_str = str(item.get("time", ""))
@@ -258,6 +261,7 @@ class LiveBroadcastDialog(QDialog):
                 [status_text, name, time_fmt, item.get("xcode", "")]
             )
             item_widget.setData(0, Qt.ItemDataRole.UserRole, item)
+            item_widget.setData(1, Qt.ItemDataRole.UserRole, can_build_url)
 
             if xstat == "1":
                 font = item_widget.font(0)
@@ -266,19 +270,18 @@ class LiveBroadcastDialog(QDialog):
                 item_widget.setForeground(0, QColor("#ef4444"))
                 item_widget.setFont(1, font)
             else:
-                item_widget.setForeground(0, QColor("gray"))
+                for column in range(4):
+                    item_widget.setForeground(column, QColor("gray"))
+            if not can_build_url:
+                item_widget.setToolTip(1, "현재 생중계 URL을 만들 수 없습니다.")
+                for column in range(4):
+                    item_widget.setForeground(column, QColor("#9ca3af"))
 
             self.tree.addTopLevelItem(item_widget)
             added += 1
 
         if added == 0:
-            if skipped_without_xcgcd:
-                self.msg_label.setText(
-                    f"현재 선택 가능한 생중계가 없습니다. "
-                    f"(사이트 응답 {skipped_without_xcgcd}건: 생중계 없음)"
-                )
-            else:
-                self.msg_label.setText("현재 선택 가능한 생중계가 없습니다.")
+            self.msg_label.setText("표시할 생중계 항목이 없습니다.")
             self.msg_label.show()
         else:
             self.tree.expandAll()
@@ -289,6 +292,14 @@ class LiveBroadcastDialog(QDialog):
             return
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if data:
+            can_build_url = bool(item.data(1, Qt.ItemDataRole.UserRole))
+            if not can_build_url:
+                QMessageBox.information(
+                    self,
+                    "URL 생성 불가",
+                    "이 항목은 현재 생중계 URL을 만들 수 없습니다.",
+                )
+                return
             self.selected_broadcast = data
             self.accept()
 

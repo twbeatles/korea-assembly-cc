@@ -189,7 +189,9 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
                 segment_index + 1,
             )
             self._write_runtime_manifest()
-            self._write_runtime_tail_checkpoint(list(self.subtitles))
+            self._write_runtime_tail_checkpoint(
+                self._clone_runtime_tail_entries_under_lock()
+            )
             self._schedule_ui_refresh(count=True, render=True, force_full=True)
             self._maybe_schedule_runtime_segment_flush()
 

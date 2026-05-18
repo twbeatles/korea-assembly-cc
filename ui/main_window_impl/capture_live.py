@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
 
 import json
 import re
 from importlib import import_module
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -28,7 +26,7 @@ def _capture_public() -> Any:
     return import_module("ui.main_window_capture")
 
 
-CaptureLiveBase = object
+CaptureLiveBase = CaptureLiveHost if TYPE_CHECKING else object
 
 
 class MainWindowCaptureLiveMixin(CaptureLiveBase):
@@ -372,7 +370,7 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                         target_xcode=target_xcode,
                     )
                     if selection.get("ok") and isinstance(selection.get("row"), dict):
-                        row = selection["row"]
+                        row = cast(dict[str, str], selection["row"])
                         xcgcd = str(row.get("xcgcd", "")).strip()
                         logger.info(
                             "페이지 후보 매칭 성공: reason=%s, xcode=%s, xcgcd=%s",
@@ -411,7 +409,7 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                             target_xcode=target_xcode,
                         )
                         if selection.get("ok") and isinstance(selection.get("row"), dict):
-                            row = selection["row"]
+                            row = cast(dict[str, str], selection["row"])
                             xcgcd = str(row.get("xcgcd", "")).strip()
                             logger.info(
                                 "메인 페이지 후보 매칭 성공: reason=%s, xcode=%s, xcgcd=%s",
@@ -533,8 +531,14 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
             target_xcode = self._get_query_param(original_url, "xcode").strip() or None
             if isinstance(live_list_issue, dict):
                 issue_reason = str(live_list_issue.get("reason", "") or "").strip()
-                candidate_count = int(live_list_issue.get("candidate_count", 0) or 0)
-                if issue_reason in {"ambiguous_live", "ambiguous_xcode"}:
+                candidate_count = int(
+                    cast(Any, live_list_issue.get("candidate_count", 0)) or 0
+                )
+                if issue_reason in {
+                    "ambiguous_live",
+                    "ambiguous_xcode",
+                    "target_xcode_required",
+                }:
                     self._notify_live_selection_issue(
                         issue_reason,
                         target_xcode=target_xcode,

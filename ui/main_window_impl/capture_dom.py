@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
 
 from importlib import import_module
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from selenium.common.exceptions import (
     NoSuchElementException,
@@ -21,7 +19,7 @@ def _capture_public() -> Any:
     return import_module("ui.main_window_capture")
 
 
-CaptureDomBase = object
+CaptureDomBase = CaptureDomHost if TYPE_CHECKING else object
 
 
 class MainWindowCaptureDomMixin(CaptureDomBase):

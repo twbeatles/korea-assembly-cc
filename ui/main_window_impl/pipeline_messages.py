@@ -241,8 +241,21 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             elif msg_type == "resolved_url":
                 resolved_url = str(data or "").strip()
                 if resolved_url:
+                    resolved_tag = self._autodetect_tag(
+                        resolved_url
+                    ) or self._get_capture_source_committee(fallback_to_url=False)
+                    self._set_capture_source_metadata(
+                        resolved_url,
+                        resolved_tag,
+                        headless=bool(
+                            self.__dict__.get("_capture_source_headless", False)
+                        ),
+                        realtime=bool(
+                            self.__dict__.get("_capture_source_realtime", False)
+                        ),
+                    )
                     self.current_url = resolved_url
-                    self._add_to_history(resolved_url)
+                    self._add_to_history(resolved_url, resolved_tag)
                     idx = self.url_combo.findData(resolved_url)
                     if idx >= 0:
                         self.url_combo.setCurrentIndex(idx)

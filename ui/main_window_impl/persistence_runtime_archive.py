@@ -109,11 +109,34 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             if not self._payload_has_runtime_entries_fingerprint(expected):
                 return True
             current = self._build_runtime_entries_fingerprint(entries)
+            try:
+                expected_count = int(expected.get("entry_count", 0) or 0)
+            except Exception:
+                return False
             return (
-                int(current["entry_count"]) == int(expected.get("entry_count", 0) or 0)
+                int(current["entry_count"]) == expected_count
                 and current["first_entry_id"] == str(expected.get("first_entry_id") or "")
                 and current["last_entry_id"] == str(expected.get("last_entry_id") or "")
                 and current["entries_digest"] == str(expected.get("entries_digest") or "")
+            )
+
+    def _runtime_entries_integrity_error(
+            self,
+            entries: Iterable[SubtitleEntry],
+            expected: dict[str, Any] | None,
+            *,
+            source: str,
+        ) -> str | None:
+            if not isinstance(expected, dict):
+                return None
+            if self._runtime_entries_fingerprint_matches(entries, expected):
+                return None
+            current = self._build_runtime_entries_fingerprint(entries)
+            return (
+                f"{source} 무결성 불일치: "
+                f"expected count={expected.get('entry_count', '')}, "
+                f"digest={expected.get('entries_digest', '')}; "
+                f"actual count={current['entry_count']}, digest={current['entries_digest']}"
             )
 
     def _build_runtime_archive_snapshot(self) -> dict[str, Any] | None:
@@ -220,7 +243,9 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             archive_token: str = "",
             run_id: int | None = None,
             lineage_id: str = "",
+            tail_revision: int = 0,
         ) -> None:
+            fingerprint = self._build_runtime_entries_fingerprint(entries)
             head_items: list[tuple[str, object]] = [
                 ("format", "runtime_tail_checkpoint_v1"),
                 ("version", Config.VERSION),
@@ -231,6 +256,11 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 ("archived_count", int(archived_count)),
                 ("archived_chars", int(archived_chars)),
                 ("archived_words", int(archived_words)),
+                ("entry_count", fingerprint["entry_count"]),
+                ("first_entry_id", fingerprint["first_entry_id"]),
+                ("last_entry_id", fingerprint["last_entry_id"]),
+                ("entries_digest", fingerprint["entries_digest"]),
+                ("tail_revision", int(tail_revision)),
             ]
             if archive_token:
                 head_items.append(("archive_token", archive_token))
@@ -470,7 +500,11 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 return None
             tail_revision = int(self.__dict__.get("_runtime_tail_revision", 0) or 0)
             current_url, committee_name, _duration = self._build_session_save_context()
-            entries = prepared_entries if prepared_entries is not None else list(self.subtitles)
+            entries = (
+                prepared_entries
+                if prepared_entries is not None
+                else self._clone_runtime_tail_entries_under_lock()
+            )
             self._write_runtime_tail_checkpoint_to_path(
                 Path(checkpoint_path),
                 list(entries),
@@ -482,9 +516,14 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 archive_token=str(self.__dict__.get("_runtime_archive_token", "") or ""),
                 run_id=self.__dict__.get("_runtime_archive_run_id"),
                 lineage_id=self._ensure_session_lineage_id(),
+                tail_revision=tail_revision,
             )
             self._runtime_tail_checkpoint_revision = tail_revision
             return checkpoint_path
+
+    def _clone_runtime_tail_entries_under_lock(self) -> list[SubtitleEntry]:
+            with self.subtitle_lock:
+                return [entry.clone() for entry in self.subtitles]
 
     def _record_runtime_recovery_snapshot_from_context(
             self,
@@ -536,6 +575,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 archive_token=archive_token,
                 run_id=(int(run_id) if run_id is not None else None),
                 lineage_id=lineage_id,
+                tail_revision=captured_tail_revision,
             )
             self._write_runtime_manifest_to_path(
                 manifest_file_path,
@@ -561,7 +601,9 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 or int(self.__dict__.get("_runtime_tail_revision", 0) or 0) != captured_tail_revision
             ):
                 self._write_runtime_manifest()
-                self._write_runtime_tail_checkpoint(list(self.subtitles))
+                self._write_runtime_tail_checkpoint(
+                    self._clone_runtime_tail_entries_under_lock()
+                )
                 return False
 
             self._runtime_tail_checkpoint_revision = captured_tail_revision
@@ -585,7 +627,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             entries = (
                 list(prepared_entries)
                 if prepared_entries is not None
-                else list(self.subtitles)
+                else self._clone_runtime_tail_entries_under_lock()
             )
             return self._record_runtime_recovery_snapshot_from_context(
                 entries,

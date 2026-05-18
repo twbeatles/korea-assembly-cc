@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Sequence
 
 import pytest
 
@@ -688,7 +688,7 @@ def _write_runtime_entries_file(
     path: Path,
     *,
     format_name: str,
-    subtitles: list[object],
+    subtitles: Sequence[object],
     extra: dict[str, object] | None = None,
 ) -> None:
     payload: dict[str, object] = {
@@ -712,6 +712,13 @@ def _build_runtime_manifest_loader_window() -> Any:
     win._runtime_segment_cache_keys = []
     win._runtime_segment_search_text_cache = {}
     return win
+
+
+def _runtime_fingerprint(entries: list[SubtitleEntry]) -> dict[str, object]:
+    return MainWindow._build_runtime_entries_fingerprint(
+        _build_runtime_manifest_loader_window(),
+        entries,
+    )
 
 
 def test_load_runtime_manifest_payload_salvages_missing_segment_file(tmp_path):
@@ -803,6 +810,87 @@ def test_load_runtime_manifest_payload_salvages_corrupt_segment_file(tmp_path):
     assert any("segment_000002.json" in item for item in payload["recovery_warnings"])
 
 
+def test_load_runtime_manifest_payload_rejects_segment_integrity_mismatch(tmp_path):
+    runtime_root = tmp_path / "runtime_segment_mismatch"
+    runtime_root.mkdir()
+    segment_entries = [SubtitleEntry("세그먼트 자막", entry_id="seg-1")]
+    tail_entries = [SubtitleEntry("tail 자막", entry_id="tail-1")]
+    fingerprint = _runtime_fingerprint(segment_entries)
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=segment_entries,
+        extra={**fingerprint, "entries_digest": "bad-digest"},
+    )
+    _write_runtime_entries_file(
+        runtime_root / "tail_checkpoint.json",
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=tail_entries,
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "tail_checkpoint": "tail_checkpoint.json",
+                "segments": [{"path": "segment_000001.json", **fingerprint}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="무결성 불일치"):
+        MainWindow._load_runtime_manifest_payload(
+            _build_runtime_manifest_loader_window(),
+            manifest_path,
+            allow_salvage=False,
+        )
+
+
+def test_load_runtime_manifest_payload_salvages_segment_integrity_mismatch(tmp_path):
+    runtime_root = tmp_path / "runtime_segment_mismatch_salvage"
+    runtime_root.mkdir()
+    segment_entries = [SubtitleEntry("세그먼트 자막", entry_id="seg-1")]
+    tail_entries = [SubtitleEntry("tail 자막", entry_id="tail-1")]
+    fingerprint = _runtime_fingerprint(segment_entries)
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=segment_entries,
+        extra={**fingerprint, "entries_digest": "bad-digest"},
+    )
+    _write_runtime_entries_file(
+        runtime_root / "tail_checkpoint.json",
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=tail_entries,
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "tail_checkpoint": "tail_checkpoint.json",
+                "segments": [{"path": "segment_000001.json", **fingerprint}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = MainWindow._load_runtime_manifest_payload(
+        _build_runtime_manifest_loader_window(),
+        manifest_path,
+        allow_salvage=True,
+    )
+
+    assert [entry.text for entry in payload["subtitles"]] == ["tail 자막"]
+    assert payload["skipped_files"] == 1
+    assert any("무결성 불일치" in item for item in payload["recovery_warnings"])
+
+
 def test_load_runtime_manifest_payload_salvages_corrupt_tail_checkpoint(tmp_path):
     runtime_root = tmp_path / "runtime_corrupt_tail"
     runtime_root.mkdir()
@@ -838,6 +926,87 @@ def test_load_runtime_manifest_payload_salvages_corrupt_tail_checkpoint(tmp_path
     assert [entry.text for entry in payload["subtitles"]] == ["세그먼트 자막"]
     assert payload["skipped_files"] == 1
     assert any("tail_checkpoint.json" in item for item in payload["recovery_warnings"])
+
+
+def test_load_runtime_manifest_payload_rejects_tail_integrity_mismatch(tmp_path):
+    runtime_root = tmp_path / "runtime_tail_mismatch"
+    runtime_root.mkdir()
+    segment_entries = [SubtitleEntry("세그먼트 자막", entry_id="seg-1")]
+    tail_entries = [SubtitleEntry("tail 자막", entry_id="tail-1")]
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=segment_entries,
+    )
+    tail_fingerprint = _runtime_fingerprint(tail_entries)
+    _write_runtime_entries_file(
+        runtime_root / "tail_checkpoint.json",
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=tail_entries,
+        extra={**tail_fingerprint, "entry_count": 99},
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "tail_checkpoint": "tail_checkpoint.json",
+                "segments": [{"path": "segment_000001.json"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="무결성 불일치"):
+        MainWindow._load_runtime_manifest_payload(
+            _build_runtime_manifest_loader_window(),
+            manifest_path,
+            allow_salvage=False,
+        )
+
+
+def test_load_runtime_manifest_payload_salvages_tail_integrity_mismatch(tmp_path):
+    runtime_root = tmp_path / "runtime_tail_mismatch_salvage"
+    runtime_root.mkdir()
+    segment_entries = [SubtitleEntry("세그먼트 자막", entry_id="seg-1")]
+    tail_entries = [SubtitleEntry("tail 자막", entry_id="tail-1")]
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=segment_entries,
+    )
+    tail_fingerprint = _runtime_fingerprint(tail_entries)
+    _write_runtime_entries_file(
+        runtime_root / "tail_checkpoint.json",
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=tail_entries,
+        extra={**tail_fingerprint, "entry_count": 99},
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "tail_checkpoint": "tail_checkpoint.json",
+                "segments": [{"path": "segment_000001.json"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = MainWindow._load_runtime_manifest_payload(
+        _build_runtime_manifest_loader_window(),
+        manifest_path,
+        allow_salvage=True,
+    )
+
+    assert [entry.text for entry in payload["subtitles"]] == ["세그먼트 자막"]
+    assert payload["skipped_files"] == 1
+    assert any("무결성 불일치" in item for item in payload["recovery_warnings"])
 
 
 def test_load_runtime_manifest_payload_salvages_from_sibling_files_when_manifest_is_corrupt(
