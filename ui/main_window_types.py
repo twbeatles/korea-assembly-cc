@@ -25,7 +25,6 @@ from PyQt6.QtWidgets import (
 
 from core.live_capture import LiveCaptureLedger
 from core.models import CaptureSessionState, SubtitleEntry
-from core.subtitle_processor import SubtitleProcessor
 from ui.main_window_common import SearchMatch, WorkerQueueMessage
 from ui.widgets import CollapsibleGroupBox, ToastWidget
 
@@ -52,7 +51,6 @@ if TYPE_CHECKING:
         _last_processed_raw: str
         _stream_start_time: float | None
         subtitles: list[SubtitleEntry]
-        subtitle_processor: SubtitleProcessor
         keywords: list[str]
         alert_keywords: list[str]
         _alert_keywords_cache: list[tuple[str, str]]

@@ -124,7 +124,6 @@ korea-assembly-cc/
     models.py
     reflow.py
     subtitle_pipeline.py
-    subtitle_processor.py
     text_utils.py
     hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim

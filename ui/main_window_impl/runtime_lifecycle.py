@@ -592,6 +592,12 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
                 self._write_shutdown_diagnostic()
             except Exception:
                 logger.debug("강제 종료 전 진단 저장 실패", exc_info=True)
+            db = self.__dict__.get("db")
+            if db is not None:
+                try:
+                    db.checkpoint("PASSIVE")
+                except Exception:
+                    logger.debug("강제 종료 전 DB checkpoint 실패", exc_info=True)
             self._force_exit_process(1)
             return True
 
@@ -672,17 +678,46 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             return
         event = a0
         if self.minimize_to_tray and self.tray_icon.isVisible():
-            self.hide()
-            self.tray_icon.showMessage(
-                Config.APP_NAME,
-                "프로그램이 트레이로 최소화되었습니다.\n트레이 아이콘을 더블클릭하여 다시 열 수 있습니다.",
-                QSystemTrayIcon.MessageIcon.Information,
-                2000,
-            )
-            event.ignore()
-            return
-
-        if self.is_running:
+            if self.is_running:
+                # 추출 중에는 사용자 의도를 한 번 더 확인 (백그라운드 캡처 지속 vs 실제 종료)
+                reply = main_window_mod.QMessageBox.question(
+                    self,
+                    "트레이 최소화 또는 종료",
+                    "추출 중입니다.\n"
+                    "[Yes] 트레이로 최소화하고 백그라운드에서 계속 캡처\n"
+                    "[No] 추출을 중지하고 프로그램을 종료\n"
+                    "[Cancel] 작업 유지",
+                    main_window_mod.QMessageBox.StandardButton.Yes
+                    | main_window_mod.QMessageBox.StandardButton.No
+                    | main_window_mod.QMessageBox.StandardButton.Cancel,
+                )
+                if reply == main_window_mod.QMessageBox.StandardButton.Cancel:
+                    event.ignore()
+                    return
+                if reply == main_window_mod.QMessageBox.StandardButton.Yes:
+                    self.hide()
+                    self.tray_icon.showMessage(
+                        Config.APP_NAME,
+                        "추출 중 상태로 트레이에 최소화되었습니다.\n"
+                        "트레이 아이콘을 더블클릭하면 다시 열 수 있습니다.",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        2500,
+                    )
+                    event.ignore()
+                    return
+                # No → 추출 중지 후 종료 흐름 진행
+                self._stop(for_app_exit=True)
+            else:
+                self.hide()
+                self.tray_icon.showMessage(
+                    Config.APP_NAME,
+                    "프로그램이 트레이로 최소화되었습니다.\n트레이 아이콘을 더블클릭하여 다시 열 수 있습니다.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    2000,
+                )
+                event.ignore()
+                return
+        elif self.is_running:
             reply = main_window_mod.QMessageBox.question(
                 self,
                 "종료",
@@ -786,7 +821,13 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
         db = self.db
         if db is not None:
             try:
-                self._shutdown_db_worker(timeout=0.0)
+                self._shutdown_db_worker(
+                    timeout=max(0.0, float(Config.SAVE_THREAD_SHUTDOWN_TIMEOUT))
+                )
+                try:
+                    db.checkpoint("TRUNCATE")
+                except Exception:
+                    logger.debug("종료 단계 DB checkpoint 실패", exc_info=True)
                 db.close_all()
             except Exception as e:
                 logger.debug(f"DB 연결 종료 오류: {e}")

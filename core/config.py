@@ -461,6 +461,10 @@ class Config:
     # 글로벌 compact 히스토리 메모리 상한 (공백 제거 기준 글자 수)
     CONFIRMED_COMPACT_MAX_LEN = 50000
 
+    # preview / live-row delta 추출 시 비교에 사용할 최근 히스토리 윈도우 길이
+    # CONFIRMED_COMPACT_MAX_LEN 의 작은 슬라이스로 동작하며, 두 값은 함께 튜닝한다.
+    RECENT_HISTORY_COMPACT_LENGTH = 5000
+
     # 자동 줄넘김 정리 기본값
     AUTO_CLEAN_NEWLINES_DEFAULT = True
 

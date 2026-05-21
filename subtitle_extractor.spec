@@ -80,7 +80,6 @@ HIDDEN_IMPORTS = [
     'core.models',
     'core.reflow',
     'core.subtitle_pipeline',
-    'core.subtitle_processor',
     'core.text_utils',
     'core.utils',
     'selenium.common.exceptions',

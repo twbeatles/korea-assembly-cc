@@ -58,12 +58,31 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default="",
         help="smoke preflight에 사용할 임시 저장소 루트입니다.",
     )
+    parser.add_argument(
+        "--smoke-output",
+        default="",
+        help=(
+            "smoke 결과 JSON을 stdout 외에 추가로 기록할 파일 경로입니다. "
+            "frozen + console=False 환경에서 stdout이 사라지는 경우 사용합니다."
+        ),
+    )
     return parser.parse_args(argv)
 
 
-def _print_json_line(payload: dict[str, object]) -> None:
+def _print_json_line(payload: dict[str, object], *, output_path: str = "") -> None:
     _ensure_cli_console_output()
-    print(json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+    rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    print(rendered, flush=True)
+    target = str(output_path or "").strip()
+    if not target:
+        return
+    try:
+        out_path = Path(target).resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(rendered + "\n", encoding="utf-8")
+    except Exception:
+        # smoke의 신뢰도는 exit code로 판단되므로 파일 기록 실패는 무시한다.
+        pass
 
 
 def _run_storage_preflight_for_cli(storage_dir: str = "") -> tuple[bool, str, dict[str, str]]:
@@ -92,6 +111,7 @@ def _run_storage_preflight_for_cli(storage_dir: str = "") -> tuple[bool, str, di
 
 
 def _run_smoke(args: argparse.Namespace) -> int:
+    output_path = str(getattr(args, "smoke_output", "") or "")
     try:
         from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: F401
         from PyQt6.QtGui import QFont  # noqa: F401
@@ -107,7 +127,8 @@ def _run_smoke(args: argparse.Namespace) -> int:
                 "kind": "smoke",
                 "error_type": "dependency_import",
                 "error": str(exc),
-            }
+            },
+            output_path=output_path,
         )
         return 1
 
@@ -127,12 +148,14 @@ def _run_smoke(args: argparse.Namespace) -> int:
             "resource_ok": resource_ok,
             "imports_ok": imports_ok,
             "error": error,
-        }
+        },
+        output_path=output_path,
     )
     return 0 if smoke_ok else 2
 
 
 def _run_storage_preflight_smoke(args: argparse.Namespace) -> int:
+    output_path = str(getattr(args, "smoke_output", "") or "")
     try:
         from core.config import Config
     except ImportError as exc:
@@ -142,7 +165,8 @@ def _run_storage_preflight_smoke(args: argparse.Namespace) -> int:
                 "kind": "storage_preflight",
                 "error_type": "dependency_import",
                 "error": str(exc),
-            }
+            },
+            output_path=output_path,
         )
         return 1
 
@@ -154,7 +178,8 @@ def _run_storage_preflight_smoke(args: argparse.Namespace) -> int:
             "version": Config.VERSION,
             "storage": storage_payload,
             "error": error,
-        }
+        },
+        output_path=output_path,
     )
     return 0 if ok else 2
 

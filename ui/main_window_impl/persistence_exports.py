@@ -504,6 +504,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
 
             def do_save_with_error(filepath):
                 last_error: Exception | None = None
+                stop_event = self.__dict__.get("stop_event")
                 for attempt in range(2):
                     try:
                         do_save(filepath)
@@ -514,7 +515,12 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                     except Exception as e:
                         last_error = e
                         logger.warning(f"HWP 저장 재시도 실패 ({attempt + 1}/2): {e}")
-                        time.sleep(1)
+                        # 종료 신호를 즉시 반영하기 위해 stop_event.wait 사용
+                        if stop_event is not None and hasattr(stop_event, "wait"):
+                            if stop_event.wait(timeout=1.0):
+                                break
+                        else:
+                            time.sleep(1)
                 if last_error is None:
                     last_error = RuntimeError("HWP 저장이 완료되지 않았습니다.")
                 self._emit_control_message(

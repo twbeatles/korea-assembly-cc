@@ -2,7 +2,7 @@
 # pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
 from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QCloseEvent
+from PyQt6.QtGui import QColor, QCloseEvent, QHideEvent, QShowEvent
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PyQt6.QtWidgets import (
     QDialog,
@@ -96,6 +96,11 @@ class LiveBroadcastDialog(QDialog):
         timer.setInterval(interval_ms)
         timer.start()
 
+    def _pause_auto_refresh_timer(self) -> None:
+        timer = self._auto_refresh_timer
+        if timer is not None and timer.isActive():
+            timer.stop()
+
     def _stop_auto_refresh_timer(self) -> None:
         timer = self._auto_refresh_timer
         self._auto_refresh_timer = None
@@ -103,6 +108,19 @@ class LiveBroadcastDialog(QDialog):
             return
         timer.stop()
         timer.deleteLater()
+
+    def showEvent(self, a0: QShowEvent | None) -> None:
+        # 다이얼로그가 다시 표시될 때 자동 새로고침 재개
+        if not self._is_closing:
+            self._start_auto_refresh_timer()
+        if a0 is not None:
+            super().showEvent(a0)
+
+    def hideEvent(self, a0: QHideEvent | None) -> None:
+        # 다이얼로그가 숨겨지면 자동 새로고침 일시정지 (외부 API 호출 절약)
+        self._pause_auto_refresh_timer()
+        if a0 is not None:
+            super().hideEvent(a0)
 
     def _abort_active_reply(self) -> None:
         timeout_timer = self._active_timeout_timer
@@ -225,11 +243,17 @@ class LiveBroadcastDialog(QDialog):
             return
 
         result = payload.get("result") or []
+        dropped_rows = int(payload.get("dropped_rows", 0) or 0)
         if not result:
-            self.msg_label.setText("표시할 생중계 항목이 없습니다.")
+            if dropped_rows > 0:
+                self.msg_label.setText(
+                    f"표시할 생중계 항목이 없습니다. (손상 항목 {dropped_rows}개 제외)"
+                )
+            else:
+                self.msg_label.setText("표시할 생중계 항목이 없습니다.")
+            self.msg_label.show()
             return
 
-        dropped_rows = int(payload.get("dropped_rows", 0) or 0)
         if dropped_rows > 0:
             self.msg_label.setText(f"일부 손상 항목 {dropped_rows}개를 제외했습니다.")
             self.msg_label.show()
