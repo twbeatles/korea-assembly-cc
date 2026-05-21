@@ -211,8 +211,12 @@ pip install -r requirements-dev.txt
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
 - Source smoke check: `python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage`
+- Constructor smoke check: `python "국회의사중계 자막.py" --smoke --smoke-instantiate-window --smoke-storage-dir .pytest_tmp/smoke-window`
 - Storage smoke check: `python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage`
-- Frozen smoke check: `pyinstaller --clean subtitle_extractor.spec` 후 EXE `--smoke`, EXE 옆 `portable.flag` 생성 후 `--smoke-storage-preflight` exit code 0 확인
+- Release verification: `python scripts/run_release_verification.py`
+- Source-only release verification: `python scripts/run_release_verification.py --offline --skip-build --instantiate-window`
+- Live-list drift report: `python scripts/check_live_list_drift.py` (`--fail-on-drift`, `--fail-on-name-drift`로 strict mode)
+- Frozen smoke check: `pyinstaller --clean subtitle_extractor.spec` 후 EXE `--smoke`, 필요 시 `--smoke-instantiate-window`, EXE 옆 `portable.flag` 생성 후 `--smoke-storage-preflight` exit code 0 확인
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
@@ -516,6 +520,14 @@ pip install -r requirements-dev.txt
 - `scripts/check_live_list_drift.py`는 live-list xcode drift를 JSON으로 보고하고, `scripts/run_release_verification.py`는 pytest/pyright/source smoke/live smoke/drift report/PyInstaller/frozen smoke/portable preflight를 순서대로 실행한다.
 - 파일 단위 `# pyright:` directive는 금지하며 `tests/test_pyright_suppression_policy.py`로 회귀를 차단한다.
 - 검증 기준선은 `python scripts/run_release_verification.py` 통과, `pytest` 228 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list drift 없음, clean build 및 frozen/portable smoke exit code 0이다.
+
+## 9.9.13 v16.14.7 리스크 리뷰 후속 검증 자동화 (2026-05-21)
+- `--smoke-instantiate-window`는 기본 smoke를 opt-in으로 확장해 `QApplication` + `MainWindow()` 생성/정리까지 확인한다. 실패 시 `window_instantiated=false`, `error_type=window_instantiation`, exit code 2를 반환한다.
+- `scripts/check_live_list_drift.py`는 xcode set drift 외에 `api_code_to_names`, `api_code_to_descriptions`, Config 이름/약칭 매핑, `name_mismatch`, `name_drift`를 보고하며 strict 옵션 `--fail-on-drift`, `--fail-on-name-drift`를 제공한다.
+- 자동 URL 보완은 `live_list` fetch/schema/network 실패 payload를 보존하고, 최종 fallback 실패 시 status/toast에 `live_list 조회 실패(<error_type>): <error>`를 표시한다.
+- `core.file_io.next_available_path()`는 자동 백업 같은 파일명 충돌을 `_001`, `_002` suffix로 회피한다. 세션/백업 기본 파일명은 microsecond timestamp를 사용한다.
+- `scripts/run_release_verification.py`는 `--offline`, `--skip-live`, `--skip-build`, `--instantiate-window`, drift strict 옵션을 제공하며, 기본 실행은 기존 전체 릴리스 검증을 유지한다.
+- 검증 기준선은 `python scripts/run_release_verification.py` 통과, `pytest` 243 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list `drift=false`, `name_drift=false`, clean build 및 frozen/portable smoke exit code 0이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

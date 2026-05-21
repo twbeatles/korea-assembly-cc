@@ -321,6 +321,14 @@ korea-assembly-cc/
 - **typing policy**: 파일 단위 `# pyright:` directive는 금지한다. 남은 mixin 계약은 `ui/main_window_impl/contracts.py`, `ui/main_window_types.py`, `core/database_impl/contracts.py`와 `tests/test_pyright_suppression_policy.py`로 관리한다.
 - **회귀 기준선**: `python scripts/run_release_verification.py` 통과. `pytest` 228 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list drift 없음, clean build 및 frozen/portable smoke exit code 0.
 
+### v16.14.7 리스크 리뷰 후속 검증 자동화 메모 (2026-05-21)
+- **constructor smoke opt-in**: `국회의사중계 자막.py --smoke-instantiate-window`는 기본 `--smoke`의 import/resource/storage 검증을 유지하면서 `QApplication` + `MainWindow()` 생성/정리까지 확인한다. 실패 시 JSON에 `window_instantiated=false`, `error_type=window_instantiation`을 담고 exit code 2로 종료한다.
+- **live-list name drift**: `scripts/check_live_list_drift.py`는 기존 xcode set drift를 `drift`로 유지하고, API name/description과 Config 이름/약칭 매칭 결과를 `name_mismatch`, `name_drift`로 별도 보고한다. strict 옵션은 `--fail-on-drift`, `--fail-on-name-drift`다.
+- **live-list failure surfacing**: 자동 URL 보완 중 `live_list` fetch/schema/network 실패 payload는 selection issue로 보존하고, 최종 fallback 실패 시 status/toast에 `live_list 조회 실패(<error_type>): <error>`를 노출한다.
+- **backup/session path collision guard**: `core.file_io.next_available_path()`를 추가했고 `core.utils`에서 재수출한다. 세션/백업 기본명은 microsecond timestamp를 사용하며 자동 백업은 같은 tick 충돌 시 `_001`, `_002` suffix로 기존 파일을 보존한다.
+- **release verifier options**: `scripts/run_release_verification.py`는 `--offline`, `--skip-live`, `--skip-build`, `--instantiate-window`, drift strict 옵션을 제공한다. 기본 실행은 pytest/pyright/source smoke/live smoke/drift/PyInstaller/frozen smoke/portable preflight 전체 경로를 유지한다.
+- **회귀 기준선**: `python scripts/run_release_verification.py` 통과. `pytest` 243 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list `drift=false`, `name_drift=false`, clean build 및 frozen/portable smoke exit code 0.
+
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
 - **실행 중 옵션 잠금 확대**: URL, 프리셋, 생중계 목록, 태그 편집, 실시간 저장, 헤드리스 모드를 `_sync_runtime_action_state()`로 함께 disable
@@ -483,9 +491,11 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - pyright suppression policy: `tests/test_pyright_suppression_policy.py`가 파일 단위 `# pyright:` directive 재도입을 차단
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
 - Source smoke check: `python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage`
+- Constructor smoke check: `python "국회의사중계 자막.py" --smoke --smoke-instantiate-window --smoke-storage-dir .pytest_tmp/smoke-window`
 - Storage smoke check: `python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage`
 - Release verification: `python scripts/run_release_verification.py`
-- Live-list drift report: `python scripts/check_live_list_drift.py`
+- Source-only release verification: `python scripts/run_release_verification.py --offline --skip-build --instantiate-window`
+- Live-list drift report: `python scripts/check_live_list_drift.py` (`--fail-on-drift`, `--fail-on-name-drift`로 strict mode)
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
@@ -530,7 +540,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 4. **다국어 지원**: i18n 프레임워크 도입
 5. ~~설정 UI~~: 메뉴에서 대부분 설정 가능
 6. **PyInstaller 패키징**: 릴리스 전 `pyinstaller --clean subtitle_extractor.spec` clean build와 frozen 실행 smoke 확인
-   - 생성된 EXE는 기본 `--smoke` exit code 0을 확인하고, EXE 옆 `portable.flag` 생성 후 `--smoke-storage-preflight` exit code 0을 확인한다.
+   - 생성된 EXE는 기본 `--smoke` exit code 0을 확인하고, 필요 시 `--smoke-instantiate-window`로 `MainWindow()` 생성 smoke를 추가한다. EXE 옆 `portable.flag` 생성 후 `--smoke-storage-preflight` exit code 0을 확인한다.
 
 ## 10-1. v16.12.1 안정화 패치 (2026-02-25)
 

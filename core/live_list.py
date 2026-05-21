@@ -171,9 +171,15 @@ def summarize_live_selection_issue(
     *,
     target_xcode: str | None = None,
     candidate_count: int = 0,
+    error_type: str = "",
+    error: str = "",
 ) -> str:
     normalized_reason = str(reason or "").strip()
     xcode = str(target_xcode or "").strip()
+    if normalized_reason == "live_list_error":
+        normalized_error_type = str(error_type or "unknown").strip() or "unknown"
+        normalized_error = str(error or "알 수 없는 오류").strip() or "알 수 없는 오류"
+        return f"live_list 조회 실패({normalized_error_type}): {normalized_error}"
     if normalized_reason == "ambiguous_xcode" and xcode:
         return (
             f"xcode={xcode}에 해당하는 생중계 후보가 {candidate_count}개여서 "

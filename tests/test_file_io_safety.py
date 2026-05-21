@@ -41,3 +41,23 @@ def test_atomic_write_text_overwrite_keeps_content_integrity(tmp_path):
     utils.atomic_write_text(target, content, encoding="utf-8")
 
     assert target.read_text(encoding="utf-8") == content
+
+
+def test_next_available_path_returns_original_when_missing(tmp_path):
+    target = tmp_path / "backup_20260521_120000_000001.json"
+
+    assert utils.next_available_path(target) == target
+
+
+def test_next_available_path_adds_numeric_suffix_without_overwriting(tmp_path):
+    target = tmp_path / "backup_20260521_120000_000001.json"
+    target.write_text("first", encoding="utf-8")
+    (tmp_path / "backup_20260521_120000_000001_001.json").write_text(
+        "second",
+        encoding="utf-8",
+    )
+
+    assert (
+        utils.next_available_path(target)
+        == tmp_path / "backup_20260521_120000_000001_002.json"
+    )

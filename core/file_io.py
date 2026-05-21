@@ -47,6 +47,28 @@ def iter_serialized_subtitles(
         yield entry.to_dict()
 
 
+def next_available_path(
+    path: Union[str, Path],
+    *,
+    max_attempts: int = 999,
+) -> Path:
+    """이미 존재하는 파일을 덮지 않는 다음 경로를 반환한다."""
+    target = Path(path)
+    if not target.exists():
+        return target
+
+    if max_attempts < 1:
+        raise FileExistsError(f"available path attempts exhausted: {target}")
+
+    stem = target.stem
+    suffix = target.suffix
+    for index in range(1, max_attempts + 1):
+        candidate = target.with_name(f"{stem}_{index:03d}{suffix}")
+        if not candidate.exists():
+            return candidate
+    raise FileExistsError(f"available path attempts exhausted: {target}")
+
+
 def atomic_write_json_stream(
     path: Union[str, Path],
     *,

@@ -6,13 +6,14 @@
 정적 분석 전용 `typings/`와 workspace temp(`.pytest_tmp`)는 번들에 포함하지 않습니다.
 `portable.flag`, `settings.ini`, `session_recovery.json`, `.storage_probe` 같은 저장소/runtime state는 런타임 전용이며 번들에 포함하지 않습니다.
 생중계 목록 자동 갱신, 프리셋 도메인 검증, reset/merge/runtime flush hardening,
-persistent snapshot/terminal queue/conditional FTS rebuild/smoke CLI는 런타임 로직 변경만 포함하며,
+persistent snapshot/terminal queue/conditional FTS rebuild/smoke CLI/constructor smoke는 런타임 로직 변경만 포함하며,
 README/assets 외 추가 datas는 필요하지 않습니다.
-smoke CLI는 표준 라이브러리 argparse/json/ctypes와 기존 PyQt6/Selenium/Core import surface만 사용합니다.
+smoke CLI는 표준 라이브러리 argparse/json/ctypes와 기존 PyQt6/Selenium/Core/UI import surface만 사용합니다.
 facade 뒤 내부 구현은 `core.database_impl`, `core.subtitle_pipeline_impl`,
 `ui.main_window_impl.persistence_runtime_*` hidden import로 고정합니다.
 DB mixin 타입 계약용 `core.database_impl.contracts`는 런타임 import 표면에 포함합니다.
 `scripts/check_live_list_drift.py`, `scripts/run_release_verification.py`는 release 검증용 소스 스크립트이며 frozen 번들에 포함하지 않습니다.
+해당 스크립트의 drift strict/offline/skip-build 옵션도 소스 검증 경로 전용입니다.
 
 빌드 명령: pyinstaller --clean subtitle_extractor.spec
 """

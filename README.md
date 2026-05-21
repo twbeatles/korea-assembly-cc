@@ -143,6 +143,14 @@
 - 파일 단위 `# pyright:` directive는 금지하고, mixin host 계약(`ui/main_window_impl/contracts.py`, `ui/main_window_types.py`, `core/database_impl/contracts.py`)과 `tests/test_pyright_suppression_policy.py`로 관리합니다.
 - 검증 기준선: `python scripts/run_release_verification.py` 통과 (`pytest` 228 passed / 1 skipped, pyright 0 errors / 0 warnings, live-list drift 없음, clean build 및 frozen/portable smoke 통과).
 
+### 🛡️ 리스크 리뷰 후속 검증 자동화 (2026-05-21)
+- `--smoke-instantiate-window` 옵션을 추가해 기본 smoke는 기존 import/resource/storage 검증을 유지하면서, 필요 시 `QApplication` + `MainWindow()` 생성/정리까지 offscreen으로 검증할 수 있습니다.
+- `scripts/check_live_list_drift.py`는 기존 xcode set drift 외에 `api_code_to_names`, `api_code_to_descriptions`, `config_name_to_code`, `config_alias_to_code`, `name_mismatch`, `name_drift`를 보고하며 `--fail-on-drift`, `--fail-on-name-drift` strict 옵션을 제공합니다.
+- 자동 URL 보완 중 `live_list` fetch/schema/network 실패가 발생하면 최종 fallback 실패 시 status/toast에 `live_list 조회 실패(<error_type>): <error>` 형식으로 실제 원인을 표시합니다.
+- 세션 기본 파일명과 자동 백업 파일명은 microsecond를 포함하고, 자동 백업은 `core.file_io.next_available_path()`로 같은 tick 충돌 시 `_001`, `_002` suffix를 붙여 기존 백업을 덮어쓰지 않습니다.
+- `scripts/run_release_verification.py`는 `--offline`, `--skip-live`, `--skip-build`, `--instantiate-window`, drift strict 옵션을 제공해 릴리스 전체 검증과 개발 반복 검증을 분리합니다.
+- 최신 검증 기준선: `python scripts/run_release_verification.py` 통과 (`pytest` 243 passed / 1 skipped, pyright 0 errors / 0 warnings, live-list `drift=false`, `name_drift=false`, clean build 및 frozen/portable smoke 통과).
+
 ### 🧱 세션 안정성 / 타입·인코딩 위생 보강 (2026-04-06)
 - 실행 중 수동 `세션 저장`은 더 이상 현재 run의 runtime archive를 정리하지 않으며, 같은 archive가 이후 segment flush/search/render/export까지 계속 이어집니다.
 - runtime archive background 작업은 `archive_token` + `run_id`를 함께 캡처해, `stop -> start` 경계에서 늦게 도착한 flush 완료/실패와 recovery snapshot write가 새 run 상태를 오염시키지 않도록 고정했습니다.
@@ -709,15 +717,19 @@ python scripts/run_release_verification.py
 
 # source smoke
 python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage
+python "국회의사중계 자막.py" --smoke --smoke-instantiate-window --smoke-storage-dir .pytest_tmp/smoke-window
 python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage
+
+# 개발 반복용 source-only 검증
+python scripts/run_release_verification.py --offline --skip-build --instantiate-window
 
 # 결과물
 dist/국회의사중계자막추출기 v16.14.7.exe
 ```
 
 - 릴리스 전에는 `pyinstaller --clean subtitle_extractor.spec`로 clean build를 수행하고, 생성된 EXE의 기본 실행 smoke와 `portable.flag` 실행 smoke를 확인합니다.
-- `python scripts/check_live_list_drift.py`는 실제 live-list xcode set과 기본 프리셋/map 차이를 JSON으로 보고합니다. drift 자체는 실패가 아니며, 네트워크/스키마 실패만 실패 처리합니다.
-- frozen 검증은 생성된 EXE에 `--smoke`를 실행하고, EXE 옆에 `portable.flag`를 둔 상태에서 `--smoke-storage-preflight` exit code가 `0`인지 확인합니다. smoke는 GUI를 띄우지 않고 JSON 한 줄을 출력하며, release 검증에서는 exit code `0`도 함께 확인합니다.
+- `python scripts/check_live_list_drift.py`는 실제 live-list xcode set과 기본 프리셋/map 차이를 JSON으로 보고하고, 이름/약칭 drift도 함께 표시합니다. drift 자체는 기본 실패가 아니며, `--fail-on-drift`, `--fail-on-name-drift`를 켠 strict 검증에서만 non-zero로 처리합니다.
+- frozen 검증은 생성된 EXE에 `--smoke`를 실행하고, 필요 시 `--smoke-instantiate-window`로 `MainWindow()` 생성까지 확인합니다. EXE 옆에 `portable.flag`를 둔 상태에서는 `--smoke-storage-preflight` exit code가 `0`인지 확인합니다. smoke는 JSON 한 줄을 출력하며, release 검증에서는 exit code `0`도 함께 확인합니다.
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
 - `python-docx`, `pywin32`, `core.subtitle_processor`, 공유 `core.live_list`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.ui.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `ui.main_window_impl.persistence_runtime_*` / `core.live_capture_impl.*` / `core.database_impl.*` / `core.subtitle_pipeline_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.

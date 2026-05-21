@@ -4,6 +4,7 @@ import json
 import queue
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Sequence
@@ -11,6 +12,7 @@ from typing import Any, Sequence
 import pytest
 
 import ui.main_window_persistence as persistence_mod
+import ui.main_window_impl.persistence_session as persistence_session_mod
 import ui.main_window_pipeline as pipeline_mod
 import ui.main_window_impl.runtime_lifecycle as runtime_lifecycle_mod
 from core.config import Config
@@ -516,6 +518,48 @@ def test_start_backup_snapshot_write_freezes_prepared_entries_before_worker_runs
     assert isinstance(subtitles, list)
     assert isinstance(subtitles[0], dict)
     assert subtitles[0]["text"] == "첫 자막"
+
+
+def test_start_backup_snapshot_write_uses_next_available_path_for_same_tick_collision(
+    tmp_path, monkeypatch
+):
+    fixed_time = datetime(2026, 5, 21, 12, 0, 1, 123456)
+    existing = tmp_path / "backup_20260521_120001_123456.json"
+    existing.write_text("existing", encoding="utf-8")
+    written: dict[str, object] = {}
+    pending_worker: dict[str, Any] = {}
+
+    class FixedDateTime:
+        @classmethod
+        def now(cls):
+            return fixed_time
+
+    win = MainWindow.__new__(MainWindow)
+    win._auto_backup_lock = threading.Lock()
+    win._is_background_shutdown_active = lambda: False
+    win._build_session_save_context = (
+        lambda: ("https://assembly.example/live", "행정안전위원회", 0)
+    )
+    win._ensure_session_lineage_id = lambda: "lineage-1"
+    win._record_recovery_snapshot = lambda *_args, **_kwargs: None
+    win._cleanup_old_backups = lambda: None
+    win._start_background_thread = (
+        lambda target, _name: pending_worker.update(target=target) or True
+    )
+
+    monkeypatch.setattr(persistence_session_mod, "datetime", FixedDateTime)
+    monkeypatch.setattr(persistence_mod.Config, "BACKUP_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        persistence_mod.utils,
+        "atomic_write_json_stream",
+        lambda path, **_kwargs: written.update(path=Path(path)),
+    )
+
+    assert MainWindow._start_backup_snapshot_write(win, [SubtitleEntry("첫 자막")]) is True
+    pending_worker["target"]()
+
+    assert written["path"] == tmp_path / "backup_20260521_120001_123456_001.json"
+    assert existing.read_text(encoding="utf-8") == "existing"
 
 
 class _AlwaysFullQueue:

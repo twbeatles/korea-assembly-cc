@@ -70,11 +70,15 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
         *,
         target_xcode: str | None = None,
         candidate_count: int = 0,
+        error_type: str = "",
+        error: str = "",
     ) -> None:
         message = summarize_live_selection_issue(
             reason,
             target_xcode=target_xcode,
             candidate_count=candidate_count,
+            error_type=error_type,
+            error=error,
         )
         logger.warning(message)
         try:
@@ -105,12 +109,25 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
             payload = {"ok": True, "result": payload, "error_type": "none"}
         if not isinstance(payload, dict) or not payload.get("ok"):
             if isinstance(payload, dict):
+                error_type = str(payload.get("error_type", "unknown") or "unknown")
+                error = str(payload.get("error", "알 수 없는 오류") or "알 수 없는 오류")
                 logger.debug(
                     "live_list 응답 무시 (%s): %s",
-                    payload.get("error_type", "unknown"),
-                    payload.get("error", "알 수 없는 오류"),
+                    error_type,
+                    error,
                 )
-            return original_url, None
+                return original_url, {
+                    "ok": False,
+                    "reason": "live_list_error",
+                    "error_type": error_type,
+                    "error": error,
+                }
+            return original_url, {
+                "ok": False,
+                "reason": "live_list_error",
+                "error_type": "invalid_payload",
+                "error": "live_list 응답 형식이 올바르지 않습니다.",
+            }
 
         broadcasts = payload.get("result")
         if not isinstance(broadcasts, list) or not broadcasts:
@@ -538,11 +555,14 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                     "ambiguous_live",
                     "ambiguous_xcode",
                     "target_xcode_required",
+                    "live_list_error",
                 }:
                     self._notify_live_selection_issue(
                         issue_reason,
                         target_xcode=target_xcode,
                         candidate_count=candidate_count,
+                        error_type=str(live_list_issue.get("error_type", "") or ""),
+                        error=str(live_list_issue.get("error", "") or ""),
                     )
                     return original_url
             if target_xcode:

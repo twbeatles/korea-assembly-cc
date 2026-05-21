@@ -47,7 +47,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             dialog_title: str = "세션 저장",
         ) -> str | None:
             filename = (
-                f"{Config.SESSION_DIR}/세션_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                f"{Config.SESSION_DIR}/세션_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.json"
             )
             path, _ = QFileDialog.getSaveFileName(
                 self,
@@ -432,7 +432,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 return None
 
             filename = (
-                f"{Config.SESSION_DIR}/세션_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+                f"{Config.SESSION_DIR}/세션_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.json"
             )
             path, _ = QFileDialog.getSaveFileName(
                 self, dialog_title, filename, "JSON (*.json)"
@@ -568,8 +568,10 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             try:
                 backup_dir = Path(Config.BACKUP_DIR)
                 backup_dir.mkdir(exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_file = backup_dir / f"backup_{timestamp}.json"
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                backup_file = utils.next_available_path(
+                    backup_dir / f"backup_{timestamp}.json"
+                )
                 source_url, committee_name, _duration = self._build_session_save_context()
                 created_at = datetime.now().isoformat()
                 lineage_id = self._ensure_session_lineage_id()
