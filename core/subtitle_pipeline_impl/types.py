@@ -6,13 +6,14 @@ from dataclasses import dataclass
 from typing import Optional
 from uuid import uuid4
 
+from core.config import Config
 from core.models import CaptureSessionState, SpeakerChannel, SubtitleEntry
 
 MIN_COMPACT_ANCHOR = 10
 LARGE_APPEND_MIN = 200
 RECENT_DUPLICATE_MIN_LENGTH = 8
 RECENT_HISTORY_ENTRIES = 12
-RECENT_HISTORY_COMPACT_LENGTH = 5000
+RECENT_HISTORY_COMPACT_LENGTH = int(Config.RECENT_HISTORY_COMPACT_LENGTH)
 RECENT_RESYNC_ENTRIES = 5
 SUFFIX_LENGTH = 50
 PREVIEW_RESYNC_THRESHOLD = 10

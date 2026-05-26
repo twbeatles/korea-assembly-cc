@@ -379,8 +379,27 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 )
                 if reply == pipeline_mod.QMessageBox.StandardButton.Yes:
                     backup_path = os.path.abspath(Config.BACKUP_DIR)
+                    opened = False
                     if os.name == "nt":
-                        os.startfile(backup_path)
+                        try:
+                            os.startfile(backup_path)  # type: ignore[attr-defined]
+                            opened = True
+                        except Exception:
+                            logger.debug("백업 폴더 열기 실패 (startfile)", exc_info=True)
+                    if not opened:
+                        try:
+                            import webbrowser
+
+                            webbrowser.open(f"file://{backup_path}")
+                            opened = True
+                        except Exception:
+                            logger.debug("백업 폴더 열기 fallback 실패", exc_info=True)
+                    if not opened:
+                        self._show_toast(
+                            f"백업 폴더 자동 열기 실패. 경로: {backup_path}",
+                            "warning",
+                            5000,
+                        )
                 self._set_status("세션 불러오기 실패 (JSON 오류)", "error")
 
             elif msg_type == "session_load_failed":

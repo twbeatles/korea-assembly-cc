@@ -101,7 +101,6 @@ from ui.dialogs import LiveBroadcastDialog
 from ui.themes import DARK_THEME, LIGHT_THEME
 from ui.widgets import CollapsibleGroupBox, ToastWidget
 from core import utils
-from core.subtitle_processor import SubtitleProcessor
 
 
 class _TimerSignalShim:
@@ -260,16 +259,24 @@ class MainWindowMessageQueue:
         run_id = getattr(self._worker_local, "run_id", None)
         return int(run_id) if run_id is not None else None
 
+    # UI 스레드가 큐 포화로 무한 대기하지 않도록 기본 안전 timeout (초)
+    _PUT_SAFETY_TIMEOUT_SECONDS = 5.0
+
     def put(self, item: object, block: bool = True, timeout: float | None = None) -> None:
         run_id = self._get_worker_run_id()
         if run_id is not None and isinstance(item, tuple) and len(item) == 2:
             msg_type, data = item
             self._owner._emit_worker_message(str(msg_type), data, run_id=run_id)
             return
-        if timeout is None:
-            self._queue.put(item, block=block)
+        if not block:
+            self._queue.put(item, block=False)
             return
-        self._queue.put(item, block=block, timeout=timeout)
+        # block=True 인 경우라도 timeout이 없으면 UI/외부 호출자가 무한 대기에 빠지지 않도록
+        # 보수적인 안전 timeout을 강제한다. queue.Full 시 호출자가 즉시 인지 가능.
+        effective_timeout = (
+            float(timeout) if timeout is not None else self._PUT_SAFETY_TIMEOUT_SECONDS
+        )
+        self._queue.put(item, block=True, timeout=effective_timeout)
 
     def put_nowait(self, item: object) -> None:
         self.put(item, block=False)

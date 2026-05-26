@@ -677,10 +677,17 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 backup_dir = Path(Config.BACKUP_DIR)
                 backups = sorted(backup_dir.glob("backup_*.json"), reverse=True)
 
-                # 최대 개수 초과분 삭제
+                # 최대 개수 초과분 삭제 (race-safe: 개별 unlink 실패는 다음 항목에 영향 없음)
                 for old_backup in backups[Config.MAX_BACKUP_COUNT :]:
-                    old_backup.unlink()
-                    logger.debug(f"오래된 백업 삭제: {old_backup}")
+                    try:
+                        old_backup.unlink(missing_ok=True)
+                        logger.debug(f"오래된 백업 삭제: {old_backup}")
+                    except Exception as item_err:
+                        logger.warning(
+                            "백업 항목 삭제 실패 (%s): %s",
+                            old_backup,
+                            item_err,
+                        )
             except Exception as e:
                 logger.warning(f"백업 정리 중 오류: {e}")
 

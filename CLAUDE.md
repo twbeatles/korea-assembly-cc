@@ -126,7 +126,6 @@ korea-assembly-cc/
     reflow.py
     subtitle_pipeline.py
     subtitle_pipeline_impl/     # pipeline type/history/incremental/entry helper 내부 구현
-    subtitle_processor.py
     text_utils.py
     hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim

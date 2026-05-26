@@ -28,14 +28,6 @@ class _SettingsStub:
         self.saved[key] = value
 
 
-class _DummyProcessor:
-    def __init__(self) -> None:
-        self.confirmed: list[str] = []
-
-    def add_confirmed(self, text: str) -> None:
-        self.confirmed.append(text)
-
-
 class _TrackingLock:
     def __init__(self) -> None:
         self.held = False
@@ -160,7 +152,6 @@ def _build_window() -> Any:
     win._refresh_text = lambda force_full=False: None
     win._show_toast = lambda *_args, **_kwargs: None
     win._is_auto_clean_newlines_enabled = lambda: True
-    win.subtitle_processor = _DummyProcessor()
     win.settings = _SettingsStub()
     return win
 
@@ -275,7 +266,7 @@ def test_finalize_subtitle_skips_text_already_materialized_in_capture_state():
     MainWindow._finalize_subtitle(win, "이미 처리됨")
 
     assert win.subtitles == []
-    assert win.subtitle_processor.confirmed == []
+    assert win.capture_state.last_processed_raw == "이미 처리됨"
 
 
 def test_alert_keyword_cache_persists_and_triggers_toast():

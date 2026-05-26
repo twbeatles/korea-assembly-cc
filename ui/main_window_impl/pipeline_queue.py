@@ -172,10 +172,37 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         control_key = self._build_control_message_key(normalized_type, data)
         if control_key is None:
             logger.warning("메시지 큐 포화로 nonblocking 메시지 드롭: %s", normalized_type)
+            self._notify_dropped_control_message(normalized_type)
             return
         self._ensure_control_message_state()
         with self._control_message_lock:
             self._coalesced_control_messages[control_key] = item
+
+    def _notify_dropped_control_message(self, msg_type: str) -> None:
+        """drop 발생 시 사용자에게 한 번이라도 노출 (rate-limit 30s)."""
+        state = getattr(self, "__dict__", {})
+        last_at_map = state.get("_dropped_control_notice_at")
+        if not isinstance(last_at_map, dict):
+            last_at_map = {}
+            self._dropped_control_notice_at = last_at_map
+        try:
+            import time as _time_mod
+            now = _time_mod.monotonic()
+        except Exception:
+            now = 0.0
+        last_at = float(last_at_map.get(msg_type, 0.0))
+        if now - last_at < 30.0:
+            return
+        last_at_map[msg_type] = now
+        try:
+            status_setter = getattr(self, "_set_status", None)
+            if callable(status_setter):
+                status_setter(
+                    f"내부 메시지 큐 포화로 메시지({msg_type})가 일시 드롭되었습니다.",
+                    "warning",
+                )
+        except Exception:
+            logger.debug("dropped control 메시지 상태 표시 실패", exc_info=True)
 
     def _requeue_message_item(self, item: object) -> None:
         try:

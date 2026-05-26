@@ -458,7 +458,6 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         if text == last_processed_raw or text == capture_last_processed_raw:
             return
 
-        self.subtitle_processor.add_confirmed(text)
         now = datetime.now()
         new_part = text
         force_new_entry = False

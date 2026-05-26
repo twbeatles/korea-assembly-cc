@@ -527,6 +527,11 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                                     )
                                     active_selector = selector_candidates[0]
                                     logger.info("자막 선택자 자동 전환: %s", active_selector)
+                                    # selector 변경 직후 Observer를 즉시 재주입해 polling-only 구간을 줄임
+                                    observer_active, observer_frame_path = self._inject_mutation_observer(
+                                        driver, ",".join(selector_candidates)
+                                    )
+                                    last_observer_retry = now
                                 last_selector_refresh = now
 
                             if (

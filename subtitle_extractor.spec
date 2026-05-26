@@ -97,7 +97,6 @@ HIDDEN_IMPORTS = [
     'core.subtitle_pipeline_impl.history',
     'core.subtitle_pipeline_impl.incremental',
     'core.subtitle_pipeline_impl.types',
-    'core.subtitle_processor',
     'core.text_utils',
     'core.utils',
     'selenium.common.exceptions',

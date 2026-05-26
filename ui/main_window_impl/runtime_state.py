@@ -19,7 +19,6 @@ from core.subtitle_pipeline import (
     SUFFIX_LENGTH,
     create_empty_capture_state,
 )
-from core.subtitle_processor import SubtitleProcessor
 from ui.main_window_common import (
     DB_AVAILABLE,
     DatabaseManagerClass,
@@ -87,8 +86,6 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._last_good_raw_compact = ""
         self._preview_resync_threshold = PREVIEW_RESYNC_THRESHOLD
         self._preview_ambiguous_resync_threshold = PREVIEW_AMBIGUOUS_RESYNC_THRESHOLD
-
-        self.subtitle_processor = SubtitleProcessor()
 
         saved_keywords = self.settings.value("highlight_keywords", "")
         if not saved_keywords:
