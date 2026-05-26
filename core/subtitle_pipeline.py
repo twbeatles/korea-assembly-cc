@@ -2,476 +2,62 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
-from uuid import uuid4
 
 from core import utils
-from core.config import Config
-from core.models import CaptureSessionState, SpeakerChannel, SubtitleEntry
-
-
-MIN_COMPACT_ANCHOR = 10
-LARGE_APPEND_MIN = 200
-RECENT_DUPLICATE_MIN_LENGTH = 8
-RECENT_HISTORY_ENTRIES = 12
-RECENT_HISTORY_COMPACT_LENGTH = int(Config.RECENT_HISTORY_COMPACT_LENGTH)
-RECENT_RESYNC_ENTRIES = 5
-SUFFIX_LENGTH = 50
-PREVIEW_RESYNC_THRESHOLD = 10
-PREVIEW_AMBIGUOUS_RESYNC_THRESHOLD = 6
-
-
-@dataclass(slots=True)
-class PipelineSourceMeta:
-    selector: str = ""
-    frame_path: tuple[int, ...] = ()
-    source_node_key: str = ""
-    source_entry_id: str = ""
-    speaker_color: str = ""
-    speaker_channel: SpeakerChannel = "unknown"
-    force_new_entry: bool = False
-    source_mode: str = ""
-
-
-@dataclass(slots=True)
-class LiveRowCommitMeta(PipelineSourceMeta):
-    baseline_compact: Optional[str] = None
-
-
-@dataclass(slots=True)
-class PipelineResult:
-    state: CaptureSessionState
-    changed: bool
-    appended_entry: Optional[SubtitleEntry] = None
-    updated_entry: Optional[SubtitleEntry] = None
-    reason: str = ""
-
-
-@dataclass(slots=True)
-class IncrementalExtractResult:
-    text: str
-    matched: bool
-    duplicate: bool
-    ambiguous: bool
-    reason: str
-
-
-def create_empty_capture_state() -> CaptureSessionState:
-    return CaptureSessionState()
-
-
-def _create_entry_id() -> str:
-    return f"subtitle_{uuid4().hex}"
-
-
-def _apply_confirmed_segments(
-    state: CaptureSessionState,
-    segments: list[str],
-    settings: Optional[dict[str, Any]] = None,
-) -> None:
-    max_length = _resolve_confirmed_compact_max_length(settings)
-    normalized_segments = [segment for segment in segments if segment]
-    if max_length > 0 and normalized_segments:
-        total_length = sum(len(segment) for segment in normalized_segments)
-        trim = total_length - max_length
-        while trim > 0 and normalized_segments:
-            first = normalized_segments[0]
-            if len(first) <= trim:
-                trim -= len(first)
-                normalized_segments.pop(0)
-                continue
-            normalized_segments[0] = first[trim:]
-            trim = 0
-
-    state.confirmed_segments = normalized_segments
-    state.confirmed_compact = "".join(normalized_segments)
-    state.trailing_suffix = state.confirmed_compact[-SUFFIX_LENGTH:]
-
-
-def _append_confirmed_entry(
-    state: CaptureSessionState,
-    entry: SubtitleEntry,
-    settings: Optional[dict[str, Any]] = None,
-) -> None:
-    compact = entry.compact_text
-    if not compact:
-        return
-    segments = list(state.confirmed_segments)
-    segments.append(compact)
-    _apply_confirmed_segments(state, segments, settings)
-
-
-def _replace_tail_confirmed_entry(
-    state: CaptureSessionState,
-    previous_compact: str,
-    entry: SubtitleEntry,
-    settings: Optional[dict[str, Any]] = None,
-) -> bool:
-    if not previous_compact or not state.confirmed_segments:
-        return False
-    if state.confirmed_segments[-1] != previous_compact:
-        return False
-
-    segments = list(state.confirmed_segments)
-    next_compact = entry.compact_text
-    if next_compact:
-        segments[-1] = next_compact
-    else:
-        segments.pop()
-    _apply_confirmed_segments(state, segments, settings)
-    return True
-
-
-def _confirmed_history_without_last_entry(
-    state: CaptureSessionState,
-    settings: Optional[dict[str, Any]] = None,
-) -> str:
-    if not state.entries:
-        return ""
-
-    last_compact = state.entries[-1].compact_text
-    if state.confirmed_segments and last_compact and state.confirmed_segments[-1] == last_compact:
-        compact = "".join(state.confirmed_segments[:-1])
-        max_length = _resolve_confirmed_compact_max_length(settings)
-        return compact[-max_length:] if max_length > 0 else compact
-
-    return build_confirmed_compact_history(
-        state.entries[:-1],
-        _resolve_confirmed_compact_max_length(settings),
-    )
-
-
-def build_confirmed_compact_history(
-    entries: list[SubtitleEntry],
-    max_length: int = Config.CONFIRMED_COMPACT_MAX_LEN,
-) -> str:
-    if not entries:
-        return ""
-
-    parts: list[str] = []
-    current_length = 0
-    for entry in reversed(entries):
-        compact = entry.compact_text
-        if not compact:
-            continue
-        parts.insert(0, compact)
-        current_length += len(compact)
-        if current_length >= max_length:
-            break
-    return "".join(parts)[-max_length:]
-
-
-def _resolve_merge_max_chars(settings: Optional[dict[str, int]] = None) -> int:
-    return int((settings or {}).get("merge_max_chars", Config.ENTRY_MERGE_MAX_CHARS))
-
-
-def _resolve_merge_gap_seconds(settings: Optional[dict[str, int]] = None) -> int:
-    return int((settings or {}).get("merge_gap_seconds", Config.ENTRY_MERGE_MAX_GAP))
-
-
-def _resolve_confirmed_compact_max_length(settings: Optional[dict[str, int]] = None) -> int:
-    return int((settings or {}).get("confirmed_compact_max_len", Config.CONFIRMED_COMPACT_MAX_LEN))
-
-
-def _resolve_auto_clean_newlines(settings: Optional[dict[str, Any]] = None) -> bool:
-    return bool(
-        (settings or {}).get(
-            "auto_clean_newlines",
-            Config.AUTO_CLEAN_NEWLINES_DEFAULT,
-        )
-    )
-
-
-def _normalize_runtime_text(
-    text: str,
-    settings: Optional[dict[str, Any]] = None,
-) -> str:
-    if _resolve_auto_clean_newlines(settings):
-        return utils.flatten_subtitle_text(text)
-    return utils.clean_text_display(text)
-
-
-def rebuild_confirmed_history(
-    state: CaptureSessionState,
-    settings: Optional[dict[str, Any]] = None,
-) -> None:
-    max_length = _resolve_confirmed_compact_max_length(settings)
-    segments: list[str] = []
-    current_length = 0
-    for entry in reversed(state.entries):
-        compact = entry.compact_text
-        if not compact:
-            continue
-        segments.insert(0, compact)
-        current_length += len(compact)
-        if max_length > 0 and current_length >= max_length:
-            break
-    _apply_confirmed_segments(state, segments, settings)
-
-
-def soft_resync_history(
-    state: CaptureSessionState,
-    settings: Optional[dict[str, Any]] = None,
-) -> None:
-    recent_entries = state.entries[-RECENT_RESYNC_ENTRIES:]
-    segments = [entry.compact_text for entry in recent_entries if entry.compact_text]
-    _apply_confirmed_segments(state, segments, settings)
-    state.preview_desync_count = 0
-    state.preview_ambiguous_skip_count = 0
-
-
-def build_recent_compact_history(entries: list[SubtitleEntry]) -> str:
-    recent_entries = entries[-RECENT_HISTORY_ENTRIES:]
-    parts = [entry.compact_text for entry in recent_entries if entry.compact_text]
-    return "".join(parts)[-RECENT_HISTORY_COMPACT_LENGTH:]
-
-
-def _slice_from_compact_index(text: str, compact_index: int) -> str:
-    return utils.clean_text_display(utils.slice_from_compact_index(text, compact_index))
-
-
-def find_compact_suffix_prefix_overlap(
-    history_compact: str,
-    raw_compact: str,
-    min_overlap: int = MIN_COMPACT_ANCHOR,
-) -> int:
-    max_overlap = min(len(history_compact), len(raw_compact))
-    for length in range(max_overlap, min_overlap - 1, -1):
-        if history_compact[-length:] == raw_compact[:length]:
-            return length
-    return 0
-
-
-def extract_incremental_text_from_history(
-    raw_text: str,
-    history_compact: str,
-    settings: Optional[dict[str, Any]] = None,
-) -> IncrementalExtractResult:
-    normalized_raw = _normalize_runtime_text(raw_text, settings)
-    raw_compact = utils.compact_subtitle_text(normalized_raw)
-    compact_history = utils.compact_subtitle_text(history_compact)
-
-    if not raw_compact:
-        return IncrementalExtractResult("", False, True, False, "empty")
-
-    if not compact_history:
-        return IncrementalExtractResult(normalized_raw, False, False, False, "no_history")
-
-    if raw_compact == compact_history:
-        return IncrementalExtractResult("", True, True, False, "identical_history")
-
-    if (
-        len(raw_compact) >= RECENT_DUPLICATE_MIN_LENGTH
-        and raw_compact in compact_history
-    ):
-        return IncrementalExtractResult("", False, True, False, "contained_in_history")
-
-    suffix = compact_history[-SUFFIX_LENGTH:]
-    if suffix:
-        first_pos = raw_compact.find(suffix)
-        last_pos = raw_compact.rfind(suffix)
-        if last_pos >= 0:
-            compact_start = last_pos + len(suffix)
-            text = _slice_from_compact_index(normalized_raw, compact_start)
-            predicted_append = max(0, len(raw_compact) - compact_start)
-            return IncrementalExtractResult(
-                text,
-                True,
-                not bool(text),
-                (
-                    first_pos != last_pos
-                    and predicted_append > max(LARGE_APPEND_MIN, len(raw_compact) // 3)
-                ),
-                "suffix" if text else "suffix_duplicate",
-            )
-
-    if len(compact_history) >= MIN_COMPACT_ANCHOR:
-        history_pos = raw_compact.rfind(compact_history)
-        if history_pos >= 0:
-            compact_start = history_pos + len(compact_history)
-            text = _slice_from_compact_index(normalized_raw, compact_start)
-            return IncrementalExtractResult(
-                text,
-                True,
-                not bool(text),
-                False,
-                "history" if text else "history_duplicate",
-            )
-
-    overlap = find_compact_suffix_prefix_overlap(compact_history, raw_compact)
-    if overlap > 0:
-        text = _slice_from_compact_index(normalized_raw, overlap)
-        return IncrementalExtractResult(
-            text,
-            True,
-            not bool(text),
-            False,
-            "overlap" if text else "overlap_duplicate",
-        )
-
-    return IncrementalExtractResult(normalized_raw, False, False, False, "full")
-
-
-def extract_incremental_text_with_recent_history(
-    raw_text: str,
-    history_compact: str,
-    recent_history_compact: str,
-    settings: Optional[dict[str, Any]] = None,
-) -> IncrementalExtractResult:
-    recent_history = utils.compact_subtitle_text(recent_history_compact)
-    full_history = utils.compact_subtitle_text(history_compact)
-
-    if recent_history and recent_history != full_history:
-        recent_result = extract_incremental_text_from_history(
-            raw_text,
-            recent_history,
-            settings,
-        )
-        if recent_result.matched or recent_result.duplicate:
-            return recent_result
-
-    return extract_incremental_text_from_history(raw_text, full_history, settings)
-
-
-def _sanitize_committed_text(
-    text: str,
-    settings: Optional[dict[str, Any]] = None,
-) -> str:
-    normalized_text = _normalize_runtime_text(text, settings)
-    if not normalized_text:
-        return ""
-    if not utils.is_meaningful_subtitle_text(normalized_text):
-        return ""
-    return normalized_text
-
-
-def _apply_source_meta(entry: SubtitleEntry, meta: Optional[PipelineSourceMeta]) -> None:
-    if not meta:
-        return
-    if meta.source_entry_id:
-        entry.entry_id = meta.source_entry_id
-    if meta.selector:
-        entry.source_selector = meta.selector
-    if meta.frame_path:
-        entry.source_frame_path = list(meta.frame_path)
-    if meta.source_node_key:
-        entry.source_node_key = meta.source_node_key
-    if meta.speaker_color:
-        entry.speaker_color = meta.speaker_color
-    if meta.speaker_channel:
-        entry.speaker_channel = meta.speaker_channel
-
-
-def _join_stream_text(base: str, addition: str) -> str:
-    left = str(base or "").rstrip()
-    right = str(addition or "").lstrip()
-    if not left:
-        return right
-    if not right:
-        return left
-    no_space_before = set(".,!?;:)]}%\"'")
-    no_space_after = set("([{<\"'")
-    if right[0] in no_space_before or left[-1] in no_space_after:
-        return left + right
-    return left + " " + right
-
-
-def _update_state_metadata(
-    state: CaptureSessionState,
-    now: datetime,
-    meta: Optional[PipelineSourceMeta] = None,
-) -> None:
-    state.last_observer_event_at = now.timestamp()
-    if meta and meta.selector:
-        state.current_selector = meta.selector
-    if meta and meta.frame_path:
-        state.current_frame_path = tuple(meta.frame_path)
-
-
-def _find_entry_by_id(state: CaptureSessionState, entry_id: str) -> Optional[SubtitleEntry]:
-    for entry in state.entries:
-        if entry.entry_id == entry_id:
-            return entry
-    return None
-
-
-def _append_or_merge_entry(
-    state: CaptureSessionState,
-    text: str,
-    now: datetime,
-    settings: Optional[dict[str, Any]] = None,
-    meta: Optional[PipelineSourceMeta] = None,
-) -> tuple[SubtitleEntry, bool, str]:
-    last_entry = state.entries[-1] if state.entries else None
-    merge_gap_seconds = _resolve_merge_gap_seconds(settings)
-    merge_max_chars = _resolve_merge_max_chars(settings)
-
-    if (
-        last_entry
-        and not state.last_committed_reset_at
-        and not (meta and meta.force_new_entry)
-    ):
-        structured_boundary = bool(
-            meta
-            and meta.source_node_key
-            and last_entry.source_node_key
-            and last_entry.source_node_key != meta.source_node_key
-        )
-        speaker_color_boundary = bool(
-            meta
-            and meta.speaker_color
-            and last_entry.speaker_color
-            and meta.speaker_color != last_entry.speaker_color
-        )
-        known_meta_channel = bool(
-            meta and meta.speaker_channel in ("primary", "secondary")
-        )
-        known_last_channel = last_entry.speaker_channel in ("primary", "secondary")
-        speaker_channel_boundary = bool(
-            meta
-            and known_meta_channel
-            and known_last_channel
-            and meta.speaker_channel != last_entry.speaker_channel
-        )
-        fallback_boundary = bool(
-            meta
-            and meta.source_mode == "container"
-            and (
-                last_entry.source_node_key
-                or last_entry.speaker_color
-                or last_entry.speaker_channel in ("primary", "secondary")
-            )
-        )
-        last_end_time = last_entry.end_time or last_entry.timestamp
-        exceeds_merge_gap = (now - last_end_time).total_seconds() > merge_gap_seconds
-        can_merge = (
-            not exceeds_merge_gap
-            and not structured_boundary
-            and not speaker_color_boundary
-            and not speaker_channel_boundary
-            and not fallback_boundary
-            and len(last_entry.text) + len(text) < merge_max_chars
-        )
-        if can_merge:
-            previous_compact = last_entry.compact_text
-            last_entry.update_text(_join_stream_text(last_entry.text, text))
-            last_entry.end_time = now
-            _apply_source_meta(last_entry, meta)
-            return last_entry, False, previous_compact
-
-    entry = SubtitleEntry(
-        text,
-        now,
-        entry_id=(meta.source_entry_id if meta and meta.source_entry_id else _create_entry_id()),
-    )
-    entry.start_time = now
-    entry.end_time = now
-    _apply_source_meta(entry, meta)
-    state.entries.append(entry)
-    return entry, True, ""
-
+from core.models import CaptureSessionState, SubtitleEntry
+from core.subtitle_pipeline_impl.entries import (
+    _append_or_merge_entry,
+    _apply_source_meta,
+    _find_entry_by_id,
+    _join_stream_text,
+    _sanitize_committed_text,
+    _update_state_metadata,
+)
+from core.subtitle_pipeline_impl.history import (
+    _append_confirmed_entry,
+    _apply_confirmed_segments,
+    _confirmed_history_without_last_entry,
+    _normalize_runtime_text,
+    _replace_tail_confirmed_entry,
+    _resolve_auto_clean_newlines,
+    _resolve_confirmed_compact_max_length,
+    _resolve_merge_gap_seconds,
+    _resolve_merge_max_chars,
+    build_confirmed_compact_history,
+    build_recent_compact_history,
+    rebuild_confirmed_history,
+    soft_resync_history,
+)
+from core.subtitle_pipeline_impl.incremental import (
+    _slice_from_compact_index,
+    extract_incremental_text_from_history,
+    extract_incremental_text_with_recent_history,
+    find_compact_suffix_prefix_overlap,
+)
+from core.subtitle_pipeline_impl.types import (
+    LARGE_APPEND_MIN,
+    MIN_COMPACT_ANCHOR,
+    PREVIEW_AMBIGUOUS_RESYNC_THRESHOLD,
+    PREVIEW_RESYNC_THRESHOLD,
+    RECENT_DUPLICATE_MIN_LENGTH,
+    RECENT_HISTORY_COMPACT_LENGTH,
+    RECENT_HISTORY_ENTRIES,
+    RECENT_RESYNC_ENTRIES,
+    SUFFIX_LENGTH,
+    IncrementalExtractResult,
+    LiveRowCommitMeta,
+    PipelineResult,
+    PipelineSourceMeta,
+    create_empty_capture_state,
+    _create_entry_id,
+)
+
+PipelineSourceMeta.__module__ = __name__
+LiveRowCommitMeta.__module__ = __name__
+PipelineResult.__module__ = __name__
+IncrementalExtractResult.__module__ = __name__
 
 def apply_preview(
     state: CaptureSessionState,
@@ -544,7 +130,6 @@ def apply_preview(
         updated_entry=entry,
         reason=f"preview_{extraction.reason}",
     )
-
 
 def commit_live_row(
     state: CaptureSessionState,
@@ -639,7 +224,6 @@ def commit_live_row(
         reason="row_append",
     )
 
-
 def apply_structured_entry(
     state: CaptureSessionState,
     text: str,
@@ -692,7 +276,6 @@ def apply_structured_entry(
         ),
     )
 
-
 def apply_keepalive(
     state: CaptureSessionState,
     raw: str,
@@ -711,7 +294,6 @@ def apply_keepalive(
     state.last_keepalive_at = now.timestamp()
     return PipelineResult(state, True, updated_entry=last_entry, reason="keepalive")
 
-
 def apply_reset(
     state: CaptureSessionState,
     now: datetime,
@@ -727,7 +309,6 @@ def apply_reset(
     state.last_observer_event_at = now.timestamp()
     return PipelineResult(state, True, reason="reset")
 
-
 def finalize_session(
     state: CaptureSessionState,
     now: datetime,
@@ -741,7 +322,6 @@ def finalize_session(
     if last_entry:
         last_entry.end_time = now
     return PipelineResult(state, True, updated_entry=last_entry, reason="finalized")
-
 
 def flush_pending_previews(
     state: CaptureSessionState,
@@ -763,3 +343,35 @@ def flush_pending_previews(
         ),
     )
     return prepared_state
+
+
+__all__ = [
+    "MIN_COMPACT_ANCHOR",
+    "LARGE_APPEND_MIN",
+    "RECENT_DUPLICATE_MIN_LENGTH",
+    "RECENT_HISTORY_ENTRIES",
+    "RECENT_HISTORY_COMPACT_LENGTH",
+    "RECENT_RESYNC_ENTRIES",
+    "SUFFIX_LENGTH",
+    "PREVIEW_RESYNC_THRESHOLD",
+    "PREVIEW_AMBIGUOUS_RESYNC_THRESHOLD",
+    "PipelineSourceMeta",
+    "LiveRowCommitMeta",
+    "PipelineResult",
+    "IncrementalExtractResult",
+    "create_empty_capture_state",
+    "build_confirmed_compact_history",
+    "rebuild_confirmed_history",
+    "soft_resync_history",
+    "build_recent_compact_history",
+    "find_compact_suffix_prefix_overlap",
+    "extract_incremental_text_from_history",
+    "extract_incremental_text_with_recent_history",
+    "apply_preview",
+    "commit_live_row",
+    "apply_structured_entry",
+    "apply_keepalive",
+    "apply_reset",
+    "finalize_session",
+    "flush_pending_previews",
+]

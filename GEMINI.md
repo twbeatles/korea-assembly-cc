@@ -137,6 +137,7 @@ korea-assembly-cc/
   core/                         # 공통 로직/설정
     config.py
     database_manager.py
+    database_impl/             # DatabaseManager 내부 connection/schema/FTS/session/search 구현
     file_io.py
     live_capture.py
     live_capture_impl/          # ledger/model/reconcile 내부 구현
@@ -145,6 +146,7 @@ korea-assembly-cc/
     models.py
     reflow.py
     subtitle_pipeline.py
+    subtitle_pipeline_impl/     # pipeline type/history/incremental/entry helper 내부 구현
     text_utils.py
     hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim
@@ -159,6 +161,7 @@ korea-assembly-cc/
     main_window_ui.py
     main_window_view.py
     main_window_impl/           # capture/pipeline/view/runtime 내부 구현
+      persistence_runtime_*.py  # runtime hydrate/archive/segment/reader/manifest 세부 mixin
     themes.py
     widgets.py
     main_window.py              # MainWindow 파사드
@@ -198,7 +201,7 @@ pip install -r requirements-dev.txt
 ```
 
 - `requirements-dev.txt`에는 DOCX(`python-docx`)와 HWP(`pywin32`) 저장용 optional 패키지가 함께 정리되어 있음
-- `pyinstaller==6.19.0`은 release/frozen smoke 검증용 개발 의존성으로 고정되어 있음
+- `pyinstaller==6.20.0`은 release/frozen smoke 검증용 개발 의존성으로 고정되어 있음
 - HWPX 저장은 기본 내장 기능이며 별도 외부 프로그램이 필요하지 않음
 
 ### 8.1 개발 품질 게이트
@@ -207,13 +210,18 @@ pip install -r requirements-dev.txt
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
 - Source smoke check: `python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage`
+- Constructor smoke check: `python "국회의사중계 자막.py" --smoke --smoke-instantiate-window --smoke-storage-dir .pytest_tmp/smoke-window`
 - Storage smoke check: `python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage`
-- Frozen smoke check: `pyinstaller --clean subtitle_extractor.spec` 후 EXE `--smoke`, EXE 옆 `portable.flag` 생성 후 `--smoke-storage-preflight` exit code 0 확인
+- Release verification: `python scripts/run_release_verification.py`
+- Source-only release verification: `python scripts/run_release_verification.py --offline --skip-build --instantiate-window`
+- Live-list drift report: `python scripts/check_live_list_drift.py` (`--fail-on-drift`, `--fail-on-name-drift`로 strict mode)
+- Frozen smoke check: `pyinstaller --clean subtitle_extractor.spec` 후 EXE `--smoke`, 필요 시 `--smoke-instantiate-window`, EXE 옆 `portable.flag` 생성 후 `--smoke-storage-preflight` exit code 0 확인
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지
 - 예외: 사용자 TXT 저장/실시간 저장은 Windows 메모장 호환을 위해 `utf-8-sig`를 사용할 수 있음
 - VS Code/Pylance는 루트 `pyrightconfig.json`과 `.vscode/settings.json`을 기준으로 동일하게 해석
 - `pyrightconfig.json`은 `stubPath=typings`, `executionEnvironments[].extraPaths=["typings"]`, `.pytest_tmp` exclude, `reportMissingModuleSource=none`를 공통 기준으로 사용
 - `tests/test_encoding_hygiene.py`는 repo tracked 파일만 검사하고, BOM이 허용되는 `.pytest_tmp` workspace temp 산출물은 제외한다
+- `.claude/`는 로컬 Codex scratch/worktree 전용 경로로 `.gitignore`와 `pytest.ini norecursedirs`에 포함해 테스트 수집과 publish scope에서 제외한다
 - Windows PowerShell 5.x 콘솔에서는 UTF-8 without BOM이 깨져 보일 수 있으나 파일 자체는 UTF-8 유지
 
 ### 8.2 저장소 기준 파일
@@ -268,7 +276,7 @@ pip install -r requirements-dev.txt
 
 ### 특별위원회 프리셋 추가
 - `Config.DEFAULT_COMMITTEE_PRESETS`: 국정감사, 국정조사, 국회정보나침반 URL
-- `Config.SPECIAL_COMMITTEE_XCODES`: 현재 검증된 문자열 xcode는 `IO`만 유지
+- `Config.SPECIAL_COMMITTEE_XCODES`: 현재 기본값에는 검증된 문자열 xcode가 없으며, stale `IO` 기본 프리셋은 제거됨
 
 ### 사용자 안내 개선
 - `subtitle_not_found` 메시지 상세화: 가능한 원인, 해결 방법, URL 예시 포함
@@ -449,6 +457,14 @@ pip install -r requirements-dev.txt
 - `subtitle_extractor.spec` hidden import에는 `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`를 추가해 frozen 빌드에서도 facade 뒤 구현이 누락되지 않도록 맞췄다.
 - `pyinstaller --clean subtitle_extractor.spec`로 `dist/국회의사중계자막추출기 v16.14.7.exe` 빌드를 다시 검증했다.
 
+## 9.9.6a v16.14.7 보존형 책임 분리 후속 정합화 (2026-05-11)
+- `ui/main_window_impl/persistence_runtime.py`는 `MainWindowPersistenceRuntimeMixin` 조합 facade로 유지하고 hydrate/progress, archive lifecycle/manifest/checkpoint, segment flush/cache/load, full-session reader, manifest salvage loader 책임을 `persistence_runtime_*.py`로 분리했다.
+- `core/database_manager.py`와 root `database.py` 공개 import 경로는 유지하고 connection/schema/FTS/session/search-stat 구현은 `core/database_impl/` mixin으로 나눴다. 기존 private/static 메서드 호출 표면은 유지한다.
+- `core/subtitle_pipeline.py`는 dataclass/상수/함수 export를 유지하고 내부 helper만 `core/subtitle_pipeline_impl/`의 types/history/incremental/entries로 나눴다.
+- `subtitle_extractor.spec` hidden import에는 `core.database_impl.*`, `core.subtitle_pipeline_impl.*`, `ui.main_window_impl.persistence_runtime_*`를 추가해 frozen 빌드에서도 facade 뒤 구현이 누락되지 않도록 맞췄다.
+- `.gitignore`와 `pytest.ini`는 `.claude/` scratch worktree를 제외해 전체 테스트와 publish scope에 중복 테스트 파일이 섞이지 않게 한다.
+- 최신 기준선은 `pytest -q` 217 pass / 1 skipped, source smoke 2종 통과이다.
+
 ## 9.9.7 v16.14.7 세션 안정성 / 도구 체인 정합화 (2026-04-06)
 - 실행 중 수동 `세션 저장`은 runtime archive를 정리하지 않고 snapshot-only로 처리되며, 이후 segment flush/search/render/export는 같은 archive를 계속 사용한다.
 - runtime flush/checkpoint/recovery write는 `archive_token` + `run_id` + captured path context를 함께 유지하고, stale completion은 무시한다.
@@ -470,7 +486,7 @@ pip install -r requirements-dev.txt
 ## 9.9.9 v16.14.7 기능 구현 정합성 보강 (2026-04-14)
 - storage preflight는 이제 디렉터리 probe뿐 아니라 `subtitle_history.db`, `committee_presets.json`, `url_history.json`, `session_recovery.json`의 실제 파일 surface와 SQLite `PRAGMA journal_mode=WAL`까지 검증한다.
 - `core/live_list.py`가 `live_list.asp` URL 생성, payload 파싱, row 정규화, 오류 분류, 자동 선택 정책을 공통화하고, `LiveBroadcastDialog`와 `capture_live`는 같은 helper를 사용한다.
-- `xcode`가 없고 진행 중인 생중계 후보가 여러 개인 경우 첫 후보를 자동 선택하지 않고 원래 URL을 유지하며, 상태바/토스트로 `생중계 목록` 수동 선택을 유도한다.
+- `xcode`가 없으면 진행 중인 생중계 후보가 한 개뿐이어도 자동 선택하지 않고 원래 URL을 유지하며, 상태바/토스트로 위원회 프리셋 또는 `생중계 목록` 수동 선택을 유도한다.
 - `DatabaseManager`는 base schema와 FTS 초기화를 분리하고, `db_available`, `fts_available`, `db_degraded_reason`를 UI에 노출한다. FTS를 사용할 수 없으면 검색은 literal `LIKE`로 fallback한다.
 - URL 히스토리/프리셋 load-save 실패는 더 이상 로그에만 남지 않고 사용자 경고로 노출되며, `persistence_exports.py` / `pipeline_messages.py` dead branch는 정리되었다.
 - `subtitle_extractor.spec` hidden import에 `core.live_list`가 추가되었고, `.gitignore`는 `.storage_probe`를 저장소 전체에서 무시한다.
@@ -494,6 +510,23 @@ pip install -r requirements-dev.txt
 - `tests/test_live_contract_smoke.py`는 `RUN_LIVE_SMOKE=1`일 때만 실제 `live_list.asp` 응답 schema를 확인한다.
 - 수정한 `pipeline_queue`, `pipeline_state`, `pipeline_messages`, `runtime_driver`는 `TYPE_CHECKING` Host base를 사용해 파일 단위 blanket pyright suppression을 제거했다.
 - 최신 기준선은 `pytest -q` 217 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, import smoke 및 source smoke 2종 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공, frozen EXE 기본 `--smoke`와 `portable.flag` `--smoke-storage-preflight` exit code 0이다.
+
+## 9.9.12 v16.14.7 기능 리스크 개선 전체 반영 (2026-05-18)
+- 기본 URL/본회의 프리셋은 `xcode=10`으로 고정하고, `특별위원회(91)`, `청문회/공청회(99)` 프리셋과 약칭을 추가했다. stale `IO` 기본 프리셋은 제거하되 사용자 저장 프리셋 JSON은 유지한다.
+- `target_xcode`가 없으면 단일 live row도 자동 선택하지 않는다. `resolved_url` 메시지는 `current_url`/history와 `_capture_source_url`, `_capture_source_committee`를 함께 resolved URL 기준으로 갱신한다.
+- `LiveBroadcastDialog`는 `생중계`와 `종료/예정` row를 모두 표시한다. `xcgcd`가 없는 row는 회색 안내 row로 표시하고 URL 적용을 차단한다.
+- runtime archive load는 segment/tail checkpoint fingerprint를 실제 entries와 대조한다. strict load는 실패, salvage는 해당 파일 제외와 `무결성 불일치` 경고로 처리한다.
+- `scripts/check_live_list_drift.py`는 live-list xcode drift를 JSON으로 보고하고, `scripts/run_release_verification.py`는 pytest/pyright/source smoke/live smoke/drift report/PyInstaller/frozen smoke/portable preflight를 순서대로 실행한다.
+- 파일 단위 `# pyright:` directive는 금지하며 `tests/test_pyright_suppression_policy.py`로 회귀를 차단한다.
+- 검증 기준선은 `python scripts/run_release_verification.py` 통과, `pytest` 228 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list drift 없음, clean build 및 frozen/portable smoke exit code 0이다.
+
+## 9.9.13 v16.14.7 리스크 리뷰 후속 검증 자동화 (2026-05-21)
+- `--smoke-instantiate-window`는 기본 smoke를 opt-in으로 확장해 `QApplication` + `MainWindow()` 생성/정리까지 확인한다. 실패 시 `window_instantiated=false`, `error_type=window_instantiation`, exit code 2를 반환한다.
+- `scripts/check_live_list_drift.py`는 xcode set drift 외에 `api_code_to_names`, `api_code_to_descriptions`, Config 이름/약칭 매핑, `name_mismatch`, `name_drift`를 보고하며 strict 옵션 `--fail-on-drift`, `--fail-on-name-drift`를 제공한다.
+- 자동 URL 보완은 `live_list` fetch/schema/network 실패 payload를 보존하고, 최종 fallback 실패 시 status/toast에 `live_list 조회 실패(<error_type>): <error>`를 표시한다.
+- `core.file_io.next_available_path()`는 자동 백업 같은 파일명 충돌을 `_001`, `_002` suffix로 회피한다. 세션/백업 기본 파일명은 microsecond timestamp를 사용한다.
+- `scripts/run_release_verification.py`는 `--offline`, `--skip-live`, `--skip-build`, `--instantiate-window`, drift strict 옵션을 제공하며, 기본 실행은 기존 전체 릴리스 검증을 유지한다.
+- 검증 기준선은 `python scripts/run_release_verification.py` 통과, `pytest` 243 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list `drift=false`, `name_drift=false`, clean build 및 frozen/portable smoke exit code 0이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

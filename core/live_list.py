@@ -137,12 +137,10 @@ def select_live_broadcast_row(
             }
         return {"ok": False, "reason": "xcode_not_live", "candidate_count": 0}
 
-    if len(live_rows) == 1:
-        return {"ok": True, "row": live_rows[0], "reason": "single_live"}
-    if len(live_rows) > 1:
+    if live_rows:
         return {
             "ok": False,
-            "reason": "ambiguous_live",
+            "reason": "target_xcode_required",
             "candidate_count": len(live_rows),
         }
     return {"ok": False, "reason": "no_live", "candidate_count": 0}
@@ -173,9 +171,15 @@ def summarize_live_selection_issue(
     *,
     target_xcode: str | None = None,
     candidate_count: int = 0,
+    error_type: str = "",
+    error: str = "",
 ) -> str:
     normalized_reason = str(reason or "").strip()
     xcode = str(target_xcode or "").strip()
+    if normalized_reason == "live_list_error":
+        normalized_error_type = str(error_type or "unknown").strip() or "unknown"
+        normalized_error = str(error or "알 수 없는 오류").strip() or "알 수 없는 오류"
+        return f"live_list 조회 실패({normalized_error_type}): {normalized_error}"
     if normalized_reason == "ambiguous_xcode" and xcode:
         return (
             f"xcode={xcode}에 해당하는 생중계 후보가 {candidate_count}개여서 "
@@ -185,6 +189,11 @@ def summarize_live_selection_issue(
         return (
             f"진행 중인 생중계 후보가 {candidate_count}개여서 자동 선택을 생략했습니다. "
             "생중계 목록에서 직접 선택하세요."
+        )
+    if normalized_reason == "target_xcode_required":
+        return (
+            f"진행 중인 생중계 후보가 {candidate_count}개 있지만 xcode 대상이 없어 "
+            "자동 선택을 생략했습니다. 위원회 프리셋 또는 생중계 목록에서 직접 선택하세요."
         )
     if normalized_reason == "xcode_not_live" and xcode:
         return f"xcode={xcode} 위원회의 진행 중인 생중계를 찾지 못했습니다."

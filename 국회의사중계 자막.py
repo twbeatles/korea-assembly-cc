@@ -66,23 +66,63 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
             "frozen + console=False 환경에서 stdout이 사라지는 경우 사용합니다."
         ),
     )
+    parser.add_argument(
+        "--smoke-instantiate-window",
+        action="store_true",
+        help="--smoke 실행 시 offscreen 가능한 MainWindow() 생성/정리까지 검증합니다.",
+    )
     return parser.parse_args(argv)
 
 
 def _print_json_line(payload: dict[str, object], *, output_path: str = "") -> None:
-    _ensure_cli_console_output()
-    rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-    print(rendered, flush=True)
+    line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    wrote = False
+    original_stdout = getattr(sys, "stdout", None)
+    original_stderr = getattr(sys, "stderr", None)
+    if _write_json_line(original_stdout, line):
+        wrote = True
+    elif _write_json_line(original_stderr, line):
+        wrote = True
+
+    if not wrote:
+        _ensure_cli_console_output()
+        if _write_json_line(getattr(sys, "stdout", None), line):
+            wrote = True
+        elif _write_json_line(getattr(sys, "stderr", None), line):
+            wrote = True
+
+    if not wrote and os.name == "nt":
+        try:
+            with open("CONOUT$", "w", encoding="utf-8", buffering=1) as console:
+                console.write(f"{line}\n")
+                console.flush()
+        except OSError:
+            pass
+
     target = str(output_path or "").strip()
     if not target:
         return
     try:
         out_path = Path(target).resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(rendered + "\n", encoding="utf-8")
+        out_path.write_text(line + "\n", encoding="utf-8")
     except Exception:
         # smoke의 신뢰도는 exit code로 판단되므로 파일 기록 실패는 무시한다.
         pass
+
+
+def _write_json_line(stream: object, line: str) -> bool:
+    write = getattr(stream, "write", None)
+    flush = getattr(stream, "flush", None)
+    if not callable(write):
+        return False
+    try:
+        write(f"{line}\n")
+        if callable(flush):
+            flush()
+    except (OSError, UnicodeError, ValueError):
+        return False
+    return True
 
 
 def _run_storage_preflight_for_cli(storage_dir: str = "") -> tuple[bool, str, dict[str, str]]:
@@ -91,6 +131,7 @@ def _run_storage_preflight_for_cli(storage_dir: str = "") -> tuple[bool, str, di
     storage_dir = str(storage_dir or "").strip()
     if storage_dir:
         root = Path(storage_dir).resolve()
+        _apply_cli_storage_override(Config, root)
         ok, error = run_storage_preflight(
             root,
             database_path=root / "subtitle_history.db",
@@ -108,6 +149,70 @@ def _run_storage_preflight_for_cli(storage_dir: str = "") -> tuple[bool, str, di
         "storage_dir": str(Config.STORAGE_DIR),
         "storage_mode": str(Config.STORAGE_MODE),
     }
+
+
+def _apply_cli_storage_override(config_class: Any, root: Path) -> None:
+    config_class.STORAGE_DIR = str(root)
+    config_class.STORAGE_MODE = "override"
+    config_class.SETTINGS_INI_PATH = ""
+    config_class.LOG_DIR = str(root / "logs")
+    config_class.SESSION_DIR = str(root / "sessions")
+    config_class.REALTIME_DIR = str(root / "realtime_output")
+    config_class.BACKUP_DIR = str(root / "backups")
+    config_class.RUNTIME_SESSION_DIR = str(root / "backups" / "runtime_sessions")
+    config_class.PRESET_FILE = str(root / "committee_presets.json")
+    config_class.URL_HISTORY_FILE = str(root / "url_history.json")
+    config_class.RECOVERY_STATE_FILE = str(root / "session_recovery.json")
+    config_class.DATABASE_PATH = str(root / "subtitle_history.db")
+
+
+def _run_window_instantiation_smoke(
+    application_class: Any,
+    window_class: Any,
+) -> dict[str, object]:
+    app = application_class.instance()
+    app_created = False
+    if app is None:
+        app = application_class(["assembly-subtitle-smoke"])
+        app_created = True
+    if not isinstance(app, application_class):
+        raise RuntimeError("QApplication 인스턴스를 초기화할 수 없습니다.")
+
+    window: Any | None = None
+    try:
+        window = cast(Any, window_class)()
+        if window is None:
+            raise RuntimeError("MainWindow 인스턴스를 생성할 수 없습니다.")
+        window_obj = cast(Any, window)
+        title = str(window_obj.windowTitle() or "").strip()
+        if not title:
+            raise RuntimeError("MainWindow 제목이 비어 있습니다.")
+        return {
+            "window_instantiated": True,
+            "window_title": title,
+            "qapplication_created": app_created,
+        }
+    finally:
+        if window is not None:
+            try:
+                begin_shutdown = getattr(window, "_begin_background_shutdown", None)
+                if callable(begin_shutdown):
+                    begin_shutdown()
+                begin_db_shutdown = getattr(window, "_begin_db_worker_shutdown", None)
+                if callable(begin_db_shutdown):
+                    begin_db_shutdown()
+                shutdown_db = getattr(window, "_shutdown_db_worker", None)
+                if callable(shutdown_db):
+                    shutdown_db(timeout=1.0)
+                window.close()
+                window.deleteLater()
+            except Exception:
+                pass
+        try:
+            app.processEvents()
+            app.processEvents()
+        except Exception:
+            pass
 
 
 def _run_smoke(args: argparse.Namespace) -> int:
@@ -137,20 +242,33 @@ def _run_smoke(args: argparse.Namespace) -> int:
     hwpx_assets_path = Path(Config.get_resource_path("assets/hwpx"))
     resource_ok = readme_path.exists() and hwpx_assets_path.exists()
     imports_ok = MainWindow.__name__ == "MainWindow" and callable(reconcile_live_capture)
+    window_payload: dict[str, object] = {}
+    window_ok = True
+    if bool(getattr(args, "smoke_instantiate_window", False)):
+        try:
+            window_payload = _run_window_instantiation_smoke(QApplication, MainWindow)
+        except Exception as exc:
+            window_ok = False
+            window_payload = {
+                "window_instantiated": False,
+                "window_title": "",
+                "error_type": "window_instantiation",
+                "error": str(exc),
+            }
     smoke_ok = bool(ok and resource_ok and imports_ok)
-    _print_json_line(
-        {
-            "ok": smoke_ok,
-            "kind": "smoke",
-            "version": Config.VERSION,
-            "storage": storage_payload,
-            "storage_preflight": ok,
-            "resource_ok": resource_ok,
-            "imports_ok": imports_ok,
-            "error": error,
-        },
-        output_path=output_path,
-    )
+    smoke_ok = bool(smoke_ok and window_ok)
+    payload: dict[str, object] = {
+        "ok": smoke_ok,
+        "kind": "smoke",
+        "version": Config.VERSION,
+        "storage": storage_payload,
+        "storage_preflight": ok,
+        "resource_ok": resource_ok,
+        "imports_ok": imports_ok,
+        "error": error if window_ok else str(window_payload.get("error", "")),
+    }
+    payload.update(window_payload)
+    _print_json_line(payload, output_path=output_path)
     return 0 if smoke_ok else 2
 
 

@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
 
 import json
 import re
 from importlib import import_module
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -28,7 +26,7 @@ def _capture_public() -> Any:
     return import_module("ui.main_window_capture")
 
 
-CaptureLiveBase = object
+CaptureLiveBase = CaptureLiveHost if TYPE_CHECKING else object
 
 
 class MainWindowCaptureLiveMixin(CaptureLiveBase):
@@ -72,11 +70,15 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
         *,
         target_xcode: str | None = None,
         candidate_count: int = 0,
+        error_type: str = "",
+        error: str = "",
     ) -> None:
         message = summarize_live_selection_issue(
             reason,
             target_xcode=target_xcode,
             candidate_count=candidate_count,
+            error_type=error_type,
+            error=error,
         )
         logger.warning(message)
         try:
@@ -107,12 +109,25 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
             payload = {"ok": True, "result": payload, "error_type": "none"}
         if not isinstance(payload, dict) or not payload.get("ok"):
             if isinstance(payload, dict):
+                error_type = str(payload.get("error_type", "unknown") or "unknown")
+                error = str(payload.get("error", "알 수 없는 오류") or "알 수 없는 오류")
                 logger.debug(
                     "live_list 응답 무시 (%s): %s",
-                    payload.get("error_type", "unknown"),
-                    payload.get("error", "알 수 없는 오류"),
+                    error_type,
+                    error,
                 )
-            return original_url, None
+                return original_url, {
+                    "ok": False,
+                    "reason": "live_list_error",
+                    "error_type": error_type,
+                    "error": error,
+                }
+            return original_url, {
+                "ok": False,
+                "reason": "live_list_error",
+                "error_type": "invalid_payload",
+                "error": "live_list 응답 형식이 올바르지 않습니다.",
+            }
 
         broadcasts = payload.get("result")
         if not isinstance(broadcasts, list) or not broadcasts:
@@ -372,7 +387,7 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                         target_xcode=target_xcode,
                     )
                     if selection.get("ok") and isinstance(selection.get("row"), dict):
-                        row = selection["row"]
+                        row = cast(dict[str, str], selection["row"])
                         xcgcd = str(row.get("xcgcd", "")).strip()
                         logger.info(
                             "페이지 후보 매칭 성공: reason=%s, xcode=%s, xcgcd=%s",
@@ -411,7 +426,7 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                             target_xcode=target_xcode,
                         )
                         if selection.get("ok") and isinstance(selection.get("row"), dict):
-                            row = selection["row"]
+                            row = cast(dict[str, str], selection["row"])
                             xcgcd = str(row.get("xcgcd", "")).strip()
                             logger.info(
                                 "메인 페이지 후보 매칭 성공: reason=%s, xcode=%s, xcgcd=%s",
@@ -533,12 +548,21 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
             target_xcode = self._get_query_param(original_url, "xcode").strip() or None
             if isinstance(live_list_issue, dict):
                 issue_reason = str(live_list_issue.get("reason", "") or "").strip()
-                candidate_count = int(live_list_issue.get("candidate_count", 0) or 0)
-                if issue_reason in {"ambiguous_live", "ambiguous_xcode"}:
+                candidate_count = int(
+                    cast(Any, live_list_issue.get("candidate_count", 0)) or 0
+                )
+                if issue_reason in {
+                    "ambiguous_live",
+                    "ambiguous_xcode",
+                    "target_xcode_required",
+                    "live_list_error",
+                }:
                     self._notify_live_selection_issue(
                         issue_reason,
                         target_xcode=target_xcode,
                         candidate_count=candidate_count,
+                        error_type=str(live_list_issue.get("error_type", "") or ""),
+                        error=str(live_list_issue.get("error", "") or ""),
                     )
                     return original_url
             if target_xcode:

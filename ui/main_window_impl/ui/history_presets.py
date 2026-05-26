@@ -122,7 +122,7 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
 
             # 기본 URL 추가
             if not self.url_history:
-                self.url_combo.addItem("https://assembly.webcast.go.kr/main/player.asp")
+                self.url_combo.addItem(Config.DEFAULT_URL)
 
             # 이전 텍스트 복원
             if current_text:

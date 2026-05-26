@@ -425,4 +425,16 @@ def test_save_hwp_success_path_runs_with_fake_com_objects(tmp_path, monkeypatch)
 def test_config_removes_unverified_committee_entries():
     assert "정보위원회" not in Config.DEFAULT_COMMITTEE_PRESETS
     assert "정보위원회" not in Config.COMMITTEE_XCODE_MAP
-    assert Config.SPECIAL_COMMITTEE_XCODES == {"IO": "국정감사/국정조사"}
+    assert "국정감사" not in Config.DEFAULT_COMMITTEE_PRESETS
+    assert "국정조사" not in Config.DEFAULT_COMMITTEE_PRESETS
+    assert Config.SPECIAL_COMMITTEE_XCODES == {}
+
+
+def test_config_uses_verified_live_list_xcodes_for_default_presets():
+    assert Config.DEFAULT_URL.endswith("xcode=10")
+    assert Config.DEFAULT_COMMITTEE_PRESETS["본회의"].endswith("xcode=10")
+    assert Config.COMMITTEE_XCODE_MAP["본회의"] == 10
+    assert Config.COMMITTEE_XCODE_MAP["특별위원회"] == 91
+    assert Config.COMMITTEE_XCODE_MAP["청문회/공청회"] == 99
+    assert Config.COMMITTEE_ABBREVIATIONS["청문회"] == "청문회/공청회"
+    assert Config.COMMITTEE_ABBREVIATIONS["공청회"] == "청문회/공청회"

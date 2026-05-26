@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
 
 import queue
 from datetime import datetime
 from importlib import import_module
+from typing import TYPE_CHECKING
 
 from core import utils
 from core.config import Config
@@ -20,7 +19,7 @@ def _pipeline_public():
     return import_module("ui.main_window_pipeline")
 
 
-PipelineStreamBase = object
+PipelineStreamBase = PipelineStreamHost if TYPE_CHECKING else object
 
 
 class MainWindowPipelineStreamMixin(PipelineStreamBase):

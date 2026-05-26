@@ -1,3 +1,4 @@
+import json
 import queue
 import threading
 import time
@@ -64,6 +65,108 @@ def test_runtime_segment_flush_removes_prefix_only_after_done(tmp_path, monkeypa
     assert len(win.subtitles) == 2
     assert win._runtime_archived_count == 4
     assert len(win._runtime_segment_manifest) == 1
+
+
+def test_runtime_tail_checkpoint_writes_fingerprint_and_revision(tmp_path):
+    win = MainWindow.__new__(MainWindow)
+    entries = [
+        SubtitleEntry("첫 tail", entry_id="tail-1"),
+        SubtitleEntry("둘 tail", entry_id="tail-2"),
+    ]
+    checkpoint_path = tmp_path / "tail_checkpoint.json"
+
+    MainWindow._write_runtime_tail_checkpoint_to_path(
+        win,
+        checkpoint_path,
+        entries,
+        current_url="https://assembly.example/live",
+        committee_name="행안위",
+        archived_count=3,
+        archived_chars=10,
+        archived_words=4,
+        tail_revision=7,
+    )
+
+    payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    fingerprint = MainWindow._build_runtime_entries_fingerprint(win, entries)
+    assert payload["entry_count"] == fingerprint["entry_count"]
+    assert payload["first_entry_id"] == "tail-1"
+    assert payload["last_entry_id"] == "tail-2"
+    assert payload["entries_digest"] == fingerprint["entries_digest"]
+    assert payload["tail_revision"] == 7
+
+
+def test_runtime_recovery_snapshot_fallback_clones_tail_under_lock(tmp_path):
+    class _GuardedLock:
+        def __init__(self) -> None:
+            self.entered = False
+
+        def __enter__(self):
+            self.entered = True
+            return self
+
+        def __exit__(self, *_args):
+            self.entered = False
+            return False
+
+    class _GuardedSubtitles:
+        def __init__(self, lock: _GuardedLock) -> None:
+            self.lock = lock
+            self.iterated_inside_lock = False
+            self.entries = [SubtitleEntry("현재 tail", entry_id="current-tail")]
+
+        def __iter__(self):
+            if not self.lock.entered:
+                raise AssertionError("subtitles iterated without subtitle_lock")
+            self.iterated_inside_lock = True
+            return iter(self.entries)
+
+    win = MainWindow.__new__(MainWindow)
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    guarded_lock = _GuardedLock()
+    guarded_subtitles = _GuardedSubtitles(guarded_lock)
+    win.subtitle_lock = guarded_lock
+    win.subtitles = guarded_subtitles
+    win._runtime_archive_token = "token"
+    win._runtime_archive_run_id = 7
+    win._runtime_archived_count = 1
+    win._runtime_tail_revision = 1
+    win._write_runtime_manifest = lambda: None
+    fallback_entries: list[list[SubtitleEntry]] = []
+    win._write_runtime_tail_checkpoint = lambda entries: fallback_entries.append(list(entries))
+
+    def mark_stale(*_args, **_kwargs) -> None:
+        win._runtime_tail_revision = 2
+
+    win._write_runtime_tail_checkpoint_to_path = mark_stale
+    win._write_runtime_manifest_to_path = lambda *_args, **_kwargs: None
+
+    recorded = MainWindow._record_runtime_recovery_snapshot_from_context(
+        win,
+        [SubtitleEntry("captured", entry_id="captured")],
+        context={
+            "runtime_root": runtime_root,
+            "manifest_path": runtime_root / "manifest.json",
+            "tail_checkpoint_name": "tail_checkpoint.json",
+            "archive_token": "token",
+            "run_id": 7,
+            "archived_count": 1,
+            "archived_chars": 0,
+            "archived_words": 0,
+            "tail_revision": 1,
+            "manifest_items": [],
+            "url": "https://assembly.example/live",
+            "committee_name": "행안위",
+            "lineage_id": "lineage",
+        },
+    )
+
+    assert recorded is False
+    assert guarded_subtitles.iterated_inside_lock is True
+    assert [[entry.text for entry in entries] for entries in fallback_entries] == [
+        ["현재 tail"]
+    ]
 
 
 def test_session_save_done_preserves_runtime_archive_and_allows_followup_flush(
@@ -631,7 +734,19 @@ def test_select_live_broadcast_row_prefers_exact_xcode_match():
     assert row["xcgcd"] == "LIVE002"
 
 
-def test_select_live_broadcast_row_marks_multiple_live_candidates_as_ambiguous():
+def test_select_live_broadcast_row_requires_target_xcode_for_single_live_candidate():
+    selection = select_live_broadcast_row(
+        [
+            {"xstat": "1", "xcgcd": "LIVE001", "xcode": "AB", "xname": "A", "time": ""},
+        ]
+    )
+
+    assert selection["ok"] is False
+    assert selection["reason"] == "target_xcode_required"
+    assert selection["candidate_count"] == 1
+
+
+def test_select_live_broadcast_row_requires_target_xcode_for_multiple_live_candidates():
     selection = select_live_broadcast_row(
         [
             {"xstat": "1", "xcgcd": "LIVE001", "xcode": "AB", "xname": "A", "time": ""},
@@ -640,7 +755,7 @@ def test_select_live_broadcast_row_marks_multiple_live_candidates_as_ambiguous()
     )
 
     assert selection["ok"] is False
-    assert selection["reason"] == "ambiguous_live"
+    assert selection["reason"] == "target_xcode_required"
     assert selection["candidate_count"] == 2
 
 
@@ -690,11 +805,17 @@ def test_live_broadcast_dialog_reports_dropped_rows_without_hiding_tree_message(
     assert "손상 항목 1개" in dialog.msg_label.text()
 
 
-def test_live_broadcast_dialog_reports_no_selectable_rows_without_schema_error():
+def test_live_broadcast_dialog_shows_no_xcgcd_rows_without_schema_error(monkeypatch):
     app = QApplication.instance() or QApplication([])
     _ = app
     dialog = dialogs_mod.LiveBroadcastDialog()
     dialog.refresh_btn.setEnabled(False)
+    infos: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        dialogs_mod.QMessageBox,
+        "information",
+        lambda _parent, title, message: infos.append((title, message)),
+    )
 
     dialog._on_fetch_done(
         dialog._fetch_request_token,
@@ -714,6 +835,43 @@ def test_live_broadcast_dialog_reports_no_selectable_rows_without_schema_error()
         },
     )
 
-    assert dialog.tree.topLevelItemCount() == 0
-    assert "현재 선택 가능한 생중계가 없습니다." in dialog.msg_label.text()
+    assert dialog.tree.topLevelItemCount() == 1
+    item = dialog.tree.topLevelItem(0)
+    assert item is not None
+    dialog.tree.setCurrentItem(item)
+    dialog.accept_selection()
+    assert dialog.selected_broadcast is None
+    assert infos == [("URL 생성 불가", "이 항목은 현재 생중계 URL을 만들 수 없습니다.")]
     assert "응답 구조 오류" not in dialog.msg_label.text()
+
+
+def test_live_broadcast_dialog_accepts_non_live_rows_when_xcgcd_exists():
+    app = QApplication.instance() or QApplication([])
+    _ = app
+    dialog = dialogs_mod.LiveBroadcastDialog()
+    dialog.refresh_btn.setEnabled(False)
+
+    dialog._on_fetch_done(
+        dialog._fetch_request_token,
+        {
+            "ok": True,
+            "result": [
+                {
+                    "xstat": "0",
+                    "xcgcd": "ENDED001",
+                    "xcode": "10",
+                    "xname": "본회의",
+                    "xdesc": "종료",
+                    "time": "",
+                }
+            ],
+            "dropped_rows": 0,
+        },
+    )
+
+    assert dialog.tree.topLevelItemCount() == 1
+    item = dialog.tree.topLevelItem(0)
+    assert item is not None
+    dialog.tree.setCurrentItem(item)
+    dialog.accept_selection()
+    assert dialog.selected_broadcast["xcgcd"] == "ENDED001"

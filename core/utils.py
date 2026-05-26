@@ -8,6 +8,7 @@ from core.file_io import (
     atomic_write_text,
     atomic_write_text_via_writer,
     iter_serialized_subtitles,
+    next_available_path,
 )
 from core.reflow import reflow_subtitles
 from core.text_utils import (

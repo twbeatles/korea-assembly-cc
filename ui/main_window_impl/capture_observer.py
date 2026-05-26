@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-# pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportCallIssue=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportAssignmentType=false
-
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from core.logging_utils import logger
 from ui.main_window_impl.contracts import CaptureObserverHost
 
 
-CaptureObserverBase = object
+CaptureObserverBase = CaptureObserverHost if TYPE_CHECKING else object
 
 
 class MainWindowCaptureObserverMixin(CaptureObserverBase):

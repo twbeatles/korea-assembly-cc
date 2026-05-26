@@ -1,10 +1,26 @@
+import importlib.util
+import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 
 import core.config as config_mod
 from core.config import Config, resolve_storage_resolution, run_storage_preflight
+
+
+def _load_entrypoint_module():
+    module_path = Path("국회의사중계 자막.py").resolve()
+    spec = importlib.util.spec_from_file_location(
+        "assembly_subtitle_entrypoint_for_test",
+        module_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_config_paths_are_absolute():
@@ -165,6 +181,66 @@ def test_entrypoint_storage_preflight_smoke_outputs_json(tmp_path):
     assert payload["kind"] == "storage_preflight"
     assert payload["storage"]["storage_mode"] == "override"
     assert Path(payload["storage"]["storage_dir"]) == target.resolve()
+
+
+def test_entrypoint_smoke_instantiate_window_outputs_json(tmp_path):
+    target = tmp_path / "window-smoke-storage"
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "국회의사중계 자막.py",
+            "--smoke",
+            "--smoke-instantiate-window",
+            "--smoke-storage-dir",
+            str(target),
+        ],
+        check=False,
+        capture_output=True,
+        encoding="utf-8",
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip())
+    assert payload["ok"] is True
+    assert payload["window_instantiated"] is True
+    assert "국회 의사중계 자막 추출기" in payload["window_title"]
+    assert payload["storage"]["storage_mode"] == "override"
+    assert Path(payload["storage"]["storage_dir"]) == target.resolve()
+
+
+def test_entrypoint_json_output_prefers_working_stdout(monkeypatch):
+    entrypoint = _load_entrypoint_module()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    monkeypatch.setattr(entrypoint.sys, "stdout", stdout)
+    monkeypatch.setattr(entrypoint.sys, "stderr", stderr)
+
+    entrypoint._print_json_line({"ok": True})
+
+    assert json.loads(stdout.getvalue()) == {"ok": True}
+    assert stderr.getvalue() == ""
+
+
+def test_entrypoint_json_output_falls_back_when_stdout_is_invalid(monkeypatch):
+    entrypoint = _load_entrypoint_module()
+    stderr = io.StringIO()
+
+    class BrokenStream:
+        def write(self, _text):
+            raise OSError(22, "Invalid argument")
+
+        def flush(self):
+            raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(entrypoint.sys, "stdout", BrokenStream())
+    monkeypatch.setattr(entrypoint.sys, "stderr", stderr)
+
+    entrypoint._print_json_line({"ok": True})
+
+    assert json.loads(stderr.getvalue()) == {"ok": True}
 
 
 def test_merge_and_streaming_config_defaults():

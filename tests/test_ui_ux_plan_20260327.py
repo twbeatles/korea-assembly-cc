@@ -227,6 +227,49 @@ def test_resolve_live_url_from_list_keeps_original_url_when_live_candidates_are_
     assert resolved == original_url
 
 
+def test_resolve_live_url_from_payload_preserves_live_list_error_details():
+    win = MainWindow.__new__(MainWindow)
+    original_url = "https://assembly.webcast.go.kr/main/player.asp?xcode=AB"
+
+    resolved, issue = MainWindow._resolve_live_url_from_payload(
+        win,
+        original_url,
+        {
+            "ok": False,
+            "error_type": "invalid_schema",
+            "error": "응답의 xlist가 목록(list)이 아닙니다.",
+        },
+        "AB",
+    )
+
+    assert resolved == original_url
+    assert issue is not None
+    assert issue["reason"] == "live_list_error"
+    assert issue["error_type"] == "invalid_schema"
+    assert "xlist" in str(issue["error"])
+
+
+def test_notify_live_selection_issue_surfaces_live_list_error_to_status_and_toast():
+    win = MainWindow.__new__(MainWindow)
+    messages: list[tuple[str, object]] = []
+    win.message_queue = SimpleNamespace(put=lambda item: messages.append(item))
+
+    MainWindow._notify_live_selection_issue(
+        win,
+        "live_list_error",
+        target_xcode="AB",
+        error_type="network",
+        error="timed out",
+    )
+
+    assert messages[0] == ("status", "⚠️ live_list 조회 실패(network): timed out")
+    toast_type, toast_payload = messages[1]
+    assert toast_type == "toast"
+    assert isinstance(toast_payload, dict)
+    assert toast_payload["message"] == "live_list 조회 실패(network): timed out"
+    assert toast_payload["toast_type"] == "warning"
+
+
 def test_show_live_dialog_prompts_before_applying_non_live_selection(monkeypatch):
     win = MainWindow.__new__(MainWindow)
     win.url_combo = _FakeCombo()
@@ -342,6 +385,45 @@ def test_session_save_done_clears_dirty_and_reports_db_warning():
     assert recovery_cleared == [True]
     assert statuses == [("세션 저장 완료 (3개)", "success")]
     assert toasts == [("세션 저장 완료 (DB 저장은 실패)", "warning", 3500)]
+
+
+def test_resolved_url_message_updates_capture_source_metadata_and_history():
+    win = MainWindow.__new__(MainWindow)
+    win._is_stopping = False
+    win.current_url = "https://assembly.example/original"
+    win.url_combo = _FakeCombo()
+    win._capture_source_url = "https://assembly.example/original"
+    win._capture_source_committee = "기존위원회"
+    win._capture_source_headless = True
+    win._capture_source_realtime = False
+    history: list[tuple[str, str]] = []
+    metadata: list[tuple[str, str, bool, bool]] = []
+    win._autodetect_tag = lambda url: "행안위" if "xcode=45" in url else ""
+    win._get_capture_source_committee = (
+        lambda fallback_to_url=True: win._capture_source_committee
+    )
+    win._set_capture_source_metadata = (
+        lambda url, committee, headless=False, realtime=False: metadata.append(
+            (url, committee, headless, realtime)
+        )
+        or setattr(win, "_capture_source_url", url)
+        or setattr(win, "_capture_source_committee", committee)
+        or setattr(win, "_capture_source_headless", headless)
+        or setattr(win, "_capture_source_realtime", realtime)
+    )
+    win._add_to_history = lambda url, committee="": history.append((url, committee))
+
+    resolved_url = (
+        "https://assembly.webcast.go.kr/main/player.asp?xcode=45&xcgcd=LIVE045"
+    )
+    MainWindow._handle_message(win, "resolved_url", resolved_url)
+
+    assert win.current_url == resolved_url
+    assert win.url_combo.edit_text == resolved_url
+    assert history == [(resolved_url, "행안위")]
+    assert metadata == [(resolved_url, "행안위", True, False)]
+    assert win._capture_source_url == resolved_url
+    assert win._capture_source_committee == "행안위"
 
 
 def test_worker_failure_finished_payload_keeps_error_status(monkeypatch):
