@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from datetime import datetime
@@ -154,18 +155,46 @@ def _build_session_window() -> tuple[Any, list[tuple[str, str]]]:
 def test_add_to_history_moves_existing_url_to_mru_and_preserves_tag():
     win = MainWindow.__new__(MainWindow)
     win.url_history = {
-        "https://example.com/first": "첫번째",
-        "https://example.com/second": "두번째",
+        "https://assembly.webcast.go.kr/main/player.asp?xcode=10": "첫번째",
+        "https://assembly.webcast.go.kr/main/player.asp?xcode=25": "두번째",
     }
     win.committee_presets = {}
     win._save_url_history = lambda: None
     win._refresh_url_combo = lambda: None
 
-    MainWindow._add_to_history(win, "https://example.com/first")
+    MainWindow._add_to_history(
+        win,
+        "https://assembly.webcast.go.kr/main/player.asp?xcode=10",
+    )
 
     assert list(win.url_history.items()) == [
-        ("https://example.com/second", "두번째"),
-        ("https://example.com/first", "첫번째"),
+        ("https://assembly.webcast.go.kr/main/player.asp?xcode=25", "두번째"),
+        ("https://assembly.webcast.go.kr/main/player.asp?xcode=10", "첫번째"),
+    ]
+
+
+def test_start_rejects_external_url_before_history_or_worker(monkeypatch):
+    warnings: list[tuple[str, str]] = []
+    win = MainWindow.__new__(MainWindow)
+    win.is_running = False
+    win._get_current_url = lambda: "https://example.com/live"
+    win.selector_combo = SimpleNamespace(currentText=lambda: "#viewSubtit")
+
+    def fail_add_to_history(*_args, **_kwargs):
+        raise AssertionError("_add_to_history should not be called for rejected URLs")
+
+    win._add_to_history = fail_add_to_history
+
+    monkeypatch.setattr(
+        mw_mod.QMessageBox,
+        "warning",
+        lambda _self, title, message: warnings.append((title, message)),
+    )
+
+    MainWindow._start(win)
+
+    assert warnings == [
+        ("오류", "URL은 assembly.webcast.go.kr 계열만 허용됩니다.")
     ]
 
 
@@ -941,6 +970,68 @@ def test_db_search_ui_requests_literal_syntax(monkeypatch):
     assert fake_db.syntax_values == ["literal"]
 
 
+def test_db_search_empty_results_remains_no_results_flow(monkeypatch):
+    import ui.main_window_impl.database_worker as database_worker_mod
+
+    win = MainWindow.__new__(MainWindow)
+    win._db_search_request_token = 8
+    statuses: list[tuple[str, str]] = []
+    infos: list[tuple[str, str]] = []
+    win._set_status = lambda message, level: statuses.append((message, level))
+
+    monkeypatch.setattr(
+        database_worker_mod.QMessageBox,
+        "information",
+        lambda _self, title, message: infos.append((title, message)),
+    )
+
+    MainWindow._handle_db_task_result(
+        win,
+        "db_search",
+        [],
+        {"query": "없는검색어", "request_token": 8},
+    )
+
+    assert infos == [("검색 결과", "'없는검색어'에 대한 검색 결과가 없습니다.")]
+    assert statuses == [("자막 검색 결과 없음", "info")]
+
+
+def test_db_search_error_message_distinguishes_failures(monkeypatch):
+    import ui.main_window_impl.database_worker as database_worker_mod
+
+    captured_warnings: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        database_worker_mod.QMessageBox,
+        "warning",
+        lambda _self, title, message: captured_warnings.append((title, message)),
+    )
+
+    for task_name in ("db_search", "db_search_more"):
+        win = MainWindow.__new__(MainWindow)
+        win._db_search_request_token = 9
+        win._db_search_dialog_state = {"request_token": 9, "loading": True}
+        win._db_history_dialog_state = {"loading": True}
+        statuses: list[tuple[str, str]] = []
+        win._set_status = lambda message, level: statuses.append((message, level))
+        win._set_db_history_dialog_busy = lambda *_args, **_kwargs: None
+        win._set_db_search_dialog_busy = lambda *_args, **_kwargs: None
+
+        MainWindow._handle_db_task_error(
+            win,
+            task_name,
+            "db down",
+            {"query": "alpha", "request_token": 9},
+        )
+
+        assert statuses == [("검색 실패 ('alpha'): db down", "error")]
+
+    assert captured_warnings == [
+        ("데이터베이스 오류", "검색 실패 ('alpha'): db down"),
+        ("데이터베이스 오류", "검색 실패 ('alpha'): db down"),
+    ]
+
+
 def test_save_setting_value_reports_qsettings_sync_failure():
     class _FailingSettings:
         def __init__(self) -> None:
@@ -1008,6 +1099,40 @@ def test_load_url_history_reports_user_visible_warning(monkeypatch):
     assert result == {}
     assert reported
     assert "URL 히스토리 로드 실패" in reported[0][0]
+    assert reported[0][1]["toast"] is False
+
+
+def test_load_url_history_sanitizes_invalid_and_overflow_entries(tmp_path, monkeypatch):
+    history_path = tmp_path / "url_history.json"
+    history_path.write_text(
+        json.dumps(
+            {
+                "https://example.com/live": "외부",
+                "https://assembly.webcast.go.kr/main/player.asp?xcode=10": "본회의",
+                "https://assembly.webcast.go.kr/main/player.asp?xcode=25": 25,
+                "ftp://assembly.webcast.go.kr/main/player.asp": "잘못된스킴",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    win = MainWindow.__new__(MainWindow)
+    reported: list[tuple[str, dict[str, Any]]] = []
+    win._report_user_visible_warning = (
+        lambda message, **kwargs: reported.append((message, kwargs))
+    )
+
+    monkeypatch.setattr(Config, "URL_HISTORY_FILE", str(history_path), raising=False)
+    monkeypatch.setattr(Config, "MAX_URL_HISTORY", 1, raising=False)
+
+    result = MainWindow._load_url_history(win)
+
+    assert result == {
+        "https://assembly.webcast.go.kr/main/player.asp?xcode=25": ""
+    }
+    assert reported
+    assert "유효하지 않은 항목 3개" in reported[0][0]
     assert reported[0][1]["toast"] is False
 
 

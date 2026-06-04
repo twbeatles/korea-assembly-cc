@@ -7,6 +7,7 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .pytest_tmp/
+.codegraph/
 .ruff_cache/
 .mypy_cache/
 .tox/

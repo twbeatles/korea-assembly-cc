@@ -26,6 +26,7 @@
 > **v16.14.7(2026-05-06) 기능 구현 리스크 개선 반영**: 저장/export/자동백업/리플로우 worker는 clone 기반 persistent snapshot을 사용하고, bounded queue 포화 시 terminal worker message를 priority passthrough로 보존하며, FTS5 rebuild와 source/frozen smoke 검증 경로를 보강했습니다. 이는 저장·큐·DB·패키징 검증 레이어 변경이며 글로벌 히스토리 + suffix 코어 의미론은 바뀌지 않습니다.
 > **v16.14.7(2026-05-11) 보존형 책임 분리 반영**: `persistence_runtime.py`, `database_manager.py`, `subtitle_pipeline.py`는 공개 facade/API 표면을 유지하면서 내부 구현을 `persistence_runtime_*`, `core/database_impl/`, `core/subtitle_pipeline_impl/`로 분리했습니다. 이는 파일 구조와 패키징 정합성 변경이며 글로벌 히스토리 + suffix 코어 의미론은 바뀌지 않습니다.
 > **v16.14.7(2026-05-21) 리스크 리뷰 후속 검증 자동화 반영**: `MainWindow()` constructor smoke, live-list name drift 리포트, live-list 실패 원인 노출, 세션/백업 파일명 충돌 방지, release verifier 옵션화가 추가되었습니다. 이는 운영 진단·검증·저장 파일명 hygiene 변경이며 이 문서가 분석하는 글로벌 히스토리 + suffix 코어 의미론은 바뀌지 않습니다.
+> **v16.14.7(2026-06-04) 감사 후속 hardening 반영**: `core/url_policy.py` 기반 시작 URL/프리셋/URL history sanitize 공통화, runtime manifest malformed segment strict/salvage 처리, DB 검색 실패 가시성 보강이 추가되었습니다. 이는 입력 검증·복구 무결성·DB 오류 표시 레이어 변경이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
 
 ---
 

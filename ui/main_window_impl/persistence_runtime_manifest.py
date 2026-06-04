@@ -72,14 +72,29 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
             elif not manifest_loaded:
                 segments = self._build_salvaged_runtime_segments(runtime_root)
 
-            for segment in segments if isinstance(segments, list) else []:
-                relative_path = str(
-                    getattr(segment, "get", lambda *_args, **_kwargs: "")("path", "") or ""
-                )
+            for segment_index, segment in enumerate(
+                segments if isinstance(segments, list) else [],
+                start=1,
+            ):
+                if not isinstance(segment, dict):
+                    structure_error = (
+                        f"runtime segment #{segment_index} 구조가 올바르지 않습니다."
+                    )
+                    if not allow_salvage:
+                        raise ValueError(structure_error)
+                    skipped_files += 1
+                    warnings.append(structure_error)
+                    continue
+                relative_path = str(segment.get("path", "") or "")
                 if not relative_path:
+                    path_error = (
+                        f"runtime segment #{segment_index} path가 비어 있어 건너뜁니다."
+                    )
+                    if not allow_salvage:
+                        raise ValueError(path_error)
                     if allow_salvage:
                         skipped_files += 1
-                        warnings.append("path가 없는 runtime segment를 건너뜁니다.")
+                        warnings.append(path_error)
                     continue
                 try:
                     segment_path, safe_relative_path = self._resolve_runtime_relative_path(
@@ -111,7 +126,7 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                     for error in (
                         self._runtime_entries_integrity_error(
                             segment_entries,
-                            segment if isinstance(segment, dict) else None,
+                            segment,
                             source=f"{safe_relative_path} manifest",
                         ),
                         self._runtime_entries_integrity_error(

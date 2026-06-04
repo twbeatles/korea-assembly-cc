@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from importlib import import_module
 
+from core.url_policy import (
+    is_allowed_assembly_host,
+    sanitize_url_history,
+    validate_assembly_url,
+)
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 
@@ -19,12 +24,16 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                 if _ui_public().Path(Config.URL_HISTORY_FILE).exists():
                     with open(Config.URL_HISTORY_FILE, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                        # dict 형태인지 확인 (새로운 형식)
-                        if isinstance(data, dict):
-                            return data
-                        # 이전 list 형태면 dict로 변환
-                        elif isinstance(data, list):
-                            return {url: "" for url in data}
+                    sanitized, dropped = sanitize_url_history(
+                        data,
+                        Config.MAX_URL_HISTORY,
+                    )
+                    if dropped > 0:
+                        self._report_user_visible_warning(
+                            f"URL 히스토리에서 유효하지 않은 항목 {dropped}개를 제외했습니다.",
+                            toast=False,
+                        )
+                    return sanitized
             except Exception as e:
                 logger.warning(f"URL 히스토리 로드 오류: {e}")
                 self._report_user_visible_warning(
@@ -39,6 +48,10 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
             try:
                 if not isinstance(self.url_history, dict):
                     self.url_history = {}
+                self.url_history, _dropped = sanitize_url_history(
+                    self.url_history,
+                    Config.MAX_URL_HISTORY,
+                )
                 _ui_public().utils.atomic_write_json(
                     Config.URL_HISTORY_FILE,
                     self.url_history,
@@ -52,6 +65,14 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
 
     def _add_to_history(self, url, tag=""):
             """URL 히스토리에 추가 (자동 태그 매칭)"""
+            normalized_url, error = validate_assembly_url(url)
+            if normalized_url is None:
+                self._report_user_visible_warning(
+                    error or "올바른 URL을 입력하세요.",
+                    toast=False,
+                )
+                return
+            url = normalized_url
             if not isinstance(self.url_history, dict):
                 self.url_history = {}
 
@@ -147,36 +168,11 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
 
 
     def _is_allowed_preset_host(self, host: str) -> bool:
-            normalized_host = str(host or "").strip().lower()
-            return normalized_host == "assembly.webcast.go.kr" or normalized_host.endswith(
-                ".assembly.webcast.go.kr"
-            )
+            return is_allowed_assembly_host(host)
 
 
     def _validate_preset_url(self, url: object) -> tuple[str | None, str | None]:
-            from urllib.parse import urlsplit
-
-            normalized_url = str(url or "").strip()
-            if not normalized_url:
-                return None, "프리셋 URL을 입력하세요."
-
-            try:
-                parsed = urlsplit(normalized_url)
-            except Exception:
-                return None, "올바른 프리셋 URL을 입력하세요."
-
-            scheme = str(parsed.scheme or "").lower()
-            if scheme not in ("http", "https"):
-                return None, "프리셋 URL은 http:// 또는 https://만 허용됩니다."
-
-            host = str(parsed.hostname or "").strip().lower()
-            if not self._is_allowed_preset_host(host):
-                return (
-                    None,
-                    "프리셋 URL은 assembly.webcast.go.kr 계열만 허용됩니다.",
-                )
-
-            return normalized_url, None
+            return validate_assembly_url(url)
 
 
     def _coerce_preset_entry(
@@ -230,10 +226,30 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                 if _ui_public().Path(Config.PRESET_FILE).exists():
                     with open(Config.PRESET_FILE, "r", encoding="utf-8") as f:
                         data = json.load(f)
-                        if "presets" in data:
-                            self.committee_presets.update(data["presets"])
-                        if "custom" in data:
-                            self.custom_presets = data["custom"]
+                    dropped = 0
+                    if isinstance(data, dict) and isinstance(data.get("presets"), dict):
+                        for name, url in data["presets"].items():
+                            entry, error = self._coerce_preset_entry(name, url)
+                            if entry is None:
+                                dropped += 1
+                                logger.debug("프리셋 항목 제외: %s", error)
+                                continue
+                            preset_name, preset_url = entry
+                            self.committee_presets[preset_name] = preset_url
+                    if isinstance(data, dict) and isinstance(data.get("custom"), dict):
+                        for name, url in data["custom"].items():
+                            entry, error = self._coerce_preset_entry(name, url)
+                            if entry is None:
+                                dropped += 1
+                                logger.debug("사용자 프리셋 항목 제외: %s", error)
+                                continue
+                            preset_name, preset_url = entry
+                            self.custom_presets[preset_name] = preset_url
+                    if dropped > 0:
+                        self._report_user_visible_warning(
+                            f"프리셋 파일에서 유효하지 않은 항목 {dropped}개를 제외했습니다.",
+                            toast=False,
+                        )
             except Exception as e:
                 logger.warning(f"프리셋 로드 오류: {e}")
                 self._report_user_visible_warning(

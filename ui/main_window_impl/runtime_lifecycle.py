@@ -18,6 +18,7 @@ from core.config import Config
 from core.live_capture import create_empty_live_capture_ledger
 from core.logging_utils import logger
 from core.subtitle_pipeline import create_empty_capture_state, finalize_session
+from core.url_policy import validate_assembly_url
 from ui.main_window_impl.contracts import RuntimeHost
 
 
@@ -41,9 +42,18 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             main_window_mod.QMessageBox.warning(self, "오류", "URL과 선택자를 입력하세요.")
             return
 
-        if not url.startswith(("http://", "https://")):
-            main_window_mod.QMessageBox.warning(self, "오류", "올바른 URL을 입력하세요.")
+        normalized_url, url_error = validate_assembly_url(url)
+        if normalized_url is None:
+            warning_message = (
+                url_error or "올바른 국회 의사중계 URL을 입력하세요."
+            ).replace("프리셋 URL", "URL")
+            main_window_mod.QMessageBox.warning(
+                self,
+                "오류",
+                warning_message,
+            )
             return
+        url = normalized_url
 
         try:
             retained_driver = self._take_current_driver()

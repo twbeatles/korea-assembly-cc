@@ -81,9 +81,9 @@ class DatabaseSearchStatsMixin(DatabaseMixinHost):
 
                 return [dict(row) for row in cursor.fetchall()]
 
-            except Exception as e:
+            except Exception:
                 logger.exception("자막 검색 오류")
-                return []
+                raise
 
     def get_statistics(self) -> Dict[str, Union[int, float]]:
         """전체 통계 조회

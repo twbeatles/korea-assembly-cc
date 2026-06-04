@@ -127,6 +127,7 @@ korea-assembly-cc/
     subtitle_pipeline.py
     subtitle_pipeline_impl/     # pipeline type/history/incremental/entry helper 내부 구현
     text_utils.py
+    url_policy.py               # 시작 URL/프리셋/URL 히스토리 sanitize 공통 정책
     hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim
   ui/                           # UI 구성요소
@@ -153,6 +154,7 @@ korea-assembly-cc/
     test_pyright_regression.py
     test_review_20260323_regressions.py
     test_session_resilience.py
+    test_url_policy.py
   README.md                 # 문서
   CLAUDE.md                 # AI 컨텍스트
   GEMINI.md                 # AI 컨텍스트
@@ -327,6 +329,14 @@ korea-assembly-cc/
 - **backup/session path collision guard**: `core.file_io.next_available_path()`를 추가했고 `core.utils`에서 재수출한다. 세션/백업 기본명은 microsecond timestamp를 사용하며 자동 백업은 같은 tick 충돌 시 `_001`, `_002` suffix로 기존 파일을 보존한다.
 - **release verifier options**: `scripts/run_release_verification.py`는 `--offline`, `--skip-live`, `--skip-build`, `--instantiate-window`, drift strict 옵션을 제공한다. 기본 실행은 pytest/pyright/source smoke/live smoke/drift/PyInstaller/frozen smoke/portable preflight 전체 경로를 유지한다.
 - **회귀 기준선**: `python scripts/run_release_verification.py` 통과. `pytest` 243 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list `drift=false`, `name_drift=false`, clean build 및 frozen/portable smoke exit code 0.
+
+### v16.14.7 감사 후속 URL / 복구 / 검색 정책 메모 (2026-06-04)
+- **shared URL policy**: `core.url_policy`가 `http/https` + `assembly.webcast.go.kr` 계열 host 검증을 담당한다. `_start()`, 프리셋 add/edit/import, URL history load/save sanitize는 같은 helper를 사용하며 외부 URL은 `_add_to_history()`나 worker 시작 전에 차단한다.
+- **default URL consistency**: 히스토리가 없을 때 URL combo는 `Config.DEFAULT_URL`을 사용한다. 기본 본회의 URL은 `xcode=10`이고, bare `player.asp`로 되돌리지 않는다.
+- **runtime manifest structure guard**: strict load는 `segments` 항목이 dict가 아니거나 `path`가 비어 있으면 실패한다. salvage mode는 malformed segment를 건너뛰고 `runtime segment #N` warning과 `skipped_files`를 남긴다.
+- **DB search error contract**: `DatabaseManager.search_subtitles()`는 빈 검색어만 `[]`로 반환한다. FTS syntax 오류는 literal fallback을 유지하지만 실제 DB/SQLite/connection 오류는 re-raise하여 UI의 `db_task_error`/`검색 실패 ('query'): error` 경로로 보낸다.
+- **tooling/docs**: `subtitle_extractor.spec` hidden import에 `core.url_policy`를 추가하고, `.gitignore`는 로컬 CodeGraph 인덱스(`.codegraph/`)를 제외한다.
+- **회귀 기준선**: `pytest -q` 254 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, source storage preflight 통과, `run_release_verification.py --offline --instantiate-window` 통과(PyInstaller clean build, frozen smoke, portable storage preflight 포함).
 
 ### v16.14.5 UI/UX 운영 정합성 보강 메모
 - **run-source 스냅샷 고정**: 캡처 시작 시 URL, 위원회 태그, 헤드리스, 실시간 저장 여부를 고정하고 저장/백업/세션 메타데이터는 이 스냅샷을 기준으로 기록
@@ -515,6 +525,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - `tests/test_hwpx_export.py`: HWPX 패키지 구조, preview 텍스트, XML escape/줄바꿈 회귀 검증
 - `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
 - `tests/test_pyright_suppression_policy.py`: 파일 단위 pyright directive 금지 정책 검증
+- `tests/test_url_policy.py`: URL policy/default URL/history sanitize 회귀 검증
 
 ## 9. 성능 최적화 (v16.8)
 

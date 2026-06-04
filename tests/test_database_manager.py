@@ -2,6 +2,8 @@ import threading
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from core.config import Config
 from core.models import SubtitleEntry
 from database import DatabaseManager
@@ -51,6 +53,21 @@ def test_database_input_guards_and_subtitle_sanitizing(tmp_path):
 
         results = db.search_subtitles("정상", limit=-100)
         assert any("정상" in row["text"] for row in results)
+    finally:
+        db.close_all()
+
+
+def test_database_search_reraises_unexpected_connection_errors(tmp_path, monkeypatch):
+    db_path = tmp_path / "subtitle_history.db"
+    db = DatabaseManager(str(db_path))
+    try:
+        def fail_connection():
+            raise sqlite3.OperationalError("search boom")
+
+        monkeypatch.setattr(db, "_get_connection", fail_connection)
+
+        with pytest.raises(sqlite3.OperationalError, match="search boom"):
+            db.search_subtitles("정상")
     finally:
         db.close_all()
 

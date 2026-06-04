@@ -854,6 +854,82 @@ def test_load_runtime_manifest_payload_salvages_corrupt_segment_file(tmp_path):
     assert any("segment_000002.json" in item for item in payload["recovery_warnings"])
 
 
+def test_load_runtime_manifest_payload_rejects_malformed_segment_entries_strict(tmp_path):
+    for index, bad_segment in enumerate(({}, "bad", {"path": ""}), start=1):
+        runtime_root = tmp_path / f"runtime_malformed_segment_strict_{index}"
+        runtime_root.mkdir()
+        _write_runtime_entries_file(
+            runtime_root / "tail_checkpoint.json",
+            format_name="runtime_tail_checkpoint_v1",
+            subtitles=[SubtitleEntry("tail 자막")],
+        )
+        manifest_path = runtime_root / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "format": "runtime_session_manifest_v1",
+                    "version": Config.VERSION,
+                    "tail_checkpoint": "tail_checkpoint.json",
+                    "segments": [bad_segment],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="runtime segment #1"):
+            MainWindow._load_runtime_manifest_payload(
+                _build_runtime_manifest_loader_window(),
+                manifest_path,
+                allow_salvage=False,
+            )
+
+
+def test_load_runtime_manifest_payload_salvages_malformed_segment_entries(tmp_path):
+    runtime_root = tmp_path / "runtime_malformed_segment_salvage"
+    runtime_root.mkdir()
+    _write_runtime_entries_file(
+        runtime_root / "segment_000001.json",
+        format_name="runtime_session_segment_v1",
+        subtitles=[SubtitleEntry("정상 세그먼트")],
+    )
+    _write_runtime_entries_file(
+        runtime_root / "tail_checkpoint.json",
+        format_name="runtime_tail_checkpoint_v1",
+        subtitles=[SubtitleEntry("tail 자막")],
+    )
+    manifest_path = runtime_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "format": "runtime_session_manifest_v1",
+                "version": Config.VERSION,
+                "tail_checkpoint": "tail_checkpoint.json",
+                "segments": [
+                    {},
+                    "bad",
+                    {"path": ""},
+                    {"path": "segment_000001.json"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = MainWindow._load_runtime_manifest_payload(
+        _build_runtime_manifest_loader_window(),
+        manifest_path,
+        allow_salvage=True,
+    )
+
+    assert [entry.text for entry in payload["subtitles"]] == ["정상 세그먼트", "tail 자막"]
+    assert payload["skipped_files"] == 3
+    assert any("runtime segment #1" in item for item in payload["recovery_warnings"])
+    assert any("runtime segment #2" in item for item in payload["recovery_warnings"])
+    assert any("runtime segment #3" in item for item in payload["recovery_warnings"])
+
+
 def test_load_runtime_manifest_payload_rejects_segment_integrity_mismatch(tmp_path):
     runtime_root = tmp_path / "runtime_segment_mismatch"
     runtime_root.mkdir()

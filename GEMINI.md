@@ -148,6 +148,7 @@ korea-assembly-cc/
     subtitle_pipeline.py
     subtitle_pipeline_impl/     # pipeline type/history/incremental/entry helper 내부 구현
     text_utils.py
+    url_policy.py               # 시작 URL/프리셋/URL 히스토리 sanitize 공통 정책
     hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim
   ui/                           # UI 구성요소
@@ -175,6 +176,7 @@ korea-assembly-cc/
     test_review_20260323_regressions.py  # run_id/alert/HWP/SRT-VTT 회귀 테스트
     test_reflow.py              # Reflow 테스트
     test_session_resilience.py  # 세션 병합/손상 항목/ dedupe 정책 회귀 테스트
+    test_url_policy.py          # URL policy/default URL/history sanitize 회귀 테스트
   README.md                 # 문서
   CLAUDE.md                 # AI 컨텍스트
   GEMINI.md                 # AI 컨텍스트
@@ -236,6 +238,7 @@ pip install -r requirements-dev.txt
 - `tests/test_hwpx_export.py`: HWPX 패키지 구조, preview 텍스트, XML escape/줄바꿈 회귀 검증
 - `tests/test_live_contract_smoke.py`: `RUN_LIVE_SMOKE=1` opt-in 실제 `live_list.asp` schema smoke
 - `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
+- `tests/test_url_policy.py`: URL policy/default URL/history sanitize 회귀 검증
 
 ## 9. HWPX 기본 내보내기 추가 (2026-03-23)
 
@@ -527,6 +530,14 @@ pip install -r requirements-dev.txt
 - `core.file_io.next_available_path()`는 자동 백업 같은 파일명 충돌을 `_001`, `_002` suffix로 회피한다. 세션/백업 기본 파일명은 microsecond timestamp를 사용한다.
 - `scripts/run_release_verification.py`는 `--offline`, `--skip-live`, `--skip-build`, `--instantiate-window`, drift strict 옵션을 제공하며, 기본 실행은 기존 전체 릴리스 검증을 유지한다.
 - 검증 기준선은 `python scripts/run_release_verification.py` 통과, `pytest` 243 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list `drift=false`, `name_drift=false`, clean build 및 frozen/portable smoke exit code 0이다.
+
+## 9.9.14 v16.14.7 감사 후속 URL / 복구 / 검색 정책 (2026-06-04)
+- `core.url_policy`가 시작 URL, 프리셋 add/edit/import, URL history load/save sanitize의 단일 정책 표면이다. 허용 범위는 `http/https` + `assembly.webcast.go.kr` 계열 host이며 외부 URL은 히스토리 저장과 worker 시작 전에 차단한다.
+- 히스토리가 없을 때 URL combo는 `Config.DEFAULT_URL`을 사용한다. 기본 본회의 URL은 `xcode=10`이고 bare `player.asp`를 UI 초기값으로 쓰지 않는다.
+- runtime manifest strict load는 `segments` 항목이 dict가 아니거나 `path`가 비어 있으면 실패한다. salvage mode는 malformed segment를 skip하고 `runtime segment #N` warning과 `skipped_files`를 남긴다.
+- `DatabaseManager.search_subtitles()`는 빈 검색어만 빈 list로 반환한다. FTS syntax 오류는 literal fallback을 유지하지만 실제 DB/SQLite/connection 오류는 re-raise되어 UI의 `검색 실패 ('query'): error` 경로로 표시된다.
+- `subtitle_extractor.spec`는 `core.url_policy` hidden import를 포함하고, `.gitignore`는 로컬 CodeGraph 인덱스(`.codegraph/`)를 제외한다.
+- 검증 기준선은 `pytest -q` 254 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, source storage preflight 통과, `run_release_verification.py --offline --instantiate-window` 통과(PyInstaller clean build, frozen smoke, portable storage preflight 포함)이다.
 
 ## 9.9.3 v16.14.6 자막 유실 방지 배치 (2026-04-01)
 ### 🛡️ 세션 / 복구

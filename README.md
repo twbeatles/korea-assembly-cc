@@ -50,7 +50,7 @@
 - `ui/main_window_ui.py`는 공개 UI facade만 유지하고, 실제 tray/menu/layout/theme/status/history/preset/help 책임은 `ui/main_window_impl/ui/` 하위 mixin으로 분리했습니다.
 
 ### 📦 문서 / 빌드 / 저장소 정합성
-- `subtitle_extractor.spec`는 `ui.main_window_impl.*`, `ui.main_window_impl.ui.*`, `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`, `ui.main_window_impl.persistence_runtime_*`, `core.live_capture_impl.*`, `core.database_impl.*`, `core.subtitle_pipeline_impl.*` hidden import를 명시해 frozen 빌드에서 facade 뒤 구현 모듈이 누락되지 않도록 맞췄습니다.
+- `subtitle_extractor.spec`는 `ui.main_window_impl.*`, `ui.main_window_impl.ui.*`, `ui.main_window_impl.database_*`, `ui.main_window_impl.persistence_*`, `ui.main_window_impl.persistence_runtime_*`, `core.live_capture_impl.*`, `core.database_impl.*`, `core.subtitle_pipeline_impl.*`, `core.url_policy` hidden import를 명시해 frozen 빌드에서 facade 뒤 구현 모듈이 누락되지 않도록 맞췄습니다.
 - `README.md`, `CLAUDE.md`, `GEMINI.md`, `PIPELINE_LOCK.md`, `ALGORITHM_ANALYSIS.md`를 현재 구조와 버전(`v16.14.7`) 기준으로 동기화했습니다.
 - `.gitignore`는 PyInstaller 빌드 중 루트에 남을 수 있는 보조 산출물(`*.manifest`, `*.pyz`)까지 무시하도록 보강했습니다.
 
@@ -150,6 +150,14 @@
 - 세션 기본 파일명과 자동 백업 파일명은 microsecond를 포함하고, 자동 백업은 `core.file_io.next_available_path()`로 같은 tick 충돌 시 `_001`, `_002` suffix를 붙여 기존 백업을 덮어쓰지 않습니다.
 - `scripts/run_release_verification.py`는 `--offline`, `--skip-live`, `--skip-build`, `--instantiate-window`, drift strict 옵션을 제공해 릴리스 전체 검증과 개발 반복 검증을 분리합니다.
 - 최신 검증 기준선: `python scripts/run_release_verification.py` 통과 (`pytest` 243 passed / 1 skipped, pyright 0 errors / 0 warnings, live-list `drift=false`, `name_drift=false`, clean build 및 frozen/portable smoke 통과).
+
+### 🛡️ 감사 후속 URL / 복구 / 검색 정책 보강 (2026-06-04)
+- `core/url_policy.py`를 추가해 시작 URL, 프리셋 add/edit/import, URL history load/save sanitize가 모두 `http/https` + `assembly.webcast.go.kr` 계열 host 정책을 공유합니다. 외부 URL은 히스토리 저장이나 worker 시작 전에 차단됩니다.
+- 히스토리가 없는 첫 실행 URL combo는 bare `player.asp`가 아니라 `Config.DEFAULT_URL`을 사용하므로 기본 본회의 `xcode=10` 의도가 UI 초기값과 refresh 경로에서 일치합니다.
+- runtime manifest strict load는 segment 항목이 dict가 아니거나 `path`가 비어 있으면 실패합니다. salvage mode는 해당 항목을 skip하고 segment index를 포함한 warning과 `skipped_files`를 남깁니다.
+- DB 자막 검색은 FTS syntax 오류만 literal `LIKE` fallback을 유지하고, 실제 DB/SQLite/connection 오류는 DB worker error 경로로 전파되어 "검색 실패 ('query'): error"로 표시됩니다.
+- `.gitignore`는 로컬 CodeGraph 인덱스(`.codegraph/`)를 publish scope에서 제외하고, `subtitle_extractor.spec`는 새 `core.url_policy` import 표면을 frozen 빌드에 명시합니다.
+- 최신 검증 기준선: `pytest -q` `254 passed, 1 skipped`, `python -m pyright --outputjson` `0 errors / 0 warnings`, source storage preflight 통과, `python scripts/run_release_verification.py --offline --instantiate-window` 통과(PyInstaller clean build, frozen smoke, portable storage preflight 포함).
 
 ### 🧱 세션 안정성 / 타입·인코딩 위생 보강 (2026-04-06)
 - 실행 중 수동 `세션 저장`은 더 이상 현재 run의 runtime archive를 정리하지 않으며, 같은 archive가 이후 segment flush/search/render/export까지 계속 이어집니다.
@@ -732,7 +740,7 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - frozen 검증은 생성된 EXE에 `--smoke`를 실행하고, 필요 시 `--smoke-instantiate-window`로 `MainWindow()` 생성까지 확인합니다. EXE 옆에 `portable.flag`를 둔 상태에서는 `--smoke-storage-preflight` exit code가 `0`인지 확인합니다. smoke는 JSON 한 줄을 출력하며, release 검증에서는 exit code `0`도 함께 확인합니다.
 - `subtitle_extractor.spec`는 frozen 환경에서도 `Config.VERSION`이 README 첫 줄의 버전을 읽을 수 있도록 `README.md`를 함께 포함합니다.
 - EXE 이름도 `subtitle_extractor.spec`에서 README 첫 줄을 읽어 동기화하므로, 릴리스 버전 변경 시 README 상단 버전과 함께 맞춰집니다.
-- `python-docx`, `pywin32`, 공유 `core.live_list`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.ui.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `ui.main_window_impl.persistence_runtime_*` / `core.live_capture_impl.*` / `core.database_impl.*` / `core.subtitle_pipeline_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
+- `python-docx`, `pywin32`, 공유 `core.live_list`, `core.url_policy`, 공개 `ui.main_window_*` facade와 내부 `ui.main_window_impl.*` / `ui.main_window_impl.ui.*` / `ui.main_window_impl.database_*` / `ui.main_window_impl.persistence_*` / `ui.main_window_impl.persistence_runtime_*` / `core.live_capture_impl.*` / `core.database_impl.*` / `core.subtitle_pipeline_impl.*`, `PyQt6.QtNetwork` 모듈은 런타임 동적 import 경로를 고려해 `.spec`의 hidden import 목록에 반영합니다.
 - frozen 기본 실행은 `%LOCALAPPDATA%\\AssemblySubtitle\\Extractor`를 storage root로 사용하고, EXE 옆에 `portable.flag`를 두면 로그/세션/DB/설정(`settings.ini`)을 EXE 폴더에 저장합니다.
 - `typings/`, `.pytest_tmp`, `portable.flag`, `settings.ini`, `session_recovery.json`, `backups/runtime_sessions/` 같은 정적 분석/portable/runtime 산출물은 frozen 번들에 포함하지 않습니다.
 - 빌드 산출물은 `.gitignore`의 `build/`, `dist/` 규칙으로, portable 실행 보조 파일은 `/portable.flag`, `/settings.ini`, `.storage_probe` 규칙으로 관리합니다.
@@ -755,9 +763,12 @@ dist/국회의사중계자막추출기 v16.14.7.exe
 - DB `sessions` 테이블에 `lineage_id`, `parent_session_id`, `is_latest_in_lineage`를 추가하고, 히스토리 다이얼로그에 `[최신]`, `[이전 저장본 n/N]` 배지를 노출
 - DB 초기화를 base schema와 FTS로 분리해 degraded mode를 허용하고, `db_available`/`fts_available`/`db_degraded_reason` 상태와 persistent warning UI를 추가
 - URL 히스토리/프리셋 load-save 실패를 사용자 경고로 노출하고, export/message 계층의 dead branch를 정리
+- `core.url_policy`로 시작 URL/프리셋/URL 히스토리 검증을 공통화하고, 외부 URL은 히스토리 저장과 worker 시작 전에 차단
+- runtime manifest strict load의 malformed segment 실패와 salvage warning index를 보강하고, DB 검색 실제 오류는 0건 결과가 아니라 "검색 실패" 경로로 전파
+- `.gitignore`에 `.codegraph/` 로컬 인덱스 제외 규칙을 추가하고, `subtitle_extractor.spec` hidden import에 `core.url_policy`를 명시
 - `pyrightconfig.json` / `.vscode/settings.json` / `typings/PyQt6/QtNetwork.pyi` / `tests/test_encoding_hygiene.py`를 갱신해 Pylance/CLI `pyright`와 UTF-8 위생 기준을 현재 코드에 맞게 고정
 - `subtitle_reset` pending grace의 preview 직전 커밋, metadata 기반 merge suppression, observer reset 신뢰 경계, runtime segment flush fingerprint, manifest path confinement를 추가
-- 검증 기준선: `pytest -q` 210 pass, `pyright --outputjson` 0 errors / 0 warnings
+- 검증 기준선: `pytest -q` 254 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings
 
 ### v16.14.6 (2026-04-01)
 - recovery state(`session_recovery.json`) 기반 최신 복구 가능 세션 제안, 종료 직전 저장/자동 백업 메타데이터 정리

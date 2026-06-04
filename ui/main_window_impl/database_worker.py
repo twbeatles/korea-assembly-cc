@@ -453,7 +453,7 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
                 self._set_db_search_dialog_busy(False)
             query_hint = str(context.get("query", "")).strip()
             message = f"DB 작업 실패 ({task_name}): {error}"
-            if task_name == "db_search" and query_hint:
+            if task_name in ("db_search", "db_search_more") and query_hint:
                 message = f"검색 실패 ('{query_hint}'): {error}"
             self._set_status(message, "error")
             QMessageBox.warning(self, "데이터베이스 오류", message)

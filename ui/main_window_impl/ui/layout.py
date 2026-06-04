@@ -145,7 +145,7 @@ class MainWindowUILayoutMixin(MainWindowHost):
                     self.url_combo.addItem(url, url)
 
             if not self.url_history:
-                self.url_combo.addItem("https://assembly.webcast.go.kr/main/player.asp")
+                self.url_combo.addItem(Config.DEFAULT_URL)
 
             url_layout.addWidget(self.url_combo, 1)
 
