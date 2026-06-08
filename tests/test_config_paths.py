@@ -94,6 +94,27 @@ def test_storage_resolution_uses_portable_flag_when_present(tmp_path):
     assert resolution.settings_ini_path == (tmp_path / "portable" / "settings.ini")
 
 
+def test_storage_resolution_uses_launch_argv_for_onefile_portable_flag(tmp_path):
+    temp_child = tmp_path / "temp" / "subtitle.exe"
+    launch_exe = tmp_path / "portable" / "subtitle.exe"
+    temp_child.parent.mkdir()
+    launch_exe.parent.mkdir()
+    temp_child.write_text("", encoding="utf-8")
+    launch_exe.write_text("", encoding="utf-8")
+    (launch_exe.parent / "portable.flag").write_text("", encoding="utf-8")
+
+    resolution = resolve_storage_resolution(
+        frozen=True,
+        executable=str(temp_child),
+        argv0=str(launch_exe),
+        localappdata=str(tmp_path / "localdata"),
+    )
+
+    assert resolution.storage_mode == "portable"
+    assert resolution.storage_dir == launch_exe.parent
+    assert resolution.portable_flag_path == launch_exe.parent / "portable.flag"
+
+
 def test_storage_preflight_creates_required_directories(tmp_path):
     db_path = tmp_path / "storage" / "subtitle_history.db"
     ok, error = run_storage_preflight(
@@ -205,6 +226,7 @@ def test_entrypoint_smoke_instantiate_window_outputs_json(tmp_path):
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout.strip())
     assert payload["ok"] is True
+    assert payload["hwpx_ok"] is True
     assert payload["window_instantiated"] is True
     assert "국회 의사중계 자막 추출기" in payload["window_title"]
     assert payload["storage"]["storage_mode"] == "override"

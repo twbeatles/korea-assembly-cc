@@ -223,6 +223,7 @@ def _run_smoke(args: argparse.Namespace) -> int:
         from selenium import webdriver  # noqa: F401
 
         from core.config import Config
+        from core.hwpx_export import build_hwpx_bytes
         from core.live_capture import reconcile_live_capture
         from ui.main_window import MainWindow
     except ImportError as exc:
@@ -242,6 +243,12 @@ def _run_smoke(args: argparse.Namespace) -> int:
     hwpx_assets_path = Path(Config.get_resource_path("assets/hwpx"))
     resource_ok = readme_path.exists() and hwpx_assets_path.exists()
     imports_ok = MainWindow.__name__ == "MainWindow" and callable(reconcile_live_capture)
+    hwpx_error = ""
+    try:
+        hwpx_ok = build_hwpx_bytes([]).startswith(b"PK")
+    except Exception as exc:
+        hwpx_ok = False
+        hwpx_error = str(exc)
     window_payload: dict[str, object] = {}
     window_ok = True
     if bool(getattr(args, "smoke_instantiate_window", False)):
@@ -255,7 +262,7 @@ def _run_smoke(args: argparse.Namespace) -> int:
                 "error_type": "window_instantiation",
                 "error": str(exc),
             }
-    smoke_ok = bool(ok and resource_ok and imports_ok)
+    smoke_ok = bool(ok and resource_ok and imports_ok and hwpx_ok)
     smoke_ok = bool(smoke_ok and window_ok)
     payload: dict[str, object] = {
         "ok": smoke_ok,
@@ -265,7 +272,8 @@ def _run_smoke(args: argparse.Namespace) -> int:
         "storage_preflight": ok,
         "resource_ok": resource_ok,
         "imports_ok": imports_ok,
-        "error": error if window_ok else str(window_payload.get("error", "")),
+        "hwpx_ok": hwpx_ok,
+        "error": (error or hwpx_error) if window_ok else str(window_payload.get("error", "")),
     }
     payload.update(window_payload)
     _print_json_line(payload, output_path=output_path)

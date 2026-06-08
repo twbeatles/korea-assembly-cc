@@ -36,15 +36,36 @@ def _resolve_install_dir(
     *,
     frozen: bool | None = None,
     executable: str | None = None,
+    argv0: str | None = None,
     module_file: str | None = None,
 ) -> Path:
     """리소스/설치 기준 디렉터리를 계산한다."""
     is_frozen = getattr(sys, "frozen", False) if frozen is None else bool(frozen)
     if is_frozen:
+        argv0_value = argv0
+        if argv0_value is None and executable is None and sys.argv:
+            argv0_value = sys.argv[0]
+        launch_path = _resolve_existing_file_path(argv0_value)
+        if launch_path is not None:
+            return launch_path.parent
+
         executable_path = executable or getattr(sys, "executable", "")
+        resolved_executable = _resolve_existing_file_path(executable_path)
+        if resolved_executable is not None:
+            return resolved_executable.parent
         return Path(executable_path).resolve().parent
     module_path = module_file or __file__
     return Path(module_path).resolve().parent.parent
+
+
+def _resolve_existing_file_path(path_value: str | None) -> Path | None:
+    if not path_value:
+        return None
+    try:
+        path = Path(path_value).resolve()
+    except Exception:
+        return None
+    return path if path.is_file() else None
 
 
 def _resolve_local_appdata_dir(
@@ -63,6 +84,7 @@ def resolve_storage_resolution(
     *,
     frozen: bool | None = None,
     executable: str | None = None,
+    argv0: str | None = None,
     module_file: str | None = None,
     portable_flag_exists: bool | None = None,
     localappdata: str | None = None,
@@ -72,6 +94,7 @@ def resolve_storage_resolution(
     install_dir = _resolve_install_dir(
         frozen=frozen,
         executable=executable,
+        argv0=argv0,
         module_file=module_file,
     )
     is_frozen = getattr(sys, "frozen", False) if frozen is None else bool(frozen)

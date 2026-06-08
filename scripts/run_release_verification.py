@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -16,6 +17,26 @@ from core.config import Config
 def _run(label: str, args: list[str], *, env: dict[str, str] | None = None) -> None:
     print(f"\n==> {label}")
     subprocess.run(args, cwd=REPO_ROOT, env=env, check=True)
+
+
+def _assert_smoke_payload(
+    output_path: Path,
+    *,
+    expected_kind: str,
+    expected_storage_mode: str,
+) -> None:
+    payload = json.loads(output_path.read_text(encoding="utf-8").strip())
+    if payload.get("ok") is not True:
+        raise RuntimeError(f"{expected_kind} failed: {payload}")
+    if payload.get("kind") != expected_kind:
+        raise RuntimeError(f"unexpected smoke kind: {payload}")
+    storage = payload.get("storage")
+    if not isinstance(storage, dict):
+        raise RuntimeError(f"missing storage payload: {payload}")
+    if storage.get("storage_mode") != expected_storage_mode:
+        raise RuntimeError(
+            f"unexpected storage mode for {expected_kind}: {payload}"
+        )
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -120,16 +141,39 @@ def main(argv: list[str] | None = None) -> int:
         "--smoke-storage-dir",
         str(smoke_root / "release-frozen-smoke-storage"),
     ]
+    frozen_smoke_output = smoke_root / "release-frozen-smoke.json"
+    frozen_smoke_output.unlink(missing_ok=True)
+    frozen_smoke_args.extend(["--smoke-output", str(frozen_smoke_output)])
     if args.instantiate_window:
         frozen_smoke_args.append("--smoke-instantiate-window")
     _run("frozen smoke", frozen_smoke_args)
+    _assert_smoke_payload(
+        frozen_smoke_output,
+        expected_kind="smoke",
+        expected_storage_mode="override",
+    )
 
     portable_flag = exe_path.parent / "portable.flag"
     created_portable_flag = not portable_flag.exists()
     if created_portable_flag:
         portable_flag.write_text("", encoding="utf-8")
+    portable_smoke_output = smoke_root / "release-frozen-portable-preflight.json"
+    portable_smoke_output.unlink(missing_ok=True)
     try:
-        _run("frozen portable storage preflight", [str(exe_path), "--smoke-storage-preflight"])
+        _run(
+            "frozen portable storage preflight",
+            [
+                str(exe_path),
+                "--smoke-storage-preflight",
+                "--smoke-output",
+                str(portable_smoke_output),
+            ],
+        )
+        _assert_smoke_payload(
+            portable_smoke_output,
+            expected_kind="storage_preflight",
+            expected_storage_mode="portable",
+        )
     finally:
         if created_portable_flag:
             portable_flag.unlink(missing_ok=True)

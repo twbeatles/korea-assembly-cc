@@ -61,6 +61,7 @@ def test_release_verification_skip_live_still_runs_build_and_frozen_smoke(
     tmp_path, monkeypatch
 ):
     calls: list[tuple[str, list[str], dict[str, str] | None]] = []
+    smoke_assertions: list[tuple[Path, str, str]] = []
     exe_dir = tmp_path / "dist"
     exe_dir.mkdir()
     exe_path = exe_dir / f"국회의사중계자막추출기 v{release_mod.Config.VERSION}.exe"
@@ -72,6 +73,13 @@ def test_release_verification_skip_live_still_runs_build_and_frozen_smoke(
         "_run",
         lambda label, args, env=None: calls.append((label, args, env)),
     )
+    monkeypatch.setattr(
+        release_mod,
+        "_assert_smoke_payload",
+        lambda output_path, *, expected_kind, expected_storage_mode: smoke_assertions.append(
+            (Path(output_path), expected_kind, expected_storage_mode)
+        ),
+    )
 
     assert release_mod.main(["--skip-live", "--instantiate-window"]) == 0
 
@@ -82,3 +90,17 @@ def test_release_verification_skip_live_still_runs_build_and_frozen_smoke(
     frozen_smoke_args = next(call[1] for call in calls if call[0] == "frozen smoke")
     assert Path(frozen_smoke_args[0]) == exe_path
     assert "--smoke-instantiate-window" in frozen_smoke_args
+    assert "--smoke-output" in frozen_smoke_args
+    portable_args = next(
+        call[1] for call in calls if call[0] == "frozen portable storage preflight"
+    )
+    assert Path(portable_args[0]) == exe_path
+    assert "--smoke-output" in portable_args
+    assert smoke_assertions == [
+        (tmp_path / ".pytest_tmp" / "release-frozen-smoke.json", "smoke", "override"),
+        (
+            tmp_path / ".pytest_tmp" / "release-frozen-portable-preflight.json",
+            "storage_preflight",
+            "portable",
+        ),
+    ]
