@@ -34,6 +34,14 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
         main_window_mod = _main_window_public()
         if self.is_running:
             return
+        if bool(self.__dict__.get("_session_save_in_progress", False)):
+            self._set_status("세션 저장 마무리 대기 중...", "warning")
+            self._show_toast("세션 저장 완료 후 추출을 시작하세요.", "warning", 3000)
+            return
+        if bool(self.__dict__.get("_session_load_in_progress", False)):
+            self._set_status("세션 불러오기 마무리 대기 중...", "warning")
+            self._show_toast("세션 불러오기 완료 후 추출을 시작하세요.", "warning", 3000)
+            return
 
         url = self._get_current_url().strip()
         selector = self.selector_combo.currentText().strip()

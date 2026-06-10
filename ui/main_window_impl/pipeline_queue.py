@@ -55,6 +55,7 @@ COALESCED_CONTROL_MESSAGE_TYPES = {
     "session_save_failed",
     "toast",
 }
+DURABLE_CONTROL_MESSAGE_TYPES = set(COALESCED_CONTROL_MESSAGE_TYPES)
 
 
 PipelineQueueBase = PipelineQueueHost if TYPE_CHECKING else object
@@ -140,6 +141,12 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             msg_type, data = item
             return str(msg_type), data
         return None
+
+    def _is_durable_control_message(self, item: object) -> bool:
+        if not isinstance(item, tuple) or len(item) != 2:
+            return False
+        msg_type, _data = item
+        return str(msg_type) in DURABLE_CONTROL_MESSAGE_TYPES
 
     def _build_control_message_key(self, msg_type: str, data: Any) -> object | None:
         if msg_type not in COALESCED_CONTROL_MESSAGE_TYPES:
@@ -371,11 +378,14 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             processed += 1
         return processed
 
-    def _clear_message_queue(self) -> None:
-        """메시지 큐 비우기 (중지/재시작 안정성용)"""
+    def _clear_message_queue(self, *, preserve_control_messages: bool = True) -> None:
+        """메시지 큐 비우기 (중지/재시작 안정성용)."""
+        preserved_items: list[object] = []
         try:
             while True:
-                self.message_queue.get_nowait()
+                item = self.message_queue.get_nowait()
+                if preserve_control_messages and self._is_durable_control_message(item):
+                    preserved_items.append(item)
         except queue.Empty:
             pass
         lock = getattr(self, "_worker_message_lock", None)
@@ -383,11 +393,21 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             with lock:
                 getattr(self, "_coalesced_worker_messages", {}).clear()
         self._ensure_control_message_state()
-        with self._control_message_lock:
-            self._coalesced_control_messages.clear()
+        if not preserve_control_messages:
+            with self._control_message_lock:
+                self._coalesced_control_messages.clear()
         self._ensure_overflow_passthrough_state()
         with self._overflow_passthrough_lock:
-            self._overflow_passthrough_messages.clear()
+            if preserve_control_messages:
+                self._overflow_passthrough_messages[:] = [
+                    item
+                    for item in self._overflow_passthrough_messages
+                    if self._is_durable_control_message(item)
+                ]
+            else:
+                self._overflow_passthrough_messages.clear()
         self._ensure_terminal_worker_message_state()
         with self._terminal_worker_message_lock:
             self._terminal_worker_messages.clear()
+        for item in preserved_items:
+            self._requeue_message_item(item)

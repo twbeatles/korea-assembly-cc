@@ -191,6 +191,36 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             if self._session_load_in_progress:
                 self._show_toast("이미 세션 불러오기가 진행 중입니다.", "info")
                 return False
+            try:
+                session_path = Path(path)
+                max_bytes = int(getattr(Config, "SESSION_LOAD_MAX_BYTES", 0) or 0)
+                if max_bytes > 0:
+                    file_size = session_path.stat().st_size
+                    if file_size > max_bytes:
+                        limit_mb = max_bytes / (1024 * 1024)
+                        actual_mb = file_size / (1024 * 1024)
+                        QMessageBox.warning(
+                            self,
+                            "세션 파일 크기 초과",
+                            (
+                                "세션 파일이 너무 커서 불러오기를 중단했습니다.\n"
+                                f"파일 크기: {actual_mb:.1f} MB\n"
+                                f"허용 크기: {limit_mb:.1f} MB"
+                            ),
+                        )
+                        self._set_status(
+                            "세션 파일이 너무 커서 불러오기를 중단했습니다.",
+                            "warning",
+                        )
+                        return False
+            except OSError as exc:
+                QMessageBox.warning(
+                    self,
+                    "세션 파일 확인 실패",
+                    f"세션 파일을 확인할 수 없습니다.\n{exc}",
+                )
+                self._set_status("세션 파일 확인 실패", "warning")
+                return False
 
             self._session_load_in_progress = True
             status_text = "세션 복구 중..." if recovery else "세션 불러오기 중..."
@@ -401,7 +431,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                                 }
                             ),
                             write_task=True,
-                            timeout=None,
+                            timeout=Config.DB_SYNC_TASK_TIMEOUT_SECONDS,
                         )
                         db_saved = True
                     except Exception as db_exc:

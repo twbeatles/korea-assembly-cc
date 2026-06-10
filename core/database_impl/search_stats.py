@@ -113,6 +113,6 @@ class DatabaseSearchStatsMixin(DatabaseMixinHost):
                     "total_duration_hours": (row["total_duration"] or 0) / 3600
                 }
 
-            except Exception as e:
+            except Exception:
                 logger.exception("통계 조회 오류")
-                return {}
+                raise

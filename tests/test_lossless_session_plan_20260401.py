@@ -17,7 +17,7 @@ import ui.main_window_pipeline as pipeline_mod
 import ui.main_window_impl.runtime_lifecycle as runtime_lifecycle_mod
 from core.config import Config
 from core.models import SubtitleEntry
-from ui.main_window_common import MainWindowMessageQueue
+from ui.main_window_common import MainWindowMessageQueue, WorkerQueueMessage
 
 mw_mod = pytest.importorskip("ui.main_window")
 MainWindow = mw_mod.MainWindow
@@ -457,6 +457,80 @@ def test_process_message_queue_drains_overflowed_control_messages():
     assert dirty_cleared == [True]
     assert status_updates == [("세션 저장 완료 (3개)", "success")]
     assert toasts == ["세션 저장 완료!"]
+
+
+def test_clear_message_queue_preserves_durable_control_messages():
+    win = MainWindow.__new__(MainWindow)
+    win.message_queue = MainWindowMessageQueue(win, maxsize=8)
+    win._worker_message_lock = threading.Lock()
+    win._coalesced_worker_messages = {(7, "status"): "old status"}
+    win._control_message_lock = threading.Lock()
+    win._coalesced_control_messages = {
+        "session_load_done": ("session_load_done", {"path": "session.json"})
+    }
+    win._overflow_passthrough_lock = threading.Lock()
+    win._overflow_passthrough_messages = [
+        ("db_task_result", {"task": "db_stats", "result": {"count": 1}}),
+        WorkerQueueMessage(7, "preview", {"text": "old"}),
+    ]
+    win._terminal_worker_message_lock = threading.Lock()
+    win._terminal_worker_messages = [WorkerQueueMessage(7, "finished", {})]
+
+    win.message_queue.put_nowait(WorkerQueueMessage(7, "preview", {"text": "old"}))
+    win.message_queue.put_nowait(("session_save_done", {"saved_count": 2}))
+
+    MainWindow._clear_message_queue(win)
+
+    remaining: list[object] = []
+    try:
+        while True:
+            remaining.append(win.message_queue.get_nowait())
+    except queue.Empty:
+        pass
+
+    assert remaining == [("session_save_done", {"saved_count": 2})]
+    assert win._coalesced_worker_messages == {}
+    assert win._coalesced_control_messages == {
+        "session_load_done": ("session_load_done", {"path": "session.json"})
+    }
+    assert win._overflow_passthrough_messages == [
+        ("db_task_result", {"task": "db_stats", "result": {"count": 1}})
+    ]
+    assert win._terminal_worker_messages == []
+
+
+def test_start_blocks_while_session_save_or_load_is_in_progress():
+    for attr_name, expected_status, expected_toast in (
+        (
+            "_session_save_in_progress",
+            "세션 저장 마무리 대기 중...",
+            "세션 저장 완료 후 추출을 시작하세요.",
+        ),
+        (
+            "_session_load_in_progress",
+            "세션 불러오기 마무리 대기 중...",
+            "세션 불러오기 완료 후 추출을 시작하세요.",
+        ),
+    ):
+        win = MainWindow.__new__(MainWindow)
+        win.is_running = False
+        win._session_save_in_progress = False
+        win._session_load_in_progress = False
+        setattr(win, attr_name, True)
+        statuses: list[tuple[str, str]] = []
+        toasts: list[tuple[str, str, int]] = []
+        win._set_status = lambda text, level="info": statuses.append((text, level))
+        win._show_toast = lambda message, level="info", duration=0: toasts.append(
+            (str(message), str(level), int(duration))
+        )
+        win._get_current_url = lambda: (_ for _ in ()).throw(
+            AssertionError("세션 작업 중이면 URL을 읽으면 안 됩니다.")
+        )
+
+        MainWindow._start(win)
+
+        assert statuses == [(expected_status, "warning")]
+        assert toasts == [(expected_toast, "warning", 3000)]
 
 
 def test_schedule_initial_recovery_snapshot_runs_only_once():

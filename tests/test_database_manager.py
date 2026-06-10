@@ -72,6 +72,38 @@ def test_database_search_reraises_unexpected_connection_errors(tmp_path, monkeyp
         db.close_all()
 
 
+def test_database_read_methods_reraise_unexpected_cursor_errors(tmp_path, monkeypatch):
+    db_path = tmp_path / "subtitle_history.db"
+    db = DatabaseManager(str(db_path))
+
+    class _BrokenConnection:
+        def __init__(self):
+            self.rollback_called = False
+
+        def cursor(self):
+            raise sqlite3.OperationalError("cursor boom")
+
+        def rollback(self):
+            self.rollback_called = True
+
+    broken = _BrokenConnection()
+
+    try:
+        monkeypatch.setattr(db, "_get_connection", lambda: broken)
+
+        with pytest.raises(sqlite3.OperationalError, match="cursor boom"):
+            db.load_session(1)
+        with pytest.raises(sqlite3.OperationalError, match="cursor boom"):
+            db.list_sessions()
+        with pytest.raises(sqlite3.OperationalError, match="cursor boom"):
+            db.get_statistics()
+        with pytest.raises(sqlite3.OperationalError, match="cursor boom"):
+            db.delete_session(1)
+        assert broken.rollback_called is True
+    finally:
+        db.close_all()
+
+
 def test_database_cleans_stale_thread_connections(tmp_path):
     db_path = tmp_path / "subtitle_history.db"
     db = DatabaseManager(str(db_path))

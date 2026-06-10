@@ -8,7 +8,12 @@ from typing import Callable
 
 import pytest
 
-from core.live_list import select_live_broadcast_row
+import ui.main_window_impl.persistence_session as persistence_session_mod
+from core.live_list import (
+    apply_live_broadcast_to_url,
+    normalize_live_list_row,
+    select_live_broadcast_row,
+)
 from core.models import SubtitleEntry
 from core.subtitle_pipeline import create_empty_capture_state
 
@@ -481,6 +486,76 @@ def test_db_worker_sync_can_wait_without_timeout(monkeypatch):
     MainWindow._shutdown_db_worker(win, timeout=1.0)
 
 
+def test_write_session_snapshot_uses_configured_db_timeout(tmp_path):
+    output_path = tmp_path / "session.json"
+    win = MainWindow.__new__(MainWindow)
+    win.db = object()
+    win.db_available = True
+    win.current_db_session_id = None
+    win._runtime_segment_manifest = []
+    win._build_session_save_context = lambda: ("https://assembly.example/live", "행안위", 3)
+    win._ensure_session_lineage_id = lambda: "lineage-timeout"
+    win._record_recovery_snapshot = lambda *_args, **_kwargs: None
+    win._iter_full_session_serialized_items = (
+        lambda entries, **_kwargs: (entry.to_dict() for entry in entries)
+    )
+    win._iter_full_session_entries = lambda entries, **_kwargs: iter(entries)
+
+    captured: dict[str, object] = {}
+
+    def fail_sync_task(*_args, timeout=None, **_kwargs):
+        captured["timeout"] = timeout
+        raise TimeoutError("db wait timeout")
+
+    win._run_db_task_sync = fail_sync_task
+
+    info = MainWindow._write_session_snapshot(
+        win,
+        str(output_path),
+        [SubtitleEntry("저장 자막")],
+        include_db=True,
+    )
+
+    assert output_path.exists()
+    assert info["db_saved"] is False
+    assert info["db_error"] == "db wait timeout"
+    assert captured["timeout"] == mw_mod.Config.DB_SYNC_TASK_TIMEOUT_SECONDS
+
+
+def test_start_session_load_rejects_oversized_json_before_background_worker(
+    tmp_path, monkeypatch
+):
+    oversized = tmp_path / "oversized.json"
+    oversized.write_text("12345", encoding="utf-8")
+    monkeypatch.setattr(mw_mod.Config, "SESSION_LOAD_MAX_BYTES", 4, raising=False)
+
+    win = MainWindow.__new__(MainWindow)
+    win._session_load_in_progress = False
+    win._is_background_shutdown_active = lambda: False
+    win._block_session_replacement_while_saving = lambda _action: False
+    statuses: list[tuple[str, str]] = []
+    warnings: list[tuple[str, str]] = []
+    win._set_status = lambda text, level="info": statuses.append((text, level))
+    win._show_toast = lambda *_args, **_kwargs: None
+    win._start_background_thread = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("크기 초과 파일은 백그라운드 로드를 시작하면 안 됩니다.")
+    )
+
+    monkeypatch.setattr(
+        persistence_session_mod.QMessageBox,
+        "warning",
+        lambda _self, title, message: warnings.append((title, message)),
+    )
+
+    assert MainWindow._start_session_load_from_path(win, str(oversized)) is False
+    assert win._session_load_in_progress is False
+    assert statuses == [
+        ("세션 파일이 너무 커서 불러오기를 중단했습니다.", "warning")
+    ]
+    assert warnings
+    assert warnings[0][0] == "세션 파일 크기 초과"
+
+
 def test_runtime_search_cancel_token_stops_stale_worker(monkeypatch):
     win = MainWindow.__new__(MainWindow)
     win._runtime_segment_manifest = [{"start_index": 0}]
@@ -717,6 +792,32 @@ def test_parse_live_list_payload_keeps_no_live_rows_without_xcgcd():
             "time": "",
         }
     ]
+
+
+def test_normalize_live_list_row_rejects_malformed_query_values():
+    assert (
+        normalize_live_list_row(
+            {"xstat": "1", "xcgcd": "LIVE001&bad=1", "xcode": "AB"}
+        )
+        is None
+    )
+    assert (
+        normalize_live_list_row(
+            {"xstat": "1", "xcgcd": "LIVE001", "xcode": 'AB"]'}
+        )
+        is None
+    )
+
+
+def test_apply_live_broadcast_to_url_replaces_and_encodes_query_values():
+    resolved = apply_live_broadcast_to_url(
+        "https://assembly.webcast.go.kr/main/player.asp?xcode=10&foo=1&xcgcd=OLD",
+        {"xcode": "AB", "xcgcd": "LIVE_001"},
+    )
+
+    assert resolved == (
+        "https://assembly.webcast.go.kr/main/player.asp?foo=1&xcgcd=LIVE_001&xcode=AB"
+    )
 
 
 def test_select_live_broadcast_row_prefers_exact_xcode_match():

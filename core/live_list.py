@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 import time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 LIVE_LIST_API_URL = "https://assembly.webcast.go.kr/main/service/live_list.asp"
+_LIVE_XCODE_PATTERN = re.compile(r"^[A-Za-z0-9]{1,10}$")
+_LIVE_XCGCD_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 
 
 def build_live_list_url(now_ts: int | None = None) -> str:
@@ -12,11 +16,64 @@ def build_live_list_url(now_ts: int | None = None) -> str:
     return f"{LIVE_LIST_API_URL}?vv={token}"
 
 
+def _normalize_live_token(value: object, pattern: re.Pattern[str]) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if not pattern.fullmatch(normalized):
+        return ""
+    return normalized
+
+
+def normalize_live_xcode(value: object) -> str:
+    return _normalize_live_token(value, _LIVE_XCODE_PATTERN)
+
+
+def normalize_live_xcgcd(value: object) -> str:
+    return _normalize_live_token(value, _LIVE_XCGCD_PATTERN)
+
+
+def set_live_query_param(original_url: str, name: str, value: object) -> str:
+    url = str(original_url or "").strip().rstrip("&")
+    normalized_name = str(name or "").strip().lower()
+    if normalized_name == "xcode":
+        normalized_value = normalize_live_xcode(value)
+    elif normalized_name == "xcgcd":
+        normalized_value = normalize_live_xcgcd(value)
+    else:
+        return url
+    if not normalized_value:
+        return url
+
+    parsed = urlsplit(url)
+    query_pairs = [
+        (key, current_value)
+        for key, current_value in parse_qsl(parsed.query, keep_blank_values=True)
+        if str(key).lower() != normalized_name
+    ]
+    query_pairs.append((normalized_name, normalized_value))
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query_pairs, doseq=True),
+            parsed.fragment,
+        )
+    )
+
+
 def normalize_live_list_row(item: object) -> dict[str, str] | None:
     if not isinstance(item, dict):
         return None
-    xcgcd = str(item.get("xcgcd", "") or "").strip()
-    xcode = str(item.get("xcode", "") or "").strip()
+    raw_xcgcd = str(item.get("xcgcd", "") or "").strip()
+    raw_xcode = str(item.get("xcode", "") or "").strip()
+    xcgcd = normalize_live_xcgcd(raw_xcgcd)
+    xcode = normalize_live_xcode(raw_xcode)
+    if raw_xcgcd and not xcgcd:
+        return None
+    if raw_xcode and not xcode:
+        return None
     xname = str(item.get("xname", "이름 없음") or "이름 없음").strip() or "이름 없음"
     xdesc = str(item.get("xdesc", "") or "").strip()
     if not any((xcgcd, xcode, xname and xname != "이름 없음", xdesc)):
@@ -96,7 +153,7 @@ def is_live_broadcast_row(item: object) -> bool:
         return False
     return (
         str(item.get("xstat", "")).strip() == "1"
-        and bool(str(item.get("xcgcd", "")).strip())
+        and bool(normalize_live_xcgcd(item.get("xcgcd", "")))
     )
 
 
@@ -113,8 +170,8 @@ def select_live_broadcast_row(
             if normalized is not None:
                 normalized_rows.append(normalized)
     live_rows = [item for item in normalized_rows if is_live_broadcast_row(item)]
-    target_norm = str(target_xcode or "").strip().upper()
-    current_norm = str(current_xcgcd or "").strip()
+    target_norm = normalize_live_xcode(target_xcode).upper()
+    current_norm = normalize_live_xcgcd(current_xcgcd)
 
     if current_norm and not target_norm:
         for row in live_rows:
@@ -149,20 +206,12 @@ def select_live_broadcast_row(
 def apply_live_broadcast_to_url(original_url: str, row: dict[str, str]) -> str:
     url = str(original_url or "").strip().rstrip("&")
     for name, value in (
-        ("xcgcd", str(row.get("xcgcd", "")).strip()),
-        ("xcode", str(row.get("xcode", "")).strip()),
+        ("xcgcd", normalize_live_xcgcd(row.get("xcgcd", ""))),
+        ("xcode", normalize_live_xcode(row.get("xcode", ""))),
     ):
         if not value:
             continue
-        marker = f"{name}="
-        if marker in url:
-            import re
-
-            pattern = re.compile(r"([?&])" + re.escape(name) + r"=[^&]*")
-            url = pattern.sub(lambda match: f"{match.group(1)}{name}={value}", url, count=1)
-            continue
-        separator = "&" if "?" in url else "?"
-        url = f"{url}{separator}{name}={value}"
+        url = set_live_query_param(url, name, value)
     return url
 
 

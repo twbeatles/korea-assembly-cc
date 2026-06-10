@@ -6,6 +6,7 @@ import re
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request, urlopen
 
 from core.config import Config
@@ -14,8 +15,11 @@ from core.live_list import (
     build_live_list_url,
     make_live_list_error_payload,
     normalize_live_list_row,
+    normalize_live_xcgcd,
+    normalize_live_xcode,
     parse_live_list_payload,
     select_live_broadcast_row,
+    set_live_query_param,
     summarize_live_selection_issue,
 )
 from core.logging_utils import logger
@@ -32,19 +36,13 @@ CaptureLiveBase = CaptureLiveHost if TYPE_CHECKING else object
 class MainWindowCaptureLiveMixin(CaptureLiveBase):
     def _get_query_param(self, url: str, name: str) -> str:
         """URL 쿼리 파라미터 값 추출 (없으면 빈 문자열)"""
-        match = re.search(r"(?:^|[?&])" + re.escape(name) + r"=([^&]*)", url)
-        return match.group(1) if match else ""
+        parsed = urlsplit(str(url or ""))
+        values = parse_qs(parsed.query, keep_blank_values=True).get(str(name), [])
+        return str(values[0]) if values else ""
 
     def _set_query_param(self, url: str, name: str, value: str) -> str:
         """URL 쿼리 파라미터 설정/교체"""
-        base_url = url.strip().rstrip("&")
-        pattern = re.compile(r"([?&])" + re.escape(name) + r"=[^&]*")
-        if pattern.search(base_url):
-            return pattern.sub(
-                lambda m: f"{m.group(1)}{name}={value}", base_url, count=1
-            )
-        sep = "&" if "?" in base_url else "?"
-        return f"{base_url}{sep}{name}={value}"
+        return set_live_query_param(url, name, value)
 
     def _fetch_live_list(self):
         """국회 생중계 목록 API에서 현재 방송 목록 가져오기"""
@@ -133,8 +131,10 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
         if not isinstance(broadcasts, list) or not broadcasts:
             return original_url, None
 
-        current_xcgcd = self._get_query_param(original_url, "xcgcd").strip()
-        target_norm = target_xcode.strip() if target_xcode else ""
+        current_xcgcd = normalize_live_xcgcd(
+            self._get_query_param(original_url, "xcgcd")
+        )
+        target_norm = normalize_live_xcode(target_xcode)
         selection = select_live_broadcast_row(
             broadcasts,
             target_xcode=target_norm or None,
@@ -178,12 +178,15 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                     if reply != capture_mod.QMessageBox.StandardButton.Yes:
                         return
 
-                xcode = str(data.get("xcode", "")).strip()
-                xcgcd = str(data.get("xcgcd", "")).strip()
+                xcode = normalize_live_xcode(data.get("xcode", ""))
+                xcgcd = normalize_live_xcgcd(data.get("xcgcd", ""))
 
                 if xcode and xcgcd:
                     base_url = "https://assembly.webcast.go.kr/main/player.asp"
-                    new_url = f"{base_url}?xcode={xcode}&xcgcd={xcgcd}"
+                    new_url = apply_live_broadcast_to_url(
+                        base_url,
+                        {"xcode": xcode, "xcgcd": xcgcd},
+                    )
                     name = data.get("xname", "").strip()
                     self._add_to_history(new_url, name)
                     idx = self.url_combo.findData(new_url)
@@ -283,8 +286,17 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
         """현재 진행 중인 생중계의 xcgcd를 자동 감지"""
         capture_mod = _capture_public()
         try:
-            existing_xcgcd = self._get_query_param(original_url, "xcgcd").strip()
-            existing_xcode = self._get_query_param(original_url, "xcode").strip()
+            raw_existing_xcgcd = self._get_query_param(original_url, "xcgcd").strip()
+            raw_existing_xcode = self._get_query_param(original_url, "xcode").strip()
+            existing_xcgcd = normalize_live_xcgcd(raw_existing_xcgcd)
+            existing_xcode = normalize_live_xcode(raw_existing_xcode)
+
+            if raw_existing_xcode and not existing_xcode:
+                logger.warning("올바르지 않은 xcode query 값으로 생중계 감지를 생략: %s", raw_existing_xcode)
+                self.message_queue.put(
+                    ("status", "⚠️ xcode 값이 올바르지 않아 생중계 자동 감지를 건너뜁니다.")
+                )
+                return original_url
 
             if existing_xcgcd and existing_xcode and not force_refresh:
                 logger.info(f"URL에 이미 xcode/xcgcd 포함됨: {original_url}")
@@ -336,7 +348,10 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                 try:
                     result = driver.execute_script(script)
                     if result:
-                        found_xcgcd = str(result)
+                        found_xcgcd = normalize_live_xcgcd(result)
+                        if not found_xcgcd:
+                            logger.warning("JavaScript에서 올바르지 않은 xcgcd 값 발견 - 무시")
+                            continue
                         if target_xcode:
                             found_xcode = extract_xcode_from_xcgcd(found_xcgcd)
                             if (
@@ -356,7 +371,9 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
 
             if not xcgcd:
                 current_url = driver.current_url
-                found_xcgcd = self._get_query_param(current_url, "xcgcd").strip()
+                found_xcgcd = normalize_live_xcgcd(
+                    self._get_query_param(current_url, "xcgcd")
+                )
                 if found_xcgcd:
                     if target_xcode:
                         found_xcode = extract_xcode_from_xcgcd(found_xcgcd)
@@ -468,31 +485,32 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                                 "onair 요소 대기 타임아웃 (생중계가 없거나 로딩 지연)"
                             )
 
-                        selectors = [
-                            f'a.onair[href*="xcode={target_xcode}"]',
-                            f'a.btn[href*="xcode={target_xcode}"]',
-                            f'div.onair a[href*="xcode={target_xcode}"]',
-                            f'a[href*="xcode={target_xcode}"]:has(.icon_onair)',
-                            f'a[href*="xcode={target_xcode}"]',
-                        ]
-
                         btn = None
-                        for sel in selectors:
-                            try:
-                                elems = driver.find_elements(capture_mod.By.CSS_SELECTOR, sel)
-                                for elem in elems:
-                                    if "onair" in elem.get_attribute("class") or elem.find_elements(
-                                        capture_mod.By.CSS_SELECTOR, ".onair"
-                                    ):
-                                        btn = elem
-                                        break
-                                if btn:
+                        try:
+                            elems = driver.find_elements(
+                                capture_mod.By.CSS_SELECTOR,
+                                'a[href*="xcode="]',
+                            )
+                            for elem in elems:
+                                href = elem.get_attribute("href") or ""
+                                elem_xcode = normalize_live_xcode(
+                                    self._get_query_param(href, "xcode")
+                                )
+                                if not elem_xcode or elem_xcode.upper() != target_xcode_norm:
+                                    continue
+                                if (
+                                    "onair" in (elem.get_attribute("class") or "")
+                                    or elem.find_elements(
+                                        capture_mod.By.CSS_SELECTOR,
+                                        ".onair, .icon_onair",
+                                    )
+                                ):
+                                    btn = elem
                                     break
-                                if elems and not btn:
-                                    btn = elems[0]
-                                    break
-                            except Exception:
-                                continue
+                                if btn is None:
+                                    btn = elem
+                        except Exception as exc:
+                            logger.debug("xcode 버튼 후보 탐색 오류: %s", exc)
 
                         if btn:
                             driver.execute_script(
@@ -531,21 +549,30 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
                             except Exception as e:
                                 logger.debug(f"원래 URL 복귀 실패: {e}")
 
-            if xcgcd and len(xcgcd) >= 10:
-                new_url = self._set_query_param(original_url, "xcgcd", xcgcd)
+            normalized_xcgcd = normalize_live_xcgcd(xcgcd)
+            if normalized_xcgcd and len(normalized_xcgcd) >= 10:
+                new_url = self._set_query_param(original_url, "xcgcd", normalized_xcgcd)
                 if not self._get_query_param(new_url, "xcode"):
-                    inferred_xcode = target_xcode or extract_xcode_from_xcgcd(xcgcd)
+                    inferred_xcode = target_xcode or extract_xcode_from_xcgcd(
+                        normalized_xcgcd
+                    )
                     if inferred_xcode:
                         new_url = self._set_query_param(new_url, "xcode", inferred_xcode)
 
-                display_xcgcd = xcgcd[:15] + "..." if len(xcgcd) > 15 else xcgcd
+                display_xcgcd = (
+                    normalized_xcgcd[:15] + "..."
+                    if len(normalized_xcgcd) > 15
+                    else normalized_xcgcd
+                )
                 self.message_queue.put(
                     ("status", f"✅ 생중계 감지 성공! (xcgcd={display_xcgcd})")
                 )
                 logger.info(f"생중계 URL 업데이트: {new_url}")
                 return new_url
 
-            target_xcode = self._get_query_param(original_url, "xcode").strip() or None
+            target_xcode = normalize_live_xcode(
+                self._get_query_param(original_url, "xcode")
+            ) or None
             if isinstance(live_list_issue, dict):
                 issue_reason = str(live_list_issue.get("reason", "") or "").strip()
                 candidate_count = int(

@@ -213,9 +213,9 @@ class DatabaseSessionMixin(DatabaseMixinHost):
                     ]
                 }
 
-            except Exception as e:
+            except Exception:
                 logger.exception("세션 로드 오류")
-                return None
+                raise
 
     def list_sessions(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         """세션 목록 조회
@@ -262,9 +262,9 @@ class DatabaseSessionMixin(DatabaseMixinHost):
 
                 return [dict(row) for row in cursor.fetchall()]
 
-            except Exception as e:
+            except Exception:
                 logger.exception("세션 목록 조회 오류")
-                return []
+                raise
 
     def delete_session(self, session_id: int) -> bool:
         """세션 삭제
@@ -332,7 +332,7 @@ class DatabaseSessionMixin(DatabaseMixinHost):
                     logger.info(f"세션 삭제 완료: ID={safe_session_id}")
                 return deleted
 
-            except Exception as e:
+            except Exception:
                 conn.rollback()
                 logger.exception("세션 삭제 오류")
-                return False
+                raise

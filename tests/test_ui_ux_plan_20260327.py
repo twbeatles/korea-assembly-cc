@@ -278,6 +278,24 @@ def test_resolve_live_url_from_payload_preserves_live_list_error_details():
     assert "xlist" in str(issue["error"])
 
 
+def test_detect_live_broadcast_skips_invalid_xcode_query_before_lookup():
+    win = MainWindow.__new__(MainWindow)
+    messages: list[tuple[str, object]] = []
+    win.message_queue = SimpleNamespace(put=lambda item: messages.append(item))
+    win._fetch_live_list = lambda: (_ for _ in ()).throw(
+        AssertionError("잘못된 xcode는 live lookup으로 전달하면 안 됩니다.")
+    )
+
+    original_url = "https://assembly.webcast.go.kr/main/player.asp?xcode=AB%22%5D"
+
+    resolved = MainWindow._detect_live_broadcast(win, SimpleNamespace(), original_url)
+
+    assert resolved == original_url
+    assert messages == [
+        ("status", "⚠️ xcode 값이 올바르지 않아 생중계 자동 감지를 건너뜁니다.")
+    ]
+
+
 def test_notify_live_selection_issue_surfaces_live_list_error_to_status_and_toast():
     win = MainWindow.__new__(MainWindow)
     messages: list[tuple[str, object]] = []

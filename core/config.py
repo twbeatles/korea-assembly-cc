@@ -326,6 +326,7 @@ class Config:
     # 경로
     LOG_DIR = str(Path(STORAGE_DIR) / "logs")
     SESSION_DIR = str(Path(STORAGE_DIR) / "sessions")
+    SESSION_LOAD_MAX_BYTES = 100 * 1024 * 1024
     REALTIME_DIR = str(Path(STORAGE_DIR) / "realtime_output")
     BACKUP_DIR = str(Path(STORAGE_DIR) / "backups")
     PRESET_FILE = str(Path(STORAGE_DIR) / "committee_presets.json")
