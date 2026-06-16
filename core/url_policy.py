@@ -5,6 +5,19 @@ from urllib.parse import urlsplit
 
 
 _ALLOWED_ASSEMBLY_HOST = "assembly.webcast.go.kr"
+_PRESS_PLAYER_PATH = "/main/pressplayer.asp"
+
+
+def is_press_player_url(url: object) -> bool:
+    """기자회견 중계 URL 여부 (pressplayer.asp). xcgcd/xcode 감지를 건너뛰어야 하는 URL."""
+    try:
+        parsed = urlsplit(str(url or "").strip())
+        return (
+            is_allowed_assembly_host(parsed.hostname)
+            and parsed.path.lower().rstrip("/") == _PRESS_PLAYER_PATH.rstrip("/")
+        )
+    except Exception:
+        return False
 
 
 def is_allowed_assembly_host(host: object) -> bool:

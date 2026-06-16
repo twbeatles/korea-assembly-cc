@@ -369,6 +369,7 @@ class Config:
         "예산결산특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=21",
         "특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=91",
         "청문회/공청회": "https://assembly.webcast.go.kr/main/player.asp?xcode=99",
+        "기자회견": "https://assembly.webcast.go.kr/main/pressplayer.asp",
     }
     
     # 상임위원회 xcode 값 매핑 (v16.0 기준 동작하는 값)

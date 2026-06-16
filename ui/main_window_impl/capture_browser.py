@@ -306,6 +306,9 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
     ) -> str:
         if self._get_query_param(url, "xcgcd").strip() and not force_refresh:
             return url
+        from core.url_policy import is_press_player_url
+        if is_press_player_url(url):
+            return url
         try:
             try:
                 resolved_url = self._detect_live_broadcast(
