@@ -29,58 +29,32 @@ class MainWindowUILayoutMixin(MainWindowHost):
 
             # === 퀵 액션 툴바 ===
             toolbar_frame = QFrame()
-            toolbar_frame.setStyleSheet("""
-                QFrame {
-                    background-color: rgba(88, 166, 255, 0.05);
-                    border: 1px solid rgba(88, 166, 255, 0.15);
-                    border-radius: 10px;
-                    padding: 4px;
-                }
-            """)
+            toolbar_frame.setObjectName("quickToolbar")
             toolbar_layout = QHBoxLayout(toolbar_frame)
             toolbar_layout.setContentsMargins(12, 8, 12, 8)
             toolbar_layout.setSpacing(8)
 
-            # 툴바 버튼 스타일
-            toolbar_btn_style = """
-                QPushButton {
-                    background-color: rgba(88, 166, 255, 0.1);
-                    border: 1px solid rgba(88, 166, 255, 0.2);
-                    border-radius: 8px;
-                    padding: 8px 16px;
-                    font-size: 12px;
-                    font-weight: 500;
-                }
-                QPushButton:hover {
-                    background-color: rgba(88, 166, 255, 0.2);
-                    border-color: rgba(88, 166, 255, 0.4);
-                }
-                QPushButton:pressed {
-                    background-color: rgba(88, 166, 255, 0.3);
-                }
-            """
-
             # 빠른 저장 버튼
             quick_save_btn = QPushButton("💾 빠른 저장")
-            quick_save_btn.setStyleSheet(toolbar_btn_style)
+            quick_save_btn.setObjectName("toolbarButton")
             quick_save_btn.setToolTip("현재 자막을 TXT로 빠르게 저장 (Ctrl+S)")
             quick_save_btn.clicked.connect(self._save_txt)
 
             # 검색 버튼
             search_btn = QPushButton("🔍 검색")
-            search_btn.setStyleSheet(toolbar_btn_style)
+            search_btn.setObjectName("toolbarButton")
             search_btn.setToolTip("자막 내 키워드 검색 (Ctrl+F)")
             search_btn.clicked.connect(self._show_search)
 
             # 클립보드 복사 버튼
             copy_btn = QPushButton("📋 복사")
-            copy_btn.setStyleSheet(toolbar_btn_style)
+            copy_btn.setObjectName("toolbarButton")
             copy_btn.setToolTip("전체 자막을 클립보드에 복사")
             copy_btn.clicked.connect(self._copy_to_clipboard)
 
             # 자막 줄넘김 정리 버튼 (New)
             self.clean_btn = QPushButton("✨ 줄넘김 정리")
-            self.clean_btn.setStyleSheet(toolbar_btn_style)
+            self.clean_btn.setObjectName("toolbarButton")
             self.clean_btn.setToolTip(
                 "문장 부호로 끊어지지 않은 줄을 자동으로 병합 (Ctrl+Shift+L)"
             )
@@ -88,7 +62,7 @@ class MainWindowUILayoutMixin(MainWindowHost):
 
             # 자막 지우기 버튼
             self.clear_btn = QPushButton("🗑️ 지우기")
-            self.clear_btn.setStyleSheet(toolbar_btn_style)
+            self.clear_btn.setObjectName("toolbarButton")
             self.clear_btn.setToolTip("현재 자막 목록 초기화")
             self.clear_btn.clicked.connect(self._clear_subtitles)
 
@@ -101,18 +75,7 @@ class MainWindowUILayoutMixin(MainWindowHost):
 
             # 테마 토글 버튼
             self.theme_toggle_btn = QPushButton("🌙" if self.is_dark_theme else "☀️")
-            self.theme_toggle_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: transparent;
-                    border: none;
-                    font-size: 18px;
-                    padding: 4px 8px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(88, 166, 255, 0.1);
-                    border-radius: 6px;
-                }
-            """)
+            self.theme_toggle_btn.setObjectName("themeToggle")
             self.theme_toggle_btn.setToolTip("테마 전환")
             self.theme_toggle_btn.clicked.connect(self._toggle_theme_from_button)
             toolbar_layout.addWidget(self.theme_toggle_btn)
@@ -280,21 +243,11 @@ class MainWindowUILayoutMixin(MainWindowHost):
 
             # 상단 접기/펼치기 버튼
             self.toggle_header_btn = QPushButton("🔼 상단 접기")
+            self.toggle_header_btn.setObjectName("ghostButton")
             self.toggle_header_btn.setToolTip(
                 "상단 타이틀과 툴바를 숨겨 자막 영역을 넓힙니다"
             )
             self.toggle_header_btn.setFixedWidth(120)
-            self.toggle_header_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(88, 166, 255, 0.1);
-                    border: 1px solid rgba(88, 166, 255, 0.3);
-                    border-radius: 6px;
-                    padding: 6px 12px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(88, 166, 255, 0.2);
-                }
-            """)
             self.toggle_header_btn.clicked.connect(self._toggle_top_header)
             btn_layout.addWidget(self.toggle_header_btn)
 
@@ -334,14 +287,12 @@ class MainWindowUILayoutMixin(MainWindowHost):
             preview_layout.setSpacing(8)
 
             preview_title = QLabel("⏳ 미리보기")
+            preview_title.setObjectName("previewTitle")
             preview_title.setFixedWidth(90)
-            preview_title.setStyleSheet(
-                "background: transparent; border: none; font-weight: 600;"
-            )
 
             self.preview_label = QLabel("")
+            self.preview_label.setObjectName("previewText")
             self.preview_label.setWordWrap(True)
-            self.preview_label.setStyleSheet("background: transparent; border: none;")
 
             preview_layout.addWidget(preview_title)
             preview_layout.addWidget(self.preview_label, 1)
@@ -351,20 +302,9 @@ class MainWindowUILayoutMixin(MainWindowHost):
 
             # 통계 토글 버튼 (자막 영역 하단)
             self.toggle_stats_btn = QPushButton("📊 통계 숨기기")
+            self.toggle_stats_btn.setObjectName("ghostButton")
             self.toggle_stats_btn.setToolTip("통계 패널 숨기기/보이기")
             self.toggle_stats_btn.setFixedHeight(28)
-            self.toggle_stats_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(88, 166, 255, 0.1);
-                    border: 1px solid rgba(88, 166, 255, 0.3);
-                    border-radius: 6px;
-                    padding: 4px 12px;
-                    font-size: 11px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(88, 166, 255, 0.2);
-                }
-            """)
             self.toggle_stats_btn.clicked.connect(self._toggle_stats_panel)
             subtitle_layout.addWidget(self.toggle_stats_btn)
 
@@ -390,12 +330,8 @@ class MainWindowUILayoutMixin(MainWindowHost):
                 self.stat_cpm,
             ]
             for label in stat_labels:
+                label.setObjectName("statChip")
                 label.setFont(QFont("맑은 고딕", 10))
-                label.setStyleSheet("""
-                    padding: 6px 8px;
-                    border-radius: 6px;
-                    background-color: rgba(88, 166, 255, 0.08);
-                """)
                 stats_layout.addWidget(label)
 
             stats_layout.addStretch()
@@ -407,35 +343,15 @@ class MainWindowUILayoutMixin(MainWindowHost):
 
             # === "최신 자막" 플로팅 버튼 (스마트 스크롤용) ===
             self.scroll_to_bottom_btn = QPushButton("⬇️ 최신 자막")
+            self.scroll_to_bottom_btn.setObjectName("scrollToBottom")
             self.scroll_to_bottom_btn.setToolTip("최신 자막으로 이동하고 자동 스크롤 재개")
-            self.scroll_to_bottom_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(88, 166, 255, 0.9);
-                    color: white;
-                    border: none;
-                    border-radius: 16px;
-                    padding: 8px 16px;
-                    font-size: 13px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: rgba(88, 166, 255, 1.0);
-                }
-            """)
             self.scroll_to_bottom_btn.clicked.connect(self._scroll_to_bottom)
             self.scroll_to_bottom_btn.hide()  # 초기에는 숨김
             layout.addWidget(self.scroll_to_bottom_btn)
 
             # === 검색바 (숨김) - 개선된 디자인 ===
             self.search_frame = QFrame()
-            self.search_frame.setStyleSheet("""
-                QFrame {
-                    background-color: rgba(88, 166, 255, 0.05);
-                    border: 1px solid rgba(88, 166, 255, 0.2);
-                    border-radius: 10px;
-                    padding: 5px;
-                }
-            """)
+            self.search_frame.setObjectName("searchBar")
             search_layout = QHBoxLayout(self.search_frame)
             search_layout.setContentsMargins(12, 8, 12, 8)
             search_layout.setSpacing(8)
@@ -446,70 +362,28 @@ class MainWindowUILayoutMixin(MainWindowHost):
             search_layout.addWidget(search_icon)
 
             self.search_input = QLineEdit()
+            self.search_input.setObjectName("searchInput")
             self.search_input.setPlaceholderText("검색어 입력...")
-            self.search_input.setStyleSheet("""
-                QLineEdit {
-                    background-color: transparent;
-                    border: none;
-                    padding: 6px;
-                    font-size: 13px;
-                }
-            """)
             self.search_input.textChanged.connect(self._schedule_search)
             self.search_input.returnPressed.connect(self._trigger_search_now)
             search_layout.addWidget(self.search_input, 1)
 
             self.search_count = QLabel("")
-            self.search_count.setStyleSheet("""
-                color: #8b949e;
-                font-size: 12px;
-                background: transparent;
-                border: none;
-                padding: 0 8px;
-            """)
+            self.search_count.setObjectName("searchCount")
             search_layout.addWidget(self.search_count)
 
-            # 검색 버튼 스타일
-            search_btn_style = """
-                QPushButton {
-                    background-color: rgba(88, 166, 255, 0.1);
-                    border: 1px solid rgba(88, 166, 255, 0.3);
-                    border-radius: 6px;
-                    padding: 6px;
-                    font-size: 12px;
-                    min-width: 32px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(88, 166, 255, 0.2);
-                    border-color: #58a6ff;
-                }
-            """
-
             search_prev = QPushButton("◀")
-            search_prev.setStyleSheet(search_btn_style)
+            search_prev.setObjectName("searchNavButton")
             search_prev.setFixedWidth(36)
             search_prev.clicked.connect(lambda: self._nav_search(-1))
 
             search_next = QPushButton("▶")
-            search_next.setStyleSheet(search_btn_style)
+            search_next.setObjectName("searchNavButton")
             search_next.setFixedWidth(36)
             search_next.clicked.connect(lambda: self._nav_search(1))
 
             search_close = QPushButton("✕")
-            search_close.setStyleSheet("""
-                QPushButton {
-                    background-color: rgba(248, 81, 73, 0.1);
-                    border: 1px solid rgba(248, 81, 73, 0.3);
-                    border-radius: 6px;
-                    padding: 6px;
-                    font-size: 12px;
-                    min-width: 32px;
-                }
-                QPushButton:hover {
-                    background-color: rgba(248, 81, 73, 0.2);
-                    border-color: #f85149;
-                }
-            """)
+            search_close.setObjectName("searchCloseButton")
             search_close.setFixedWidth(36)
             search_close.clicked.connect(self._hide_search)
 
@@ -522,16 +396,9 @@ class MainWindowUILayoutMixin(MainWindowHost):
             layout.addWidget(self.search_frame)
 
             # === 상태바 - 모던 디자인 ===
-            # === 상태바 - 모던 디자인 ===
             status_frame = QFrame()
+            status_frame.setObjectName("statusBar")
             status_frame.setFixedHeight(48)  # 높이 고정
-            status_frame.setStyleSheet("""
-                QFrame {
-                    background-color: rgba(48, 54, 61, 0.3);
-                    border-radius: 10px;
-                    padding: 4px;
-                }
-            """)
             status_layout = QHBoxLayout(status_frame)
             status_layout.setContentsMargins(16, 4, 16, 4)  # 상하 여백 축소
             status_layout.setSpacing(12)
@@ -545,31 +412,19 @@ class MainWindowUILayoutMixin(MainWindowHost):
             # 연결 상태 인디케이터 (#30) - 개선된 디자인
             self.connection_indicator = QLabel("⚫")
             self.connection_indicator.setToolTip("연결 상태: 대기 중")
-            self.connection_indicator.setStyleSheet("""
-                background: transparent; 
-                border: none; 
-                font-size: 14px;
-                padding: 2px 8px;
-                border-radius: 4px;
-            """)
+            self.connection_indicator.setStyleSheet(
+                "background: transparent; border: none; font-size: 14px;"
+                " padding: 2px 8px; border-radius: 4px;"
+            )
 
             # 구분선
             separator = QFrame()
+            separator.setObjectName("statusSeparator")
             separator.setFrameShape(QFrame.Shape.VLine)
-            separator.setStyleSheet(
-                "background-color: rgba(88, 166, 255, 0.3); max-width: 1px;"
-            )
 
             # 카운트 라벨 - 개선된 스타일
             self.count_label = QLabel("📝 0문장 | 0자")
-            self.count_label.setStyleSheet("""
-                color: #8b949e; 
-                background: rgba(88, 166, 255, 0.08); 
-                border: none;
-                border-radius: 6px;
-                padding: 4px 10px;
-                font-weight: 500;
-            """)
+            self.count_label.setObjectName("countLabel")
 
             self.realtime_status_label = QLabel("")
             self.realtime_status_label.setStyleSheet(

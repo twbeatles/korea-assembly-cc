@@ -330,6 +330,14 @@ korea-assembly-cc/
 - **release verifier options**: `scripts/run_release_verification.py`는 `--offline`, `--skip-live`, `--skip-build`, `--instantiate-window`, drift strict 옵션을 제공한다. 기본 실행은 pytest/pyright/source smoke/live smoke/drift/PyInstaller/frozen smoke/portable preflight 전체 경로를 유지한다.
 - **회귀 기준선**: `python scripts/run_release_verification.py` 통과. `pytest` 243 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, live-list `drift=false`, `name_drift=false`, clean build 및 frozen/portable smoke exit code 0.
 
+### v16.14.7 UI/UX 테마 일원화 리팩토링 메모 (2026-06-18)
+- **토큰 기반 테마 생성**: `ui/themes.py`는 `_DARK_PALETTE`/`_LIGHT_PALETTE` 시맨틱 팔레트에서 `string.Template` 기반 `_build_theme()`로 `DARK_THEME`/`LIGHT_THEME`를 생성한다. 공개 이름(`DARK_THEME`, `LIGHT_THEME`)과 import 경로는 그대로 유지하고, `get_palette(is_dark)` 헬퍼를 추가했다.
+- **objectName 기반 컴포넌트 QSS**: 퀵 툴바/툴바 버튼/테마 토글/고스트 버튼/최신 자막 플로팅 버튼/검색바(입력·이전·다음·닫기·카운트)/상태바(구분선·카운트 칩)/통계 칩/미리보기 컨테이너의 색상을 인라인 `setStyleSheet`에서 두 테마 모두에 정의된 `objectName` QSS 규칙으로 이전했다. 하드코딩된 `rgba(88, 166, 255, ...)` 다크 전용 값이 라이트 테마에서도 팔레트 accent로 자동 재색칠된다.
+- **`_apply_theme` 단순화**: `ui/main_window_impl/ui/theme_status.py`의 위젯별 수동 패칭(통계/검색/카운트/미리보기)을 제거하고, 테마 전환은 전체 스타일시트 교체 + 떠 있는 토스트 재색칠만 수행한다.
+- **테마 인식 토스트**: `ui/widgets.py`의 `ToastWidget`은 `is_dark` 인자와 `apply_theme()`를 받아 다크/라이트에서 배경·텍스트·accent를 다르게 칠한다. `_show_toast`는 현재 `is_dark_theme`를 전달한다.
+- **layout.py 인라인 스타일 정리**: 잔존 인라인 스타일은 테마 무관(투명 배경) 또는 런타임 상태색(상태/연결 인디케이터)만 남긴다.
+- **회귀 기준선**: `pytest -q` 263 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, `--smoke-instantiate-window` exit code 0, 다크/라이트 렌더 스크린샷으로 일관성 확인.
+
 ### v16.14.7 감사 후속 URL / 복구 / 검색 정책 메모 (2026-06-04)
 - **shared URL policy**: `core.url_policy`가 `http/https` + `assembly.webcast.go.kr` 계열 host 검증을 담당한다. `_start()`, 프리셋 add/edit/import, URL history load/save sanitize는 같은 helper를 사용하며 외부 URL은 `_add_to_history()`나 worker 시작 전에 차단한다.
 - **default URL consistency**: 히스토리가 없을 때 URL combo는 `Config.DEFAULT_URL`을 사용한다. 기본 본회의 URL은 `xcode=10`이고, bare `player.asp`로 되돌리지 않는다.

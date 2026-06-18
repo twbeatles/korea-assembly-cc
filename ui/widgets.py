@@ -100,23 +100,67 @@ class CollapsibleGroupBox(QGroupBox):
 # ============================================================
 
 class ToastWidget(QFrame):
-    """비차단 토스트 알림 위젯 - 스택 처리 지원, 모던 디자인"""
-    
-    def __init__(self, parent, message: str, duration: int = 3000, 
-                 toast_type: str = "info", y_offset: int = 10, on_close=None):
+    """비차단 토스트 알림 위젯 - 스택 처리 지원, 테마 인식 모던 디자인"""
+
+    # (accent, dark_bg, light_bg)
+    _PALETTE = {
+        "info": ("#58a6ff", "#1c2128", "#0969da", "#ffffff"),
+        "success": ("#3fb950", "#10231a", "#2da44e", "#f3fbf5"),
+        "warning": ("#d29922", "#241f12", "#9a6700", "#fff8e6"),
+        "error": ("#f85149", "#241418", "#cf222e", "#fff0f0"),
+    }
+
+    def __init__(self, parent, message: str, duration: int = 3000,
+                 toast_type: str = "info", y_offset: int = 10, on_close=None,
+                 is_dark: bool = True):
         super().__init__(parent)
         self.setObjectName("toastWidget")
         self.on_close = on_close
-        
-        # 개선된 색상 팔레트 (더 세련된 컬러)
-        colors = {
-            "info": ("#58a6ff", "#161b22", "#21262d"),      # 블루 - 정보
-            "success": ("#3fb950", "#0d1117", "#1c2128"),   # 그린 - 성공
-            "warning": ("#d29922", "#1c1a14", "#2d2a21"),   # 옐로우 - 경고
-            "error": ("#f85149", "#1c1418", "#2d2128")      # 레드 - 오류
-        }
-        accent_color, bg_color, border_bg = colors.get(toast_type, colors["info"])
-        
+        self._toast_type = toast_type if toast_type in self._PALETTE else "info"
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
+
+        # 아이콘 (개선된 이모지)
+        icons = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}
+        icon_label = QLabel(icons.get(self._toast_type, "ℹ️"))
+        icon_label.setObjectName("toastIcon")
+        layout.addWidget(icon_label)
+
+        # 메시지
+        msg_label = QLabel(message)
+        msg_label.setObjectName("toastMessage")
+        msg_label.setWordWrap(True)
+        layout.addWidget(msg_label, 1)
+
+        self.apply_theme(is_dark)
+
+        # 위치 설정 (부모 위젯 상단 중앙 + y_offset)
+        self.adjustSize()
+        if parent:
+            parent_rect = parent.rect()
+            x = (parent_rect.width() - self.width()) // 2
+            self.move(x, y_offset)
+
+        self.show()
+        self.raise_()
+
+        # 자동 사라짐
+        QTimer.singleShot(duration, self._fade_out)
+
+    def apply_theme(self, is_dark: bool) -> None:
+        """현재 테마에 맞춰 토스트 색상을 갱신한다."""
+        accent, dark_bg, accent_light, light_bg = self._PALETTE[self._toast_type]
+        if is_dark:
+            bg_color = dark_bg
+            accent_color = accent
+            text_color = "#e6edf3"
+        else:
+            bg_color = light_bg
+            accent_color = accent_light
+            text_color = "#24292f"
+
         self.setStyleSheet(f"""
             QFrame#toastWidget {{
                 background-color: {bg_color};
@@ -126,7 +170,7 @@ class ToastWidget(QFrame):
                 padding: 12px;
             }}
             QLabel {{
-                color: #e6edf3;
+                color: {text_color};
                 font-size: 13px;
                 font-weight: 500;
                 background: transparent;
@@ -136,39 +180,10 @@ class ToastWidget(QFrame):
                 min-width: 24px;
             }}
             QLabel#toastMessage {{
-                color: #e6edf3;
+                color: {text_color};
                 padding-left: 8px;
             }}
         """)
-        
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(10)
-        
-        # 아이콘 (개선된 이모지)
-        icons = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}
-        icon_label = QLabel(icons.get(toast_type, "ℹ️"))
-        icon_label.setObjectName("toastIcon")
-        layout.addWidget(icon_label)
-        
-        # 메시지
-        msg_label = QLabel(message)
-        msg_label.setObjectName("toastMessage")
-        msg_label.setWordWrap(True)
-        layout.addWidget(msg_label, 1)
-        
-        # 위치 설정 (부모 위젯 상단 중앙 + y_offset)
-        self.adjustSize()
-        if parent:
-            parent_rect = parent.rect()
-            x = (parent_rect.width() - self.width()) // 2
-            self.move(x, y_offset)
-        
-        self.show()
-        self.raise_()
-        
-        # 자동 사라짐
-        QTimer.singleShot(duration, self._fade_out)
     
     def _fade_out(self):
         """토스트 사라지기"""
