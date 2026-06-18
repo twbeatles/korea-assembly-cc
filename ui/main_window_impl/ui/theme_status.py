@@ -8,67 +8,18 @@ from ui.main_window_types import MainWindowHost
 
 class MainWindowUIThemeStatusMixin(MainWindowHost):
     def _apply_theme(self):
+            # 테마 전환은 전체 스타일시트 교체만으로 처리한다.
+            # 컴포넌트별 색상은 themes.py의 objectName 기반 QSS 규칙이
+            # 두 테마 모두에 정의돼 있어 자동으로 다시 칠해진다.
             self.setStyleSheet(DARK_THEME if self.is_dark_theme else LIGHT_THEME)
             self.theme_action.setText("라이트 테마" if self.is_dark_theme else "다크 테마")
 
-            # 테마에 따른 동적 스타일 업데이트
-            if self.is_dark_theme:
-                stat_bg = "rgba(88, 166, 255, 0.08)"
-                search_bg = "rgba(88, 166, 255, 0.05)"
-                search_border = "rgba(88, 166, 255, 0.2)"
-                status_bg = "rgba(48, 54, 61, 0.3)"
-                count_color = "#8b949e"
-                preview_bg = "rgba(88, 166, 255, 0.08)"
-                preview_border = "rgba(88, 166, 255, 0.25)"
-            else:
-                stat_bg = "rgba(9, 105, 218, 0.06)"
-                search_bg = "rgba(9, 105, 218, 0.04)"
-                search_border = "rgba(9, 105, 218, 0.15)"
-                status_bg = "rgba(208, 215, 222, 0.4)"
-                count_color = "#57606a"
-                preview_bg = "rgba(9, 105, 218, 0.05)"
-                preview_border = "rgba(9, 105, 218, 0.15)"
-
-            # 통계 라벨 스타일 업데이트
-            try:
-                stat_labels = [
-                    self.stat_time,
-                    self.stat_chars,
-                    self.stat_words,
-                    self.stat_sents,
-                    self.stat_cpm,
-                ]
-                for label in stat_labels:
-                    label.setStyleSheet(f"""
-                        padding: 6px 8px;
-                        border-radius: 6px;
-                        background-color: {stat_bg};
-                    """)
-
-                # 검색바 스타일 업데이트
-                self.search_frame.setStyleSheet(f"""
-                    QFrame {{
-                        background-color: {search_bg};
-                        border: 1px solid {search_border};
-                        border-radius: 10px;
-                        padding: 5px;
-                    }}
-                """)
-
-                # 상태바 카운트 라벨 색상 업데이트
-                self.count_label.setStyleSheet(
-                    f"color: {count_color}; background: transparent; border: none;"
-                )
-
-                # 미리보기 영역 스타일 업데이트
-                if hasattr(self, "preview_frame"):
-                    self.preview_frame.setStyleSheet(
-                        f"background-color: {preview_bg}; border: 1px solid {preview_border}; "
-                        "border-radius: 8px;"
-                    )
-            except AttributeError:
-                # UI가 아직 완전히 초기화되지 않은 경우
-                pass
+            # 토스트는 자식 위젯이 아니므로 스타일시트가 전파되지 않는다.
+            # 현재 떠 있는 토스트만 새 테마에 맞춰 갱신한다.
+            for toast in list(getattr(self, "active_toasts", [])):
+                apply = getattr(toast, "apply_theme", None)
+                if callable(apply):
+                    apply(self.is_dark_theme)
 
 
     def _toggle_theme(self):
@@ -141,6 +92,7 @@ class MainWindowUIThemeStatusMixin(MainWindowHost):
                 toast_type,
                 y_offset=y_offset,
                 on_close=remove_toast,
+                is_dark=bool(getattr(self, "is_dark_theme", True)),
             )
             self.active_toasts.append(toast)
 
