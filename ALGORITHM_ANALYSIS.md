@@ -1,32 +1,10 @@
 # 🔍 자막 수집 알고리즘 잠재적 문제점 분석
 
-> **분석 일자**: 2026-02-12
-> **분석 대상**: v16.12 글로벌 히스토리 + Suffix 매칭 파이프라인
-> **참조 문서**: `PIPELINE_LOCK.md`, `CLAUDE.md`, `README.md`
-> **분석 관점**: 자막 수집 **정확성** 중심
+> **내부 개발 문서** — 자막 수집 파이프라인의 정확성 분석 및 개선 제안을 담은 개발자용 문서입니다.
 
-> [!NOTE]
-> **v16.13.1(2026-02-27) 정합성 반영**: 본 문서의 코어 분석 범위(글로벌 히스토리 + suffix)는 유지됩니다.  
-> v16.13.1까지의 반영사항은 운영 안정성(keepalive 실활성, xcgcd 경로 연결, 저장 원자성/종료 대기)과 수집 안정화(`.smi_word` 목록 창 수집, Observer 타겟 우선순위 보강)입니다.
-> **v16.13.2(2026-03-05) 정합성 반영**: `_confirmed_compact` 상한(`50000`) 도입, 병합 기준 Config 일원화(`5초/300자`), 세션 병합 dedupe 시간창(30초) 적용, 종료 lifecycle drain 통합이 반영되었습니다.
-> **v16.14.0(2026-03-16) 정합성 반영**: Chrome 확장 기반 `live row ledger + subtitle pipeline`이 `core/live_capture.py`와 `core/subtitle_pipeline.py`로 고정되었고, `framePath::nodeKey` row reconciliation, grace reset, prepared snapshot 저장 경로가 운영 기본값이 되었습니다. `ui/main_window.py`는 파사드로 축소되고 관련 책임은 `ui/main_window_*` 모듈로 분리되었습니다.
-> **v16.14.1(2026-03-17) 정합성 반영**: 자동 줄넘김 정리가 사용자 옵션(`auto_clean_newlines`, 기본 ON)으로 노출되었고, preview/live-row/flush 정규화 경로가 동일 설정을 읽도록 통일되었습니다. 이 변경은 글로벌 히스토리 + suffix 코어 의미론을 바꾸지 않고 입력 정규화 정책만 옵션화합니다.
-> **v16.14.2(2026-03-18) 성능 정합성 반영**: `SubtitleEntry.__slots__`, compact cache, `CaptureSessionState.snapshot_clone()`, streaming JSON 저장, delta render/tail patch가 추가되었고, `commit_live_row` 1,500회 benchmark는 약 `10.3초 -> 3.8초`로 단축되었습니다. 이후 자막 수집 회귀 대응으로 Worker 캡처 루프는 이전 안정 structured probe 경로로 복귀했습니다.
-> **v16.14.3(2026-03-23) 운영 정합성 반영**: 코어 알고리즘 자체는 유지하면서, `self.driver` lifecycle이 `_driver_lock`으로 정리되고, Worker 메시지는 bounded `MainWindowMessageQueue(maxsize=500)` + internal `run_id` envelope + coalescing으로 격리되었습니다. `_finalize_subtitle()`는 shared append helper를 사용하고, 렌더는 immutable snapshot clone 기준으로 동작합니다.
-> **v16.14.4(2026-03-25) UI/운영 정합성 반영**: 검색 기준이 전체 `self.subtitles` 스냅샷으로 확장되고 검색/DB 결과 focus 시 렌더 offset이 동적으로 조정되지만, 이 문서가 분석하는 글로벌 히스토리 + suffix 코어 의미론은 바뀌지 않습니다. 또한 실행 중 상태 변경 가드, 파일/DB 세션 로드 payload 통합, 프리셋/통계 export 원자성 보강은 운영 레이어 변경입니다.
-> **v16.14.5(2026-03-27) UI/UX 정합성 반영**: run-source 스냅샷 고정, live 목록의 수동/자동 경로 분리, DB/편집 목록의 점진 로드, dirty-session 종료 프롬프트, 단축키/문서 정렬이 추가되었지만, 이 역시 코어 추출 알고리즘이 아닌 UI/상태 관리 레이어 변경입니다.
-> **v16.14.6(2026-04-01) 세션 복구 정합성 반영**: recovery state(`session_recovery.json`), prepared snapshot 기반 수동 reflow, lossless DB metadata round-trip, DOCX/HWPX multiline export 정리가 추가되었지만, 이 역시 저장/복구 레이어 변경이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
-> **v16.14.7(2026-04-01) 브라우저 자동 복구 + 구조 분리 정합성 반영**: Chrome 세션 헬스체크와 자동 재기동, recoverable WebDriver 오류 승격, `ui/main_window_impl/` 및 `core/live_capture_impl/` 기반 내부 구조 분리가 반영되었지만, 이는 driver lifecycle 및 모듈 경계 정리이며 글로벌 히스토리 + suffix 코어 의미론은 유지됩니다.
-> **v16.14.7(2026-04-05) facade 세분화 정합성 반영**: `ui/main_window_database.py`와 `ui/main_window_persistence.py`는 공개 facade만 남기고 실제 구현을 `ui/main_window_impl/database_*`, `ui/main_window_impl/persistence_*`로 재분리했지만, 이는 책임 경계와 패키징 정합화 변경이며 이 문서가 다루는 글로벌 히스토리 + suffix 코어 의미론은 그대로입니다.
-> **v16.14.7(2026-04-06) 세션 안정성 / 도구 체인 정합성 반영**: runtime archive lifetime 고정, `archive_token` + `run_id` 기반 stale background isolation, best-effort runtime manifest salvage, blank URL/recovery pointer hygiene, `pyrightconfig.json`/`.vscode/settings.json`의 `typings/` 명시 및 `.pytest_tmp` 제외가 반영되었지만, 이는 저장·복구·정적 분석 레이어 정리이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
-> **v16.14.7(2026-04-08) 저장소 / 세션 안전성 정합성 반영**: storage root 분리(`development/repo`, `portable/EXE`, `frozen default/%LOCALAPPDATA%`), startup preflight, deferred dirty-save, background hydrate, live list timeout/schema validation, DB lineage/history badge가 추가되었지만, 이는 저장·UI·DB 안전성 보강이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
-> **v16.14.7(2026-04-14) 기능 구현 정합성 반영**: storage preflight v2(file surface + SQLite WAL), shared `core/live_list.py`, ambiguous multi-live no-auto-select, DB degraded UI/FTS->LIKE fallback, export/message dead-branch cleanup, URL history/preset warning surface가 반영되었지만, 이는 저장·UI·DB·패키징 정합성 보강이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
-> 후속 Pylance/인코딩 위생 보강(`ui/main_window_types.py`, 로컬 `typings/`, `pytest.ini --basetemp=.pytest_tmp`, 확장된 `tests/test_encoding_hygiene.py`)과 HWP 저장의 missing-dependency fallback 정렬은 이 문서가 분석하는 자막 추출 알고리즘 자체를 바꾸지 않습니다.
-> **v16.14.7(2026-04-29) 기능 리스크 hardening 반영**: `subtitle_reset` pending grace는 유지하되 다음 preview 직전에 완전 리셋을 먼저 커밋하고, merge boundary는 `source_node_key`뿐 아니라 speaker color/channel과 container fallback source mode를 함께 봅니다. Observer broad clear는 reset으로 즉시 확정하지 않고 probe 재확인을 거치며, runtime manifest path confinement와 segment flush fingerprint guard도 추가되었습니다.
-> **v16.14.7(2026-05-06) 기능 구현 리스크 개선 반영**: 저장/export/자동백업/리플로우 worker는 clone 기반 persistent snapshot을 사용하고, bounded queue 포화 시 terminal worker message를 priority passthrough로 보존하며, FTS5 rebuild와 source/frozen smoke 검증 경로를 보강했습니다. 이는 저장·큐·DB·패키징 검증 레이어 변경이며 글로벌 히스토리 + suffix 코어 의미론은 바뀌지 않습니다.
-> **v16.14.7(2026-05-11) 보존형 책임 분리 반영**: `persistence_runtime.py`, `database_manager.py`, `subtitle_pipeline.py`는 공개 facade/API 표면을 유지하면서 내부 구현을 `persistence_runtime_*`, `core/database_impl/`, `core/subtitle_pipeline_impl/`로 분리했습니다. 이는 파일 구조와 패키징 정합성 변경이며 글로벌 히스토리 + suffix 코어 의미론은 바뀌지 않습니다.
-> **v16.14.7(2026-05-21) 리스크 리뷰 후속 검증 자동화 반영**: `MainWindow()` constructor smoke, live-list name drift 리포트, live-list 실패 원인 노출, 세션/백업 파일명 충돌 방지, release verifier 옵션화가 추가되었습니다. 이는 운영 진단·검증·저장 파일명 hygiene 변경이며 이 문서가 분석하는 글로벌 히스토리 + suffix 코어 의미론은 바뀌지 않습니다.
-> **v16.14.7(2026-06-04) 감사 후속 hardening 반영**: `core/url_policy.py` 기반 시작 URL/프리셋/URL history sanitize 공통화, runtime manifest malformed segment strict/salvage 처리, DB 검색 실패 가시성 보강이 추가되었습니다. 이는 입력 검증·복구 무결성·DB 오류 표시 레이어 변경이며 이 문서가 분석하는 자막 추출 알고리즘 자체는 바뀌지 않습니다.
+> **분석 일자**: 2026-02-12 (v16.12 기준)  
+> **현재 상태**: v16.14.7까지 반영 완료. 아래 §2의 분석 범위(글로벌 히스토리 + suffix 코어 의미론)는 전 버전에 걸쳐 변경 없이 유지됨.  
+> **참조 문서**: [PIPELINE_LOCK.md](PIPELINE_LOCK.md), [CLAUDE.md](CLAUDE.md)
 
 ---
 

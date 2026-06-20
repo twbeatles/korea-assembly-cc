@@ -1,5 +1,7 @@
 # Project Audit
 
+> **내부 문서** — 이 문서는 개발팀 내부 보안 감사 기록입니다. 일반 사용자용 정보는 [README.md](README.md)를 참고하세요.
+
 ## 1. Executive Summary
 
 이 프로젝트는 국회 의사중계 웹사이트의 AI 자막을 PyQt6 GUI, Selenium worker, runtime archive, SQLite DB, 다중 export 경로로 수집/저장하는 Windows 중심 데스크톱 앱이다. README.md와 CLAUDE.md 기준으로 공개 facade import 경로를 유지하면서 실제 구현은 `ui/main_window_impl/`, `core/database_impl/`, `core/subtitle_pipeline_impl/`, `core/live_capture_impl/`로 분리되어 있다.
