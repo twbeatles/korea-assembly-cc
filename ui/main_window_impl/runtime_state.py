@@ -20,6 +20,7 @@ from core.subtitle_pipeline import (
     create_empty_capture_state,
 )
 from ui.main_window_common import (
+    AppControlMessageQueue,
     DB_AVAILABLE,
     DatabaseManagerClass,
     DatabaseProtocol,
@@ -63,7 +64,12 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
             type=bool,
         )
 
-        self.message_queue: Any = MainWindowMessageQueue(self, maxsize=500)
+        self.message_queue: Any = MainWindowMessageQueue(
+            self, maxsize=Config.MESSAGE_QUEUE_MAX_SIZE
+        )
+        self.app_control_queue: Any = AppControlMessageQueue(
+            maxsize=Config.CONTROL_MESSAGE_QUEUE_MAX_SIZE
+        )
 
         self.worker = None
         self.driver = None

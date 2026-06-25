@@ -1,226 +1,248 @@
 # Project Audit
 
-> **내부 문서** — 이 문서는 개발팀 내부 보안 감사 기록입니다. 일반 사용자용 정보는 [README.md](README.md)를 참고하세요.
+> **감사 일자**: 2026-06-25  
+> **대상 버전**: v16.14.7  
+> **분석 도구**: README.md, CLAUDE.md, CodeGraph MCP (`codegraph_explore`), 보조 grep/파일 열람, `pytest -q`
 
 ## 1. Executive Summary
 
-이 프로젝트는 국회 의사중계 웹사이트의 AI 자막을 PyQt6 GUI, Selenium worker, runtime archive, SQLite DB, 다중 export 경로로 수집/저장하는 Windows 중심 데스크톱 앱이다. README.md와 CLAUDE.md 기준으로 공개 facade import 경로를 유지하면서 실제 구현은 `ui/main_window_impl/`, `core/database_impl/`, `core/subtitle_pipeline_impl/`, `core/live_capture_impl/`로 분리되어 있다.
+이 프로젝트는 국회 의사중계 웹사이트의 AI 자막을 PyQt6 GUI + Selenium worker + runtime archive + SQLite DB로 수집·저장하는 Windows 중심 데스크톱 앱이다. README.md와 CLAUDE.md 기준으로 공개 facade import 경로를 유지하면서 실제 구현은 `ui/main_window_impl/`, `core/database_impl/`, `core/subtitle_pipeline_impl/`, `core/live_capture_impl/`로 분리되어 있다.
 
-감사 당시 전체 위험도는 **Medium-High**로 보았다. 자막 수집 파이프라인, URL host 정책, runtime manifest path confinement, 파일 원자 저장, queue overflow 보존 같은 핵심 안정화는 상당히 구현되어 있었지만, 기능 구현 관점에서 실제 사용자 데이터 흐름에 영향을 줄 수 있는 문제가 남아 있었다.
+**전체 위험도: Low–Medium**
 
-- 가장 큰 확인 이슈는 DB 조회/로드/삭제/통계 오류가 일부 경로에서 예외로 전파되지 않고 `[]`, `None`, `False`, `{}`로 축소되어 UI가 "데이터 없음"처럼 오인할 수 있다는 점이다.
-- 두 번째 확인 이슈는 capture 시작/중지 시 `_clear_message_queue()`가 worker 메시지뿐 아니라 세션 저장/로드/DB 작업 같은 control 메시지도 삭제할 수 있어, 저장 완료 상태가 영구적으로 풀리지 않는 race가 가능하다는 점이다.
-- live_list/페이지에서 얻는 `xcode`, `xcgcd` 값은 host 정책 밖의 내부 query 값인데, 현재는 trim만 하고 URL/CSS selector에 직접 삽입한다. 공식 API 기반이라 즉시 위험은 제한적이지만 사용자 입력 검증/OS 브라우저 자동화 안정성 측면에서 보강이 필요하다.
+2026-06-11 이전 감사에서 지적됐던 DB 오류 축소, `_clear_message_queue()` race, live `xcode`/`xcgcd` 검증 부재, DB sync 무기한 대기 문제는 현재 코드에서 수정·테스트로 확인됐다. 따라서 “즉시 수정” 수준의 구조 결함은 크게 줄었고, 남은 리스크는 **고빈도 자막 스트림에서의 큐 압력**, **글로벌 히스토리 suffix 알고리즘의 잔여 정확성 한계**, **Selenium worker 생명주기**, **장시간 세션 복구 모델의 사용자 기대 차이** 쪽에 집중된다.
 
-2026-06-11 후속 구현으로 확인 이슈와 즉시/안정성 개선 계획을 반영했다. 현재 잔여 위험도는 **Low-Medium**으로 낮아졌으며, 장기 구조 개선 항목은 별도 리팩터링 후보로 남긴다.
+핵심 확인 사항:
 
-구현 완료 항목:
+| 구분 | 요약 |
+|------|------|
+| 강점 | URL host 정책, storage preflight, atomic 파일 저장, runtime manifest 무결성 검증, DB degraded mode, queue overflow/terminal message 보존, dirty session/종료 escalation |
+| 잔여 리스크 | suffix/compact 기반 파이프라인의 구조적 정확성 한계(알고리즘 개선은 보류), 실제 브라우저 E2E 테스트 부재 |
+| 문서-구현 차이 | 2026-06-25 후속 조치로 `SUBTITLE_FINALIZE_DELAY` 제거·README runtime 백업 설명 보강 완료 |
 
-- DB 조회/로드/삭제/통계의 unexpected exception을 다시 전파하도록 수정했다.
-- `_clear_message_queue()`가 stale worker message는 제거하되 durable control message는 보존하도록 수정했다.
-- `_start()`가 세션 저장/로드 진행 중에는 새 캡처 시작을 차단하도록 수정했다.
-- live `xcode`/`xcgcd` 검증과 `urllib.parse` 기반 query 조립을 추가하고, CSS selector에 query 값을 직접 보간하는 경로를 제거했다.
-- 세션 JSON 저장 후 DB 저장 대기는 `Config.DB_SYNC_TASK_TIMEOUT_SECONDS`를 사용하도록 변경했다.
-- 일반 JSON 세션 로드 전에 `Config.SESSION_LOAD_MAX_BYTES` 기반 파일 크기 guard를 추가했다.
+**검증 결과**
 
-검증 결과:
+| 시점 | pytest | pyright |
+|------|--------|---------|
+| 감사 당시 (2026-06-25) | 263 passed, 1 skipped | 0 errors |
+| 1~3단계 조치 후 (2026-06-25) | **279 passed, 1 skipped** | **0 errors** |
 
-- `python -m pytest -q`: `263 passed, 1 skipped`
-- `python -m pyright --outputjson`: `0 errors / 0 warnings`
-- `python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp\smoke-storage`: `ok: true`
-- `python scripts\run_release_verification.py --instantiate-window`: 통과, PyInstaller clean build 및 frozen smoke 포함
+CodeGraph 인덱스: 116 files, 2454 nodes, 6014 edges (Python 115)
+
+---
 
 ## 2. Project Understanding
 
-README.md와 CLAUDE.md에서 확인한 프로젝트 목적은 국회 의사중계 웹사이트의 실시간 AI 자막을 수집하고 TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/JSON/SQLite 형태로 저장하는 것이다. 핵심 가치는 지연 없는 실시간 수집, 안정적인 멀티스레딩, SQLite 기반 세션 관리, 장시간 세션 안정성, PyInstaller frozen 실행 안정성이다.
+### 2.1 프로젝트 목적
 
-CodeGraph 상태:
+README.md와 CLAUDE.md에 따르면 목적은 국회 의사중계 AI 자막을 **딜레이 없이** 실시간 수집하고 TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/JSON/SQLite로 저장하는 것이다. 핵심 가치는 실시간 스트리밍, 멀티스레드 안정성, SQLite 세션 관리, 장시간 세션(runtime archive), frozen/portable 실행 안정성이다.
 
-- 인덱스: 116 files, 2454 nodes, 6014 edges
-- 언어: Python 115개, XML 1개
-- 주요 구조: `ui/main_window.py`의 `MainWindow` facade가 runtime/capture/pipeline/view/persistence/database/ui mixin을 조합한다.
+### 2.2 아키텍처 개요
 
-주요 실행 흐름:
+```
+국회의사중계 자막.py
+  └─ Config.run_storage_preflight()
+  └─ QApplication + MainWindow (facade)
 
-1. `국회의사중계 자막.py`가 CLI smoke/preflight 옵션을 처리한 뒤, 일반 실행에서는 PyQt6/Selenium import, `Config.run_storage_preflight()`, `QApplication`, `MainWindow()` 생성 순서로 시작한다.
-2. `MainWindowRuntimeLifecycleMixin._start()`는 현재 URL과 selector를 읽고 `core.url_policy.validate_assembly_url()`로 `http/https` 및 `assembly.webcast.go.kr` 계열 host를 검증한다.
-3. `_start()`는 runtime archive를 초기화하고 `_clear_message_queue()` 후 Selenium worker thread를 시작한다.
-4. `capture_browser._extraction_worker()`는 Chrome/WebDriver를 열고 live URL 보완, MutationObserver, structured probe fallback, keepalive, reset 이벤트를 `MainWindowMessageQueue`로 UI thread에 전달한다.
-5. `pipeline_messages._process_message_queue()`는 terminal worker message, overflow passthrough, raw queue, coalesced control/worker message를 제한 시간 안에서 drain하고 `_handle_message()`로 반영한다.
-6. 장시간 세션은 `backups/runtime_sessions/<run_id>/manifest.json`, `segment_*.json`, `tail_checkpoint.json` 구조로 보관된다. manifest loader는 relative path confinement와 entries digest 검증, salvage warning을 갖고 있다.
-7. 세션 저장은 JSON snapshot을 원자 저장한 뒤 `DBWorker`를 통해 `DatabaseManager.save_session()`을 직렬 실행한다. DB 검색/히스토리/통계도 같은 worker queue를 통해 UI thread로 result/error control message를 전달한다.
+MainWindow (ui/main_window.py)
+  ├─ RuntimeLifecycle  : _start / _stop / closeEvent
+  ├─ Capture           : _extraction_worker (Selenium)
+  ├─ Pipeline          : preview → _prepare_preview_raw → _process_raw_text
+  ├─ Persistence       : session/backup/export/runtime archive
+  ├─ Database          : DBWorker + DatabaseManager
+  └─ View/UI           : render/search/editing/theme
 
-CodeGraph impact로 본 영향 범위:
+Worker Thread ──MainWindowMessageQueue──▶ UI Thread (_process_message_queue)
+Background tasks ──AppControlMessageQueue─┘       └─ SubtitleEntry / render / stats
+```
 
-- `list_sessions`, `load_session`, `delete_session`, `get_statistics` 변경은 `DatabaseManager`, `DatabaseProtocol`, `DBWorker`, DB 히스토리/로드/삭제/통계 UI에 영향을 준다.
-- `_clear_message_queue` 변경은 `_start`, `_stop`, `closeEvent`, persistence save/load, runtime hydration/search/segment flush, DB worker result, reflow result 등 40개 이상 symbol에 영향을 준다.
-- `apply_live_broadcast_to_url` 변경은 live_list payload URL 적용, `_resolve_live_url_from_payload`, `_resolve_live_url_from_list`, `_detect_live_broadcast`에 영향을 준다.
+### 2.3 주요 실행 흐름 (CodeGraph 기준)
+
+1. **시작**: `runtime_lifecycle._start()` → `validate_assembly_url()` + `validate_subtitle_selector()` → runtime archive 시작 → `_clear_message_queue()`(worker만) → non-daemon worker thread 시작 (`_extraction_worker`).
+2. **수집**: `capture_browser._extraction_worker()` → Observer/structured probe → `message_queue.put(("preview", payload))` 등.
+3. **처리**: `pipeline_messages._process_message_queue()` (약 8ms/time budget, 최대 50건) → `_prepare_preview_raw()` → `_process_raw_text()` (GlobalHistory + suffix) → `SubtitleEntry` 반영.
+4. **장시간 세션**: `backups/runtime_sessions/<run_id>/manifest.json` + `segment_*.json` + `tail_checkpoint.json`. 메모리에는 tail만 유지.
+5. **저장/복구**: JSON atomic write, recovery pointer(`session_recovery.json`), 5분 auto-backup(일반 모드: `backup_*.json`, runtime 모드: runtime recovery snapshot).
+6. **종료**: dirty session 확인 → background thread drain → DB worker shutdown → runtime archive 정리.
+
+### 2.4 CodeGraph 영향 범위 (변경 시 주의)
+
+| 심볼 | blast radius |
+|------|----------------|
+| `_prepare_preview_raw` | 파이프라인 핵심, 직접 단위 테스트 없음 (CodeGraph 표기) |
+| `_emit_worker_message` / `_clear_message_queue` | capture start/stop, persistence, DB result, runtime flush 등 40+ symbol |
+| `DatabaseManager.save_session/search_subtitles` | DBWorker, history/search dialog, session save |
+| `normalize_live_xcode/xcgcd` | live_list, `_detect_live_broadcast`, `LiveBroadcastDialog` |
+
+### 2.5 이미 해소된 이전 High 이슈 (참고)
+
+아래 항목은 2026-06-11 후속 패치 및 현재 테스트로 **해소 확인**됐다. 이번 감사의 High-Risk 목록에서는 제외한다.
+
+- DB read/list/delete/stats의 unexpected exception re-raise (`tests/test_database_manager.py`)
+- `_clear_message_queue(preserve_control_messages=True)` durable control 보존 (`tests/test_lossless_session_plan_20260401.py`)
+- `_start()`의 세션 저장/로드 진행 중 시작 차단
+- live `xcode`/`xcgcd` 패턴 검증 + `urllib.parse` 기반 query 조립 (`core/live_list.py`)
+- DB session save sync timeout (`Config.DB_SYNC_TASK_TIMEOUT_SECONDS`)
+
+---
 
 ## 3. High-Risk Issues
 
-### 3.1 DB 조회 계층이 실제 오류를 "데이터 없음"으로 축소할 수 있음
+### 3.1 ~~큐 포화 시 `preview` coalescing~~ → **1단계 조치 완료 (2026-06-25)**
 
-위치: `core/database_impl/sessions.py` `load_session()`, `list_sessions()`, `delete_session()` / `core/database_impl/search_stats.py` `get_statistics()` / `ui/main_window_impl/database_worker.py` `_handle_db_task_result()` / `ui/main_window_impl/database_dialogs.py`
+* **조치**: `preview`를 `COALESCED_WORKER_MESSAGE_TYPES`에서 제거. 포화 시 overflow passthrough + 우선순위 trim(`Config.OVERFLOW_PASSTHROUGH_MAX=128`) + drop 카운터/토스트.
+* **테스트**: `tests/test_project_audit_queue_hardening.py`
+* **잔여**: 극단적 UI 정체 시 overflow 상한 초과 drop 가능성은 남음 (3.2 참고).
 
-문제:
-`search_subtitles()`는 예외를 다시 던져 `db_task_error`로 전파되지만, 세션 로드/목록/삭제/통계는 예외를 삼키고 각각 `None`, `[]`, `False`, `{}`를 반환한다. UI는 이 값을 정상 결과로 처리해 "저장된 세션이 없습니다", 빈 통계, 단순 삭제 실패처럼 보여줄 수 있다.
+### 3.2 overflow passthrough 보존 상한 초과 시 worker 메시지 드롭 → **1단계 조치 완료 (2026-06-25)**
 
-영향:
-SQLite 파일 손상, schema migration 오류, 권한/lock 오류가 발생해도 사용자는 실제 DB 장애인지 빈 DB인지 구분하기 어렵다. 특히 `list_sessions()` 오류가 `[]`로 반환되면 기존 히스토리가 사라진 것처럼 보일 수 있어 데이터 신뢰도에 직접 영향을 준다.
+* **조치**: 고정 64건 삭제 대신 **타입별 우선순위 trim**(terminal > preview > 기타), 상한 128건, `_record_overflow_drop()` + rate-limited status/toast.
+* **테스트**: `tests/test_project_audit_queue_hardening.py`
+* **우선순위**: **Low** (완화됨, 극단 burst만 잔여)
 
-근거:
-- `load_session()`은 예외를 `logger.exception("세션 로드 오류")` 후 `return None`으로 처리한다.
-- `list_sessions()`는 예외를 `logger.exception("세션 목록 조회 오류")` 후 `return []`로 처리한다.
-- `delete_session()`은 예외 후 rollback하고 `return False`로 처리한다.
-- `get_statistics()`는 예외 후 `return {}`로 처리한다.
-- UI result handler는 `db_history_list` 결과가 빈 list면 "저장된 세션이 없습니다."를 표시하고, `db_stats`는 `{}`도 정상 통계 dialog로 표시한다.
-- 반대로 `tests/test_database_manager.py::test_database_search_reraises_unexpected_connection_errors`는 검색 오류 전파만 검증한다.
+### 3.3 글로벌 히스토리 + suffix 파이프라인의 구조적 정확성 한계
 
-권장 수정 방향:
-예상 가능한 "not found"와 실제 DB 오류를 분리한다. `load_session()`의 미존재는 `None` 유지가 가능하지만 DB 연결/쿼리 오류는 re-raise하거나 `DatabaseOperationResult(error=...)` 같은 구조로 반환해야 한다. `list_sessions()`, `get_statistics()`, `delete_session()`도 unexpected DB 오류는 `DBWorker`의 `db_task_error`로 전파되게 맞춘다. UI는 "데이터 없음"과 "DB 오류"를 별도 메시지로 표시해야 한다.
+* **위치**: `ui/main_window_impl/pipeline_stream.py` `_prepare_preview_raw()`, `_process_raw_text()` / `core/text_utils.py` `compact_subtitle_text()` / `utils.get_word_diff()`
+* **문제**: 50자 suffix, compact(공백 제거) 매칭, 7단계 `get_word_diff` 후단 정제는 반복 구문·compact collision·ambiguous suffix 구간에서 false positive/negative를 유발할 수 있다. `rfind` 전환과 `_soft_resync()`로 완화됐지만 알고리즘 한계는 남아 있다.
+* **영향**: 동일 문구 반복 회의, 빠른 발언자 전환, AI 인식 오류 구간에서 짧은 중복·누락·잘못된 merge boundary.
+* **근거**: `ALGORITHM_ANALYSIS.md` §2.1–2.5, `_prepare_preview_raw()`의 ambiguous suffix 분기 및 `_soft_resync()` 호출, `CONFIRMED_COMPACT_MAX_LEN=50000` tail 정책
+* **권장 수정 방향**: 운영 로그 키워드(`preview suffix desync reset`, `preview ambiguous suffix reset`) 기반 모니터링을 유지하고, 회귀 fixture(반복 구문/전환 시나리오)를 확장한다. 알고리즘 변경은 `PIPELINE_LOCK.md` 절차를 따른다.
+* **우선순위**: **Medium**
 
-우선순위: High
+### 3.4 ~~중지 시 preview drain 상한~~ → **1단계 조치 완료 (2026-06-25)**
 
-조치 상태: 완료 (2026-06-11). `core/database_impl/sessions.py`, `core/database_impl/search_stats.py`에서 unexpected DB 예외를 re-raise하도록 수정했고, `tests/test_database_manager.py`에 read/list/stats/delete 오류 전파 테스트를 추가했다.
+* **조치**: `_is_stopping=True`일 때 `_drain_pending_previews()`는 `max_items` 상한 없이 preview-only complete drain.
+* **테스트**: `tests/test_project_audit_queue_hardening.py`
 
-### 3.2 `_clear_message_queue()`가 저장/로드/DB control 메시지까지 삭제할 수 있음
+### 3.5 ~~extraction worker daemon~~ → **3단계 조치 완료 (2026-06-25)**
 
-위치: `ui/main_window_impl/pipeline_queue.py` `_clear_message_queue()` / `ui/main_window_impl/runtime_lifecycle.py` `_start()`, `_stop()` / `ui/main_window_impl/persistence_session.py` `_start_async_session_snapshot_save()` / `ui/main_window_impl/pipeline_messages.py` `session_save_done`, `session_save_failed`
+* **조치**: `ExtractionWorker`를 `daemon=False`로 전환. 기존 `_wait_worker_shutdown()` + driver quit escalation과 연동.
+* **잔여**: OS 강제 kill 등 비정상 종료 시 finally 미보장은 구조적으로 남음.
+* **우선순위**: **Low**
 
-문제:
-`_start()`와 `_stop()`은 capture run 정리를 위해 `_clear_message_queue()`를 호출한다. 그런데 `_clear_message_queue()`는 raw queue뿐 아니라 `_coalesced_control_messages`, `_overflow_passthrough_messages`, `_terminal_worker_messages`까지 모두 비운다. control message에는 `session_save_done`, `session_save_failed`, `session_load_done`, `db_task_result`, `hydrate_done`, `runtime_segment_flush_done` 등이 포함된다.
+### 3.6 재연결 성공 시 worker raw buffer를 초기화해 중복 수집/재동기화 churn 유발 가능
 
-영향:
-세션 저장 background worker가 완료 메시지를 queue/coalesced control에 넣은 직후 사용자가 capture 시작/중지를 누르면 완료 메시지가 삭제될 수 있다. 이 경우 `_session_save_in_progress`는 `True`로 남고, dirty session clear, DB identity 반영, pending deferred action resume가 실행되지 않을 수 있다. 이후 세션 불러오기/병합 등은 `_block_session_replacement_while_saving()`에 의해 계속 막힐 가능성이 있다.
+* **위치**: `ui/main_window_impl/capture_browser.py` `_extraction_worker()` 재연결 성공 분기
+* **문제**: 재연결 후 `worker_last_raw_text`, `worker_last_raw_compact`를 비운다. UI 파이프라인의 `_confirmed_compact`/`_trailing_suffix`는 유지된 채 probe가 동일 full text를 다시 보낼 수 있다.
+* **영향**: 재연결 직후 suffix desync → `_soft_resync()` 또는 중복 append 가능성. 대부분 수렴하지만 사용자 입장에서는 “재연결 후 같은 문장 반복”으로 보일 수 있다.
+* **근거**: 재연결 성공 시 `worker_last_raw_text = ""`, `worker_last_raw_compact = ""`; UI `_prepare_preview_raw()`는 독립 history 유지
+* **권장 수정 방향**: 재연결 시 UI에 “resync without duplicate append” 신호를 보내거나, worker compact gate를 UI trailing suffix와 align하는 handshake를 추가한다.
+* **우선순위**: **Low**
 
-근거:
-- `_start()`는 runtime archive 시작 후 `_clear_message_queue()`를 호출한다.
-- `_stop()`은 worker shutdown/finalize 후 `_clear_message_queue()`를 호출한다.
-- `_clear_message_queue()`는 queue drain 후 `_coalesced_control_messages.clear()`, `_overflow_passthrough_messages.clear()`, `_terminal_worker_messages.clear()`를 수행한다.
-- `_start_async_session_snapshot_save()`는 `_session_save_in_progress = True`로 설정한 뒤 background thread가 `session_save_done` 또는 `session_save_failed` control message를 emit한다.
-- `_session_save_in_progress`를 `False`로 되돌리는 코드는 `pipeline_messages._handle_message()`의 `session_save_done/session_save_failed` 처리 경로다.
-- 기존 테스트는 queue full일 때 `session_save_done`이 coalesced control로 보존되고 drain되는지만 검증하고, `_clear_message_queue()`와 completion race는 직접 검증하지 않는다.
-- CodeGraph impact 기준 `_clear_message_queue`는 start/stop/close, persistence save/load, runtime hydration/search/segment flush, DB worker result까지 폭넓게 닿는다.
+### 3.7 ~~CSS selector 검증 부재~~ → **2단계 조치 완료 (2026-06-25)**
 
-권장 수정 방향:
-worker capture run 메시지와 앱 control message를 분리한다. `_clear_message_queue()`는 stale `WorkerQueueMessage`만 제거하고, `session_*`, `db_task_*`, `hydrate_*`, `runtime_*`, `reflow_*` 같은 durable control message는 보존하거나 먼저 처리해야 한다. 추가로 `_start()`는 `_session_save_in_progress` 또는 `_session_load_in_progress`가 true일 때 시작을 차단하거나 완료 drain 후 진행해야 한다.
+* **조치**: `core/selector_policy.py` `validate_subtitle_selector()` — `_start()` 시작 전 syntax/위험 패턴 검증.
+* **테스트**: `tests/test_selector_policy.py`
+* **잔여**: 프리셋 외 manual override confirm UI는 미구현.
+* **우선순위**: **Low**
 
-우선순위: High
-
-조치 상태: 완료 (2026-06-11). `ui/main_window_impl/pipeline_queue.py`의 `_clear_message_queue()`가 durable control message를 보존하도록 수정했고, `ui/main_window_impl/runtime_lifecycle.py`의 `_start()`에 세션 저장/로드 진행 중 시작 차단을 추가했다. 관련 회귀 테스트는 `tests/test_lossless_session_plan_20260401.py`에 추가했다.
-
-### 3.3 live_list/page/query에서 얻은 `xcode`, `xcgcd`가 검증/인코딩 없이 URL과 CSS selector에 삽입됨
-
-위치: `core/live_list.py` `normalize_live_list_row()`, `apply_live_broadcast_to_url()` / `ui/main_window_impl/capture_live.py` `_get_query_param()`, `_set_query_param()`, `_detect_live_broadcast()`
-
-문제:
-live_list API row의 `xcode`, `xcgcd`는 문자열 trim만 거친 뒤 URL query에 직접 붙는다. 페이지/사용자 URL에서 얻은 `target_xcode`도 CSS selector 문자열에 직접 보간된다. host는 `assembly.webcast.go.kr`로 제한되지만, query 값 자체의 문자 집합/길이/URL encoding/CSS escaping은 보장되지 않는다.
-
-영향:
-공식 API가 일시적으로 이상한 값을 반환하거나 사용자가 특수문자가 포함된 `xcode` URL을 입력하면 자동 생중계 감지 URL이 깨지거나, 추가 query parameter가 삽입되거나, Selenium selector가 invalid selector 예외를 만들 수 있다. 대부분 예외는 catch되지만 감지 실패/잘못된 URL 적용으로 이어질 수 있다.
-
-근거:
-- `normalize_live_list_row()`는 `xcgcd = str(...).strip()`, `xcode = str(...).strip()`만 수행한다.
-- `apply_live_broadcast_to_url()`은 `name=value`를 문자열 치환/이어붙이기로 직접 구성한다.
-- `_set_query_param()`도 value를 그대로 삽입한다.
-- `_detect_live_broadcast()`는 `target_xcode`를 `f'a.onair[href*="xcode={target_xcode}"]'` 같은 CSS selector에 직접 넣는다.
-- 테스트는 live row 선택, ambiguous 처리, live_list 오류 표시는 다루지만, `&`, `"`, `]`, whitespace 같은 query/selector 특수문자 방어는 보이지 않는다.
-
-권장 수정 방향:
-`xcode`, `xcgcd`의 허용 패턴과 길이를 명시한다. 예: `xcode`는 현재 운영 코드 체계에 맞는 `[A-Za-z0-9]{1,10}` 수준으로 제한하고, `xcgcd`는 실제 포맷을 기준으로 허용 문자/길이를 제한한다. URL 수정은 `urllib.parse.urlsplit`, `parse_qsl`, `urlencode`, `urlunsplit` 기반으로 처리한다. CSS selector는 query 값을 직접 보간하지 말고 링크 href를 수집해 URL parser로 비교하거나 CSS escaping을 적용한다.
-
-우선순위: Medium
-
-조치 상태: 완료 (2026-06-11). `core/live_list.py`에 `normalize_live_xcode()`, `normalize_live_xcgcd()`, `set_live_query_param()`를 추가했고, `ui/main_window_impl/capture_live.py`는 URL parser 기반 비교와 안전한 query 조립을 사용하도록 수정했다. malformed live row/query와 invalid xcode 자동 감지 차단 테스트를 추가했다.
-
-### 3.4 세션 JSON 저장 후 DB 저장을 무기한 대기할 수 있음
-
-위치: `ui/main_window_impl/persistence_session.py` `_write_session_snapshot()` / `ui/main_window_impl/database_worker.py` `_run_db_task_sync()`
-
-문제:
-세션 저장은 JSON snapshot을 먼저 원자 저장한 뒤, 같은 background save thread 안에서 `_run_db_task_sync("db_session_save", ..., timeout=None)`로 DB 저장 완료를 무기한 기다린다. DB worker가 SQLite lock, 장기 작업, 예기치 못한 deadlock에 걸리면 background save thread가 끝나지 않는다.
-
-영향:
-JSON 파일은 이미 저장되었더라도 UI에는 `session_save_done`이 오지 않아 `_session_save_in_progress`가 유지될 수 있다. 종료 시에는 background thread 대기/escalation modal로 이어지고, dirty action의 "저장 후 원래 액션 재개" 흐름도 진행되지 않는다.
-
-근거:
-- `_write_session_snapshot()`은 `atomic_write_json_stream()`으로 JSON을 쓴 뒤 DB 저장을 수행한다.
-- DB 저장 호출은 `_run_db_task_sync(..., write_task=True, timeout=None)`이다.
-- `_run_db_task_sync()`는 `done_event.wait(timeout=None)`이면 완료될 때까지 무기한 대기한다.
-- `DBWorker`는 단일 thread/queue 구조이므로 이전 작업이 막히면 후속 sync save도 같이 막힌다.
-
-권장 수정 방향:
-JSON 저장 성공을 primary success로 유지하고, DB 저장은 충분히 긴 finite timeout이나 watchdog을 둔다. timeout 시 `db_error`를 채워 `session_save_done`은 emit하되 "JSON 저장 완료, DB 저장 지연/실패"를 사용자에게 표시하는 편이 데이터 손실 오인을 줄인다. DB worker queue health도 shutdown diagnostic에 이미 있으므로, timeout 시 diagnostic 저장을 연결할 수 있다.
-
-우선순위: Medium
-
-조치 상태: 완료 (2026-06-11). `_write_session_snapshot()`의 DB 저장 동기 대기를 `Config.DB_SYNC_TASK_TIMEOUT_SECONDS`로 제한했고, timeout은 JSON 저장 성공과 별개의 `db_error`로 보고되도록 기존 반환 구조를 유지했다. 관련 테스트를 `tests/test_session_stability_followup_plan_20260405.py`에 추가했다.
+---
 
 ## 4. Potential Functional Gaps
 
-- 조치 완료: `_start()`가 `_session_save_in_progress`/`_session_load_in_progress`를 직접 확인하지 않아 새 capture run을 시작할 수 있던 추정 gap은 시작 차단으로 보완했다.
-- 조치 완료: 일반 JSON 세션 로드가 `json.load()`로 전체 파일을 메모리에 올리는 추정 gap은 백그라운드 로드 시작 전 파일 크기 guard로 1차 보완했다.
-- 조치 완료: DB read-only/locked/corrupt 상황에서 search 외 기능의 오류 전파 테스트가 부족했던 gap은 cursor 오류 re-raise 테스트로 보강했다.
-- 조치 완료: live_list `xcode/xcgcd` malformed query value가 URL builder와 selector builder를 깨지 않는지에 대한 테스트를 추가했다.
-- 잔여 추정: 파일 저장 background export는 성공/실패를 주로 toast/control message로 전달한다. 이번 `_clear_message_queue()` 보존 변경으로 start/stop clear에 의한 유실 위험은 줄었지만, 장기적으로 app control queue와 capture worker queue를 분리하면 더 명확하다.
+### 확인된 gap (코드 근거 있음)
+
+- ~~**README 자동 백업 설명과 runtime 모드 동작 차이**~~: README·복구 다이얼로그에 runtime vs flat backup 우선순위 안내 반영 (2026-06-25).
+- ~~**`SUBTITLE_FINALIZE_DELAY` dead constant**~~: `core/config.py`에서 제거 (2026-06-25).
+- **Selenium 실연동 테스트 부재**: `tests/test_live_contract_smoke.py`는 opt-in(`RUN_LIVE_SMOKE=1`)이며, 실제 Chrome DOM/Observer 동작을 CI에서 검증하지 않는다.
+- **CodeGraph 미커버 핫패스**: `_prepare_preview_raw`, `_fetch_live_list`, `_build_salvaged_runtime_segments` 등은 blast radius는 크지만 dedicated unit test가 없거나 제한적이다.
+
+### 추정 gap
+
+- **추정**: 비정상 종료 후 recovery UX가 runtime archive 손상 + flat backup 부재 조합에서 “어느 복구본이 최신인지” 혼란을 줄 수 있다. salvage 경고는 코드에 있으나 UI 요약 강도는 세션마다 다를 수 있다.
+- **추정**: Linux/macOS에서 PyQt6+Chrome은 동작 가능성이 있으나 README는 Windows 중심이고 HWP/pywin32/QSettings 경로는 Windows 전제다. cross-platform 공식 지원 gap.
+- **추정**: 실행 중 inline full-session search cancel은 구현돼 있으나, 매우 긴 세션에서 첫 검색 latency SLA를 사용자에게 설명하는 UI는 부족할 수 있다.
+- **추정**: `validate_assembly_url()`은 host만 제한하고 path는 검증하지 않는다. 같은 host의 비의도 path도 허용되나 실질 피해는 제한적이다.
+
+---
 
 ## 5. Recommended Fix Plan
 
-### 1단계: 즉시 수정해야 할 문제
+### 1단계: 즉시 수정 — **완료 (2026-06-25)**
 
-상태: 완료 (2026-06-11)
+1. preview coalescing 제외 + overflow 우선순위 trim(128) + drop 가시화
+2. stopping phase preview unlimited drain
+3. 재연결 시 `_on_capture_reconnected()` + `_soft_resync()` 연동
 
-1. DB 조회/로드/삭제/통계의 예외 처리 정책을 검색과 맞춘다.
-   - `list_sessions()`, `load_session()`, `delete_session()`, `get_statistics()`에서 unexpected DB exception을 re-raise한다.
-   - UI에서는 not found/empty와 DB error를 분리해 메시지를 표시한다.
-2. `_clear_message_queue()`를 worker-run cleanup과 app-control cleanup으로 분리한다.
-   - start/stop에서 stale worker message만 제거한다.
-   - `session_save_done/failed`, `session_load_*`, `db_task_*`, `hydrate_*`, `runtime_*`, `reflow_*`는 보존하거나 처리 후 clear한다.
-3. `_start()` 전에 `_session_save_in_progress`/`_session_load_in_progress`를 확인해 진행 중인 저장/로드가 있으면 시작을 차단한다.
+### 2단계: 안정성 개선 — **완료 (2026-06-25)**
 
-### 2단계: 안정성 개선
+1. `core/selector_policy.py` selector 검증
+2. README runtime 백업 설명 보강, `SUBTITLE_FINALIZE_DELAY` 제거
+3. 재연결 resync handshake (1단계에 포함)
 
-상태: 완료 (2026-06-11)
+### 3단계: 구조 개선 — **완료 (2026-06-25)**
 
-1. DB session save sync wait에 finite timeout 또는 watchdog을 둔다.
-2. `xcode`, `xcgcd` 값 검증/encoding을 중앙 유틸로 분리하고 URL query 조작을 `urllib.parse` 기반으로 바꾼다.
-3. CSS selector에 query 값을 직접 넣는 경로를 제거하거나 escaping/URL parser 기반 비교로 바꾼다.
-4. 일반 JSON 세션 파일 로드에 파일 크기/entry count guard 또는 streaming load 전략을 검토한다.
+1. `AppControlMessageQueue` — worker `message_queue`와 control 큐 논리 분리
+2. `core/database_result.py` `DatabaseOperationResult` — empty vs error 타입 분리
+3. extraction worker `daemon=False`
+4. 복구 다이얼로그 runtime vs backup 우선순위 안내
+5. `run_release_verification.py --with-live-smoke` 옵션
 
-### 3단계: 구조 개선
+### 4단계: 잔여 (보류·미착수)
 
-상태: 후속 리팩터링 후보. 이번 변경은 공개 API/동작면의 기능 리스크를 줄이는 범위로 제한했고, queue/DB result 타입 구조 개편은 별도 작업으로 분리하는 것이 안전하다.
+1. **suffix/compact 알고리즘 개선** — 사용자 요청으로 보류 (`PIPELINE_LOCK.md` 준수)
+2. **재연결 duplicate append** 추가 handshake (3.6)
+3. **opt-in live browser E2E** — `RUN_LIVE_SMOKE=1`은 release verifier 기본 경로에 포함, DOM/Observer 실연동은 미구현
+4. **파이프라인 회귀 fixture** suffix collision/ambiguous 확장
 
-1. DB API를 `None/[]/False/{}` 반환 중심에서 `Result` 계열 구조로 정리해 "정상 empty"와 "실패"를 타입 차원에서 분리한다.
-2. capture worker message queue와 app background control queue를 논리적으로 분리한다.
-3. shutdown/start/stop race 테스트를 공통 fake queue/fake background worker fixture로 만들고, 세션 저장/로드/runtime flush/DB worker result를 같은 패턴으로 검증한다.
+---
 
 ## 6. Test Recommendations
 
-1. DB 오류 전파 테스트
-   - `_get_connection()` 또는 cursor execute가 `sqlite3.OperationalError`를 던질 때 `list_sessions()`, `load_session()`, `delete_session()`, `get_statistics()`가 실제 오류를 UI `db_task_error`로 전달하는지 검증한다.
-   - 빈 DB와 DB 오류가 서로 다른 UI 메시지를 내는지 검증한다.
-   - 상태: DB 메서드 예외 전파 테스트를 추가했고 전체 검증에서 통과했다.
+### 6.1 큐 압력·coalescing
 
-2. queue clear race 테스트
-   - `session_save_done`이 raw queue 또는 `_coalesced_control_messages`에 있는 상태에서 `_start()` 또는 `_stop()`을 호출해도 `_session_save_in_progress`가 해제되고 dirty/deferred action이 정상 처리되는지 검증한다.
-   - `_clear_message_queue()`가 stale `WorkerQueueMessage`만 제거하고 durable control message는 보존하는지 검증한다.
-   - 상태: durable control message 보존과 세션 저장/로드 중 시작 차단 테스트를 추가했고 전체 검증에서 통과했다.
+- fake queue를 `maxsize=1`로 만들고 연속 `preview` 100건 emit → 최종 자막이 **중간 delta 누락 없이** 재구성되는지 검증
+- overflow stash 65건 이상 적재 시 `subtitle_reset`이 보존/드롭되는지, drop 통계가 노출되는지 검증
+- `_is_stopping=True` 상태에서 2000건 초과 preview가 있을 때 tail 확정 보장 테스트
 
-3. 세션 저장 DB worker hang 테스트
-   - DB worker task가 완료되지 않는 상황을 fake로 만들고, JSON 저장 성공이 사용자에게 완료/경고로 표시되며 UI가 영구 저장 중 상태에 갇히지 않는지 검증한다.
-   - 상태: DB 동기 저장 호출이 설정 타임아웃을 사용하는지와 timeout이 `db_error`로 반환되는지 테스트했다.
+### 6.2 파이프라인 정확성
 
-4. live URL query validation 테스트
-   - live_list row의 `xcgcd`, `xcode`에 `&`, `=`, `"`, `]`, whitespace, 매우 긴 값이 들어왔을 때 reject 또는 percent-encode되는지 검증한다.
-   - `target_xcode`가 특수문자를 포함해도 Selenium CSS selector가 invalid selector를 만들지 않는지 검증한다.
-   - 상태: malformed row reject, query replacement, invalid xcode 감지 차단 테스트를 추가했다.
+- 반복 구문(“네”, “감사합니다”, “위원장”) suffix collision fixture
+- `subtitle_reset` 직후 첫 preview가 이전 entry와 merge되지 않는지 회귀
+- 재연결 후 동일 probe text 재전송 시 duplicate append 없음/허용 정책 명시 테스트
 
-5. 큰/손상 세션 파일 테스트
-   - 단일 JSON 세션 파일이 너무 큰 경우 사용자에게 명확한 오류/확인을 보여주는지 검증한다.
-   - runtime manifest strict/salvage 경로는 이미 잘 나뉘어 있으므로, segment integrity mismatch와 tail checkpoint 누락 케이스를 계속 유지한다.
-   - 상태: oversized JSON 세션 파일이 백그라운드 worker 시작 전에 차단되는지 테스트했다.
+### 6.3 persistence/recovery
 
-6. 회귀 게이트
-   - 기능 수정 후 최소 `pytest -q`, `python -m pyright --outputjson`, `python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage`, 필요 시 `python scripts/run_release_verification.py --offline --skip-build --instantiate-window`를 실행한다.
-   - 상태: `pytest -q`, `pyright`, source smoke, `run_release_verification.py --instantiate-window`를 모두 실행했고 통과했다.
+- runtime archive 활성 상태 `_auto_backup()`이 flat JSON이 아닌 recovery pointer 갱신임을 검증 (이미 부분 테스트 존재 — README 행위 설명과 연계)
+- manifest 손상 + sibling segment salvage 후 UI warning payload 검증
+- oversized JSON `SESSION_LOAD_MAX_BYTES` 차단 회귀 유지
+
+### 6.4 DB/종료 (기존 회귀 유지·확장)
+
+- `test_database_read_methods_reraise_unexpected_cursor_errors` 유지
+- `test_clear_message_queue_preserves_durable_control_messages` + **start/stop와 session_save_done 동시 race** 확장
+- `closeEvent` escalation 경로에서 diagnostic JSON 필수 필드 검증
+
+### 6.5 live list / URL
+
+- `normalize_live_xcode/xcgcd` reject/accept matrix 유지
+- `validate_assembly_url`에 press player URL, subdomain, invalid scheme 회귀
+- **추정**: `RUN_LIVE_SMOKE=1` 주기적 opt-in으로 live_list schema drift와 병행
+
+### 6.6 회귀 게이트 (현재 기준선)
+
+```bash
+python -m pytest -q
+python -m pyright --outputjson
+python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage
+python scripts/run_release_verification.py --offline --skip-build --instantiate-window
+```
+
+조치 후 `pytest -q`는 **279 passed / 1 skipped**, `pyright --outputjson` **0 errors**로 통과했다.
+
+---
+
+## 7. 조치 구현 요약 (2026-06-25)
+
+| 항목 | 파일/심볼 | 테스트 |
+|------|-----------|--------|
+| preview coalescing 제거 | `pipeline_queue.py` | `test_project_audit_queue_hardening.py` |
+| overflow 우선순위 trim | `pipeline_queue.py`, `Config.OVERFLOW_PASSTHROUGH_MAX` | 동일 |
+| stopping preview drain | `pipeline_stream.py` | 동일 |
+| 재연결 resync | `pipeline_messages.py`, `pipeline_stream.py` | 기존 회귀 |
+| selector 검증 | `core/selector_policy.py` | `test_selector_policy.py` |
+| control 큐 분리 | `AppControlMessageQueue`, `app_control_queue` | `test_project_audit_phase3.py` |
+| DB Result 타입 | `core/database_result.py` | `test_database_result.py` |
+| non-daemon worker | `runtime_lifecycle.py` | lifecycle 회귀 |
+| 복구 UX | `persistence_session.py` | `test_prompt_session_recovery_*` |
+| release verifier | `run_release_verification.py --with-live-smoke` | 수동/CI |

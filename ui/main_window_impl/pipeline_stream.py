@@ -263,51 +263,105 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
 
         return accept(normalized)
 
+    _PREVIEW_DRAIN_MESSAGE_TYPES = frozenset(
+        {"preview", "subtitle_reset", "keepalive", "subtitle_segments"}
+    )
+
+    def _resolve_preview_drain_limit(self, max_items: int | None) -> int | None:
+        if max_items is not None:
+            return max_items
+        if bool(self.__dict__.get("_is_stopping", False)):
+            return None
+        return int(Config.PREVIEW_DRAIN_MAX_ITEMS)
+
+    def _process_preview_queue_message(self, msg_type: str, data: object) -> bool:
+        if msg_type == "preview":
+            if isinstance(data, dict):
+                self._apply_structured_preview_payload(data)
+            else:
+                prepared = self._prepare_preview_raw(data)
+                if prepared:
+                    self._process_raw_text(prepared)
+                elif data:
+                    forced = self._normalize_subtitle_text_for_option(data).strip()
+                    if forced:
+                        self._process_raw_text(forced)
+            return True
+        if msg_type == "subtitle_reset":
+            self._schedule_deferred_subtitle_reset(
+                self._format_subtitle_reset_source(data, default="drain")
+            )
+            return True
+        if msg_type == "keepalive":
+            self._handle_keepalive(str(data or ""))
+            return True
+        if msg_type == "subtitle_segments":
+            self._process_subtitle_segments(data)
+            return True
+        return False
+
+    def _on_capture_reconnected(self, data: object) -> None:
+        """재연결 직후 full probe 재유입으로 인한 중복 append를 줄이기 위해 history를 맞춘다."""
+        self._preview_desync_count = 0
+        self._preview_ambiguous_skip_count = 0
+        if self.capture_state.entries:
+            self._soft_resync()
+        attempt = ""
+        if isinstance(data, dict):
+            attempt = str(data.get("attempt", "") or "").strip()
+        if attempt:
+            logger.info("capture reconnected: attempt=%s", attempt)
+
     def _drain_pending_previews(
-        self, max_items: int = 2000, requeue_others: bool = True
+        self, max_items: int | None = None, requeue_others: bool = True
     ) -> None:
+        limit = self._resolve_preview_drain_limit(max_items)
+        unlimited = limit is None
         drained = 0
         pending: list[object] = []
+        preview_handler = lambda msg_type, data: self._process_preview_queue_message(
+            msg_type, data
+        )
+
+        def _budget_remaining() -> int:
+            if unlimited:
+                return 10_000_000
+            return max(0, int(limit or 0) - drained)
+
         try:
-            while drained < max_items:
+            while _budget_remaining() > 0:
                 raw_item = self.message_queue.get_nowait()
                 decoded = self._unwrap_message_item(raw_item)
                 if decoded is None:
                     drained += 1
                     continue
                 msg_type, data = decoded
-                if msg_type == "preview":
-                    if isinstance(data, dict):
-                        self._apply_structured_preview_payload(data)
-                    else:
-                        prepared = self._prepare_preview_raw(data)
-                        if prepared:
-                            self._process_raw_text(prepared)
-                        elif data:
-                            forced = self._normalize_subtitle_text_for_option(data).strip()
-                            if forced:
-                                self._process_raw_text(forced)
-                elif msg_type == "subtitle_reset":
-                    self._schedule_deferred_subtitle_reset(
-                        self._format_subtitle_reset_source(data, default="drain")
-                    )
-                elif msg_type == "keepalive":
-                    self._handle_keepalive(str(data or ""))
-                elif msg_type == "subtitle_segments":
-                    self._process_subtitle_segments(data)
+                if self._process_preview_queue_message(msg_type, data):
+                    drained += 1
                 else:
                     pending.append(raw_item)
-                drained += 1
         except queue.Empty:
             pass
 
-        drained += self._drain_coalesced_worker_messages(
-            max_items=max(0, max_items - drained),
-            allowed_types={"keepalive", "preview", "resolved_url", "status"},
-        )
+        remaining = _budget_remaining()
+        if remaining > 0:
+            drained += self._drain_coalesced_worker_messages(
+                max_items=remaining,
+                allowed_types=set(self._PREVIEW_DRAIN_MESSAGE_TYPES),
+                handler=preview_handler,
+            )
 
-        if drained >= max_items:
-            logger.warning("preview 큐 소진 제한 도달: max_items=%s", max_items)
+        remaining = _budget_remaining()
+        if remaining > 0:
+            drained += self._drain_overflow_passthrough_items(
+                max_items=remaining,
+                handler=preview_handler,
+                allowed_types=set(self._PREVIEW_DRAIN_MESSAGE_TYPES),
+                requeue_others=requeue_others,
+            )
+
+        if not unlimited and limit is not None and drained >= int(limit):
+            logger.warning("preview 큐 소진 제한 도달: max_items=%s", limit)
 
         if requeue_others and pending:
             for item in pending:

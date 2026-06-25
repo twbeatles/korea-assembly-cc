@@ -282,11 +282,15 @@ class Config:
         )
     
     # 타이밍 상수 (초)
-    SUBTITLE_FINALIZE_DELAY = 3.0      # 자막 확정까지 대기 시간 (앵커 기반 알고리즘)
     ANCHOR_SUFFIX_LENGTH = 80          # 앵커로 저장할 텍스트 길이 (compact 기준)
     SUBTITLE_KEEPALIVE_INTERVAL = 1.0  # 동일 자막 유지 시 end_time 갱신 간격 (초)
-    FINALIZE_CHECK_INTERVAL = 500      # 자막 확정 체크 간격 (ms)
     QUEUE_PROCESS_INTERVAL = 100       # 메시지 큐 처리 간격 (ms)
+    MESSAGE_QUEUE_MAX_SIZE = 500
+    CONTROL_MESSAGE_QUEUE_MAX_SIZE = 200
+    OVERFLOW_PASSTHROUGH_MAX = 128
+    OVERFLOW_DROP_NOTICE_INTERVAL = 30.0
+    WORKER_MESSAGE_PUT_TIMEOUT = 1.0
+    PREVIEW_DRAIN_MAX_ITEMS = 2000
     STATS_UPDATE_INTERVAL = 1000       # 통계 업데이트 간격 (ms)
     SUBTITLE_CHECK_INTERVAL = 0.2      # 자막 확인 간격 (초)
     THREAD_STOP_TIMEOUT = 3            # 스레드 종료 대기 시간 (초)

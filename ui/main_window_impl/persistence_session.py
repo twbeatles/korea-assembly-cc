@@ -323,17 +323,36 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             created_at = str(recovery_state.get("created_at", "") or "")
             if snapshot_type == "backup":
                 description = "자동 백업"
+                detail = (
+                    "\n\n5분 자동 백업 JSON입니다. "
+                    "장시간 추출 중에는 segment/tail 기반 런타임 복구 포인터가 "
+                    "우선 기록될 수 있습니다."
+                )
+                priority_hint = (
+                    "\n\n우선순위: 장시간 추출이었다면 런타임 복구본이 더 최신일 수 있습니다. "
+                    "복구 후 자막 수·시각을 확인하세요."
+                )
             elif snapshot_type == "runtime_manifest":
                 description = "런타임 세션 복구본"
+                detail = (
+                    "\n\n장시간 추출 세션은 manifest + segment/tail 구조로 저장됩니다. "
+                    "복구 후 전체 자막을 불러오는 데 시간이 걸릴 수 있습니다."
+                )
+                priority_hint = (
+                    "\n\n우선순위: 장시간 추출 복구에는 이 런타임 복구본이 일반적으로 "
+                    "5분 자동 백업보다 최신입니다."
+                )
             else:
                 description = "세션 저장본"
+                detail = ""
+                priority_hint = ""
             created_suffix = f"\n시각: {created_at}" if created_at else ""
             reply = QMessageBox.question(
                 self,
                 "세션 복구",
                 "이전에 정상 종료되지 않은 것으로 보입니다.\n"
                 f"최신 {description}을 복구하시겠습니까?\n"
-                f"파일: {snapshot_path}{created_suffix}",
+                f"파일: {snapshot_path}{created_suffix}{detail}{priority_hint}",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:

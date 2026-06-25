@@ -18,6 +18,7 @@ from core.config import Config
 from core.live_capture import create_empty_live_capture_ledger
 from core.logging_utils import logger
 from core.subtitle_pipeline import create_empty_capture_state, finalize_session
+from core.selector_policy import validate_subtitle_selector
 from core.url_policy import validate_assembly_url
 from ui.main_window_impl.contracts import RuntimeHost
 
@@ -49,6 +50,16 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
         if not url or not selector:
             main_window_mod.QMessageBox.warning(self, "오류", "URL과 선택자를 입력하세요.")
             return
+
+        normalized_selector, selector_error = validate_subtitle_selector(selector)
+        if normalized_selector is None:
+            main_window_mod.QMessageBox.warning(
+                self,
+                "오류",
+                selector_error or "올바른 CSS 선택자를 입력하세요.",
+            )
+            return
+        selector = normalized_selector
 
         normalized_url, url_error = validate_assembly_url(url)
         if normalized_url is None:
@@ -160,7 +171,8 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             self.worker = threading.Thread(
                 target=self._extraction_worker,
                 args=(url, selector, headless, run_id),
-                daemon=True,
+                daemon=False,
+                name="ExtractionWorker",
             )
             self.worker.start()
 
@@ -500,10 +512,17 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
 
     def _build_shutdown_diagnostic_payload(self) -> dict[str, object]:
         queue_size = 0
+        control_queue_size = 0
         try:
             queue_size = int(self.message_queue.qsize())
         except Exception:
             queue_size = 0
+        try:
+            control_queue = self.__dict__.get("app_control_queue")
+            if control_queue is not None:
+                control_queue_size = int(control_queue.qsize())
+        except Exception:
+            control_queue_size = 0
 
         with self._detached_drivers_lock:
             detached_count = len(self._detached_drivers)
@@ -535,6 +554,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             },
             "message_queue": {
                 "queue_size": queue_size,
+                "control_queue_size": control_queue_size,
                 "coalesced_control": len(self._coalesced_control_messages),
                 "coalesced_worker": len(self._coalesced_worker_messages),
                 "overflow_passthrough": len(self._overflow_passthrough_messages),

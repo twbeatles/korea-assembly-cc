@@ -17,7 +17,11 @@ import ui.main_window_pipeline as pipeline_mod
 import ui.main_window_impl.runtime_lifecycle as runtime_lifecycle_mod
 from core.config import Config
 from core.models import SubtitleEntry
-from ui.main_window_common import MainWindowMessageQueue, WorkerQueueMessage
+from ui.main_window_common import (
+    AppControlMessageQueue,
+    MainWindowMessageQueue,
+    WorkerQueueMessage,
+)
 
 mw_mod = pytest.importorskip("ui.main_window")
 MainWindow = mw_mod.MainWindow
@@ -430,6 +434,7 @@ def test_wait_for_background_threads_during_exit_blocks_until_complete(monkeypat
 def test_process_message_queue_drains_overflowed_control_messages():
     win = MainWindow.__new__(MainWindow)
     win.message_queue = MainWindowMessageQueue(win, maxsize=1)
+    win.app_control_queue = AppControlMessageQueue(maxsize=1)
     win._worker_message_lock = threading.Lock()
     win._coalesced_worker_messages = {}
     win._control_message_lock = threading.Lock()
@@ -446,7 +451,7 @@ def test_process_message_queue_drains_overflowed_control_messages():
     win._set_status = lambda text, level="info": status_updates.append((text, level))
     win._show_toast = lambda message, *_args, **_kwargs: toasts.append(str(message))
 
-    win.message_queue.put_nowait("occupied")
+    win.app_control_queue.put_nowait(("session_save_done", {"saved_count": 1}))
     MainWindow._emit_control_message(win, "session_save_done", {"saved_count": 3})
 
     assert win._coalesced_control_messages
@@ -454,14 +459,15 @@ def test_process_message_queue_drains_overflowed_control_messages():
     MainWindow._process_message_queue(win)
 
     assert win._session_save_in_progress is False
-    assert dirty_cleared == [True]
-    assert status_updates == [("세션 저장 완료 (3개)", "success")]
-    assert toasts == ["세션 저장 완료!"]
+    assert dirty_cleared
+    assert status_updates[-1] == ("세션 저장 완료 (3개)", "success")
+    assert toasts[-1] == "세션 저장 완료!"
 
 
 def test_clear_message_queue_preserves_durable_control_messages():
     win = MainWindow.__new__(MainWindow)
     win.message_queue = MainWindowMessageQueue(win, maxsize=8)
+    win.app_control_queue = AppControlMessageQueue(maxsize=8)
     win._worker_message_lock = threading.Lock()
     win._coalesced_worker_messages = {(7, "status"): "old status"}
     win._control_message_lock = threading.Lock()
@@ -470,31 +476,38 @@ def test_clear_message_queue_preserves_durable_control_messages():
     }
     win._overflow_passthrough_lock = threading.Lock()
     win._overflow_passthrough_messages = [
-        ("db_task_result", {"task": "db_stats", "result": {"count": 1}}),
         WorkerQueueMessage(7, "preview", {"text": "old"}),
     ]
     win._terminal_worker_message_lock = threading.Lock()
     win._terminal_worker_messages = [WorkerQueueMessage(7, "finished", {})]
 
     win.message_queue.put_nowait(WorkerQueueMessage(7, "preview", {"text": "old"}))
-    win.message_queue.put_nowait(("session_save_done", {"saved_count": 2}))
+    win.app_control_queue.put_nowait(("session_save_done", {"saved_count": 2}))
 
     MainWindow._clear_message_queue(win)
 
-    remaining: list[object] = []
+    remaining_worker: list[object] = []
     try:
         while True:
-            remaining.append(win.message_queue.get_nowait())
+            remaining_worker.append(win.message_queue.get_nowait())
     except queue.Empty:
         pass
 
-    assert remaining == [("session_save_done", {"saved_count": 2})]
+    remaining_control: list[tuple[str, Any]] = []
+    try:
+        while True:
+            remaining_control.append(win.app_control_queue.get_nowait())
+    except queue.Empty:
+        pass
+
+    assert remaining_worker == []
+    assert remaining_control == [("session_save_done", {"saved_count": 2})]
     assert win._coalesced_worker_messages == {}
     assert win._coalesced_control_messages == {
         "session_load_done": ("session_load_done", {"path": "session.json"})
     }
     assert win._overflow_passthrough_messages == [
-        ("db_task_result", {"task": "db_stats", "result": {"count": 1}})
+        WorkerQueueMessage(7, "preview", {"text": "old"}),
     ]
     assert win._terminal_worker_messages == []
 
@@ -1324,6 +1337,7 @@ def test_clean_newlines_uses_prepared_snapshot_and_applies_result(monkeypatch):
     win._set_status = lambda *_args, **_kwargs: None
     win._show_toast = lambda *_args, **_kwargs: None
     win.message_queue = _ImmediateQueue(win)
+    win.app_control_queue = _ImmediateQueue(win)
     win._start_background_thread = lambda target, _name: target() or True
 
     monkeypatch.setattr(

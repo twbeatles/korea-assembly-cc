@@ -40,9 +40,10 @@
 │  │  - 토스트 알림 (ToastWidget)                          │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                            ▲                                 │
-│                     ┌──────┴──────┐                         │
-│                     │ bounded queue │  message_queue         │
-│                     └──────┬──────┘                         │
+│              ┌─────────────┴─────────────┐                   │
+│              │ message_queue (capture)   │                   │
+│              │ app_control_queue (UI)    │                   │
+│              └─────────────┬─────────────┘                   │
 │                            ▼                                 │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │              Worker Thread (Background)               │   │
@@ -63,7 +64,7 @@
 ## 4. 핵심 규칙
 
 ### 4.1 스레드 안전성
-1. **Queue 통신**: UI 스레드와 Worker 스레드 간 통신은 반드시 `MainWindowMessageQueue(maxsize=500)`를 통해서만 수행
+1. **Queue 통신**: capture worker 메시지는 `MainWindowMessageQueue(maxsize=500)`, 세션/DB/저장 등 control-plane 메시지는 `AppControlMessageQueue(maxsize=200)`로 분리. `_clear_message_queue()`는 worker 큐만 비우고 control 큐는 기본 유지
 2. **stop_event**: 스레드 종료는 `threading.Event()` 사용 (빠른 응답성 보장)
 3. **타이머 기반 업데이트**: 통계 및 상태 업데이트는 `QTimer` 사용 (자막 처리는 실시간)
 4. **driver lifecycle**: `self.driver` 접근은 `_driver_lock`과 identity helper를 통해서만 수행
@@ -337,6 +338,19 @@ korea-assembly-cc/
 - **테마 인식 토스트**: `ui/widgets.py`의 `ToastWidget`은 `is_dark` 인자와 `apply_theme()`를 받아 다크/라이트에서 배경·텍스트·accent를 다르게 칠한다. `_show_toast`는 현재 `is_dark_theme`를 전달한다.
 - **layout.py 인라인 스타일 정리**: 잔존 인라인 스타일은 테마 무관(투명 배경) 또는 런타임 상태색(상태/연결 인디케이터)만 남긴다.
 - **회귀 기준선**: `pytest -q` 263 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, `--smoke-instantiate-window` exit code 0, 다크/라이트 렌더 스크린샷으로 일관성 확인.
+
+### v16.14.7 PROJECT_AUDIT 후속 1~3단계 조치 메모 (2026-06-25)
+- **preview coalescing 제거**: `COALESCED_WORKER_MESSAGE_TYPES`에서 `preview` 제외, 포화 시 overflow passthrough + 우선순위 trim(`OVERFLOW_PASSTHROUGH_MAX=128`) + drop 카운터/토스트
+- **stopping preview drain**: `_is_stopping` 동안 `_drain_pending_previews()` 상한 없이 preview-only complete drain
+- **재연결 resync**: `reconnected` 메시지 → `_on_capture_reconnected()` + `_soft_resync()`
+- **selector 검증**: `core/selector_policy.validate_subtitle_selector()`를 `_start()`에 연결
+- **worker/control 큐 분리**: `AppControlMessageQueue` + `_emit_control_message()` 전용 경로, shutdown diagnostic에 `control_queue_size`
+- **DB Result 타입**: `DatabaseOperationResult`로 async read 결과 래핑, `_handle_db_task_result()`에서 `ok=False` error 분기
+- **extraction worker non-daemon**: `daemon=False`, `name="ExtractionWorker"`, `_wait_worker_shutdown()` 연동
+- **복구 UX**: `_prompt_session_recovery_if_available()`에 runtime manifest vs 5분 backup 우선순위 안내
+- **release verifier**: `--with-live-smoke` 옵션 추가
+- **dead constant 정리**: `SUBTITLE_FINALIZE_DELAY`/`FINALIZE_CHECK_INTERVAL` 제거
+- **회귀 기준선**: `pytest -q` 279 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings
 
 ### v16.14.7 감사 후속 URL / 복구 / 검색 정책 메모 (2026-06-04)
 - **shared URL policy**: `core.url_policy`가 `http/https` + `assembly.webcast.go.kr` 계열 host 검증을 담당한다. `_start()`, 프리셋 add/edit/import, URL history load/save sanitize는 같은 helper를 사용하며 외부 URL은 `_add_to_history()`나 worker 시작 전에 차단한다.

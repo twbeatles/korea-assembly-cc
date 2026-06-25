@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 .pytest_tmp/
 .codegraph/
+mcps/
 .ruff_cache/
 .mypy_cache/
 .tox/

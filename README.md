@@ -47,7 +47,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 ### 🗄️ 세션 및 이력 관리
 - 세션 저장/불러오기 — 언제든 중단 후 나중에 재개 가능
 - SQLite DB에 자동 저장 → 과거 자막 전체 검색 및 세션 불러오기
-- 5분마다 자동 백업, 비정상 종료 후 재시작 시 복구 제안
+- 5분마다 자동 백업(일반 세션: `backup_*.json`, 장시간 추출: runtime manifest/tail 복구 포인터), 비정상 종료 후 재시작 시 복구 제안(런타임 복구본 vs 5분 백업 우선순위 안내 포함)
 - DB 히스토리에서 같은 세션의 저장 계보 (`[최신]`, `[이전 저장본 n/N]`) 확인
 
 ### ⚙️ 편의 기능
@@ -264,6 +264,8 @@ pytest -q         # 회귀 테스트 전체 통과 기준
 
 ```bash
 python scripts/run_release_verification.py
+python scripts/run_release_verification.py --offline --skip-build --instantiate-window
+python scripts/run_release_verification.py --with-live-smoke   # live contract smoke 명시 포함
 ```
 
 자세한 아키텍처·개발 가이드·파이프라인 고정 규칙은 아래 문서를 참고하세요.
@@ -271,6 +273,7 @@ python scripts/run_release_verification.py
 | 문서 | 내용 |
 |------|------|
 | [CLAUDE.md](CLAUDE.md) | 아키텍처, 핵심 규칙, 개발 가이드 |
+| [PROJECT_AUDIT.md](PROJECT_AUDIT.md) | 기능 감사·리스크·조치 현황 |
 | [PIPELINE_LOCK.md](PIPELINE_LOCK.md) | 자막 수집 파이프라인 고정 기준 |
 | [ALGORITHM_ANALYSIS.md](ALGORITHM_ANALYSIS.md) | 알고리즘 잠재 이슈 분석 |
 
@@ -278,7 +281,8 @@ python scripts/run_release_verification.py
 
 ## 📝 변경 이력
 
-### v16.14.7 (2026-04-01 ~ 2026-06-18)
+### v16.14.7 (2026-04-01 ~ 2026-06-25)
+- **감사 후속 안정화 (2026-06-25)** — preview coalescing 제거, overflow 우선순위 trim, stopping 시 preview 완전 drain, worker/control 큐 분리(`AppControlMessageQueue`), DB `DatabaseOperationResult`, extraction worker non-daemon, CSS selector 사전 검증, 복구 다이얼로그 우선순위 안내
 - Chrome 세션 자동 복구 — 연결 끊김을 감지해 같은 URL로 자동 재기동
 - 장시간 세션 지원 — 메모리 절감을 위한 runtime archive 구조 도입
 - Portable 모드 및 `%LOCALAPPDATA%` 기본 저장 경로 분리
@@ -289,7 +293,7 @@ python scripts/run_release_verification.py
 - URL 정책 일원화 (`assembly.webcast.go.kr` 계열만 허용)
 - 토큰 기반 테마 일원화 — 다크/라이트 전환 정확성 개선
 - 종료 진단 저장 (`logs/shutdown_diagnostic_*.json`)
-- 회귀 기준: `pytest -q` 263 pass / 1 skipped, `pyright` 0 errors
+- 회귀 기준: `pytest -q` 279 pass / 1 skipped, `pyright` 0 errors
 
 ### v16.14.6 (2026-04-01)
 - 비정상 종료 후 재시작 시 최신 백업·세션 복구 제안

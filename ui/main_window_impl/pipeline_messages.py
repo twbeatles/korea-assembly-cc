@@ -35,6 +35,10 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 return True
             if bool(self.__dict__.get("_coalesced_worker_messages", {})):
                 return True
+            control_queue = self.__dict__.get("app_control_queue")
+            control_qsize = getattr(control_queue, "qsize", None)
+            if callable(control_qsize) and int(cast(Any, control_qsize)()) > 0:
+                return True
             qsize = getattr(self.message_queue, "qsize", None)
             if callable(qsize):
                 return int(cast(Any, qsize)()) > 0
@@ -179,6 +183,18 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     max_items=50 - processed,
                 )
             while processed < 50 and time.perf_counter() <= deadline:
+                drained_control = False
+                control_queue = self.__dict__.get("app_control_queue")
+                if control_queue is not None:
+                    try:
+                        msg_type, data = control_queue.get_nowait()
+                        self._handle_message(str(msg_type), data)
+                        processed += 1
+                        drained_control = True
+                    except queue.Empty:
+                        pass
+                if drained_control:
+                    continue
                 try:
                     raw_item = self.message_queue.get_nowait()
                     decoded = self._unwrap_message_item(raw_item)
@@ -478,6 +494,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             elif msg_type == "reconnected":
                 self.reconnect_attempts = 0
                 self._update_connection_status("connected")
+                self._on_capture_reconnected(data)
                 self._show_toast("재연결 성공!", "success", 2000)
 
             elif msg_type == "hwp_save_failed":

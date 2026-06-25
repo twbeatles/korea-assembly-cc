@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from core.database_result import DatabaseOperationResult
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 
@@ -65,7 +66,7 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
                                     "db_task_result",
                                     {
                                         "task": task_name,
-                                        "result": result,
+                                        "result": DatabaseOperationResult.success(result),
                                         "context": context,
                                     },
                                 )
@@ -232,6 +233,15 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
         ) -> None:
             """DB 비동기 작업 완료 처리 (UI 스레드)."""
             context = context or {}
+            if isinstance(result, DatabaseOperationResult):
+                if not result.ok:
+                    self._handle_db_task_error(
+                        task_name,
+                        str(result.error or "DB operation failed"),
+                        context,
+                    )
+                    return
+                result = result.value
             request_token = int(context.get("request_token", 0) or 0)
             if task_name == "db_history_list":
                 sessions = result if isinstance(result, list) else []

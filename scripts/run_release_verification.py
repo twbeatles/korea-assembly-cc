@@ -52,6 +52,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="live contract smoke와 live-list drift report를 건너뜁니다.",
     )
     parser.add_argument(
+        "--with-live-smoke",
+        action="store_true",
+        help="live contract smoke와 drift report를 명시적으로 포함합니다 (기본 온라인 경로).",
+    )
+    parser.add_argument(
         "--skip-build",
         action="store_true",
         help="PyInstaller build와 frozen smoke/preflight를 건너뜁니다.",
@@ -71,7 +76,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="source/frozen smoke에서 MainWindow() 생성까지 검증합니다.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.with_live_smoke and args.offline:
+        parser.error("--with-live-smoke cannot be combined with --offline")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -106,7 +114,9 @@ def main(argv: list[str] | None = None) -> int:
         ],
     )
 
-    skip_live = bool(args.offline or args.skip_live)
+    skip_live = bool(args.offline or args.skip_live) and not bool(args.with_live_smoke)
+    if args.with_live_smoke:
+        print("\n==> live smoke enabled (--with-live-smoke)")
     if not skip_live:
         live_env = os.environ.copy()
         live_env["RUN_LIVE_SMOKE"] = "1"

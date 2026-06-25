@@ -27,7 +27,7 @@
 │  - 사용자 입력, 자막 렌더링, 통계 업데이트      │
 │  - 연결 상태 모니터링 (🟢/🔴/🟡)              │
 └───────────────────────┬──────────────────────┘
-                        │ message_queue (bounded queue)
+                        │ message_queue (capture) + app_control_queue (control)
 ┌───────────────────────▼──────────────────────┐
 │         Worker Thread (Background)           │
 │  - Selenium 구동                              │

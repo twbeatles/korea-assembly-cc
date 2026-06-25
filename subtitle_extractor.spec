@@ -101,6 +101,8 @@ HIDDEN_IMPORTS = [
     'core.subtitle_pipeline_impl.types',
     'core.text_utils',
     'core.url_policy',
+    'core.selector_policy',
+    'core.database_result',
     'core.utils',
     'selenium.common.exceptions',
     'selenium.webdriver.chrome.webdriver',

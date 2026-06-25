@@ -296,6 +296,55 @@ class MainWindowMessageQueue:
         return self._queue.qsize()
 
 
+class AppControlMessageQueue:
+    """UI/control-plane 메시지 전용 큐 (worker capture 큐와 논리 분리)."""
+
+    _PUT_SAFETY_TIMEOUT_SECONDS = 5.0
+
+    def __init__(self, maxsize: int = 0) -> None:
+        self._queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=maxsize)
+
+    def put(
+        self,
+        item: tuple[str, Any],
+        block: bool = True,
+        timeout: float | None = None,
+    ) -> None:
+        if not block:
+            self._queue.put(item, block=False)
+            return
+        effective_timeout = (
+            float(timeout)
+            if timeout is not None
+            else self._PUT_SAFETY_TIMEOUT_SECONDS
+        )
+        self._queue.put(item, block=True, timeout=effective_timeout)
+
+    def put_nowait(self, item: tuple[str, Any]) -> None:
+        self.put(item, block=False)
+
+    def get(self, block: bool = True, timeout: float | None = None) -> tuple[str, Any]:
+        if timeout is None:
+            return self._queue.get(block=block)
+        return self._queue.get(block=block, timeout=timeout)
+
+    def get_nowait(self) -> tuple[str, Any]:
+        return self._queue.get_nowait()
+
+    def empty(self) -> bool:
+        return self._queue.empty()
+
+    def qsize(self) -> int:
+        return self._queue.qsize()
+
+    def clear(self) -> None:
+        try:
+            while True:
+                self._queue.get_nowait()
+        except queue.Empty:
+            pass
+
+
 def _import_optional_module(module_name: str) -> Any:
     """Keep optional dependency imports dynamic so baseline Pylance checks stay stable."""
     return cast(Any, import_module(module_name))
