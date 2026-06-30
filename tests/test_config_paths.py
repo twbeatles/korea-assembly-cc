@@ -6,6 +6,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 import core.config as config_mod
 from core.config import Config, resolve_storage_resolution, run_storage_preflight
 
@@ -181,7 +183,40 @@ def test_storage_preflight_returns_failure_details_when_db_probe_fails(
     assert "subtitle_history.db" in error
 
 
-def test_entrypoint_storage_preflight_smoke_outputs_json(tmp_path):
+def _assert_storage_preflight_payload(payload: dict, target: Path) -> None:
+    assert payload["ok"] is True
+    assert payload["kind"] == "storage_preflight"
+    assert payload["storage"]["storage_mode"] == "override"
+    assert Path(payload["storage"]["storage_dir"]) == target.resolve()
+
+
+def _assert_window_smoke_payload(payload: dict, target: Path) -> None:
+    assert payload["ok"] is True
+    assert payload["hwpx_ok"] is True
+    assert payload["window_instantiated"] is True
+    assert "국회 의사중계 자막 추출기" in payload["window_title"]
+    assert payload["storage"]["storage_mode"] == "override"
+    assert Path(payload["storage"]["storage_dir"]) == target.resolve()
+
+
+def test_entrypoint_storage_preflight_smoke_outputs_json_in_process(tmp_path):
+    from tests.test_support.subprocess_compat import run_entrypoint_main
+
+    target = tmp_path / "smoke-storage"
+    exit_code, stdout = run_entrypoint_main(
+        [
+            "--smoke-storage-preflight",
+            "--smoke-storage-dir",
+            str(target),
+        ]
+    )
+
+    assert exit_code == 0
+    _assert_storage_preflight_payload(json.loads(stdout), target)
+
+
+@pytest.mark.requires_subprocess
+def test_entrypoint_storage_preflight_smoke_outputs_json_subprocess(tmp_path):
     target = tmp_path / "smoke-storage"
     result = subprocess.run(
         [
@@ -197,14 +232,29 @@ def test_entrypoint_storage_preflight_smoke_outputs_json(tmp_path):
     )
 
     assert result.returncode == 0
-    payload = json.loads(result.stdout.strip())
-    assert payload["ok"] is True
-    assert payload["kind"] == "storage_preflight"
-    assert payload["storage"]["storage_mode"] == "override"
-    assert Path(payload["storage"]["storage_dir"]) == target.resolve()
+    _assert_storage_preflight_payload(json.loads(result.stdout.strip()), target)
 
 
-def test_entrypoint_smoke_instantiate_window_outputs_json(tmp_path):
+def test_entrypoint_smoke_instantiate_window_outputs_json_in_process(tmp_path, monkeypatch):
+    from tests.test_support.subprocess_compat import run_entrypoint_main
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    target = tmp_path / "window-smoke-storage"
+    exit_code, stdout = run_entrypoint_main(
+        [
+            "--smoke",
+            "--smoke-instantiate-window",
+            "--smoke-storage-dir",
+            str(target),
+        ]
+    )
+
+    assert exit_code == 0, stdout
+    _assert_window_smoke_payload(json.loads(stdout), target)
+
+
+@pytest.mark.requires_subprocess
+def test_entrypoint_smoke_instantiate_window_outputs_json_subprocess(tmp_path):
     target = tmp_path / "window-smoke-storage"
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
@@ -224,13 +274,7 @@ def test_entrypoint_smoke_instantiate_window_outputs_json(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout.strip())
-    assert payload["ok"] is True
-    assert payload["hwpx_ok"] is True
-    assert payload["window_instantiated"] is True
-    assert "국회 의사중계 자막 추출기" in payload["window_title"]
-    assert payload["storage"]["storage_mode"] == "override"
-    assert Path(payload["storage"]["storage_dir"]) == target.resolve()
+    _assert_window_smoke_payload(json.loads(result.stdout.strip()), target)
 
 
 def test_entrypoint_json_output_prefers_working_stdout(monkeypatch):

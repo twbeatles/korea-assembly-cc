@@ -92,6 +92,7 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._last_good_raw_compact = ""
         self._preview_resync_threshold = PREVIEW_RESYNC_THRESHOLD
         self._preview_ambiguous_resync_threshold = PREVIEW_AMBIGUOUS_RESYNC_THRESHOLD
+        self._reconnect_preview_suppress_until_delta = False
 
         saved_keywords = self.settings.value("highlight_keywords", "")
         if not saved_keywords:

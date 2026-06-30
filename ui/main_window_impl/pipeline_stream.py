@@ -182,6 +182,14 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         if not raw_compact:
             return None
 
+        if bool(self.__dict__.get("_reconnect_preview_suppress_until_delta", False)):
+            suffix_for_gate = self._trailing_suffix
+            if suffix_for_gate:
+                last_pos = raw_compact.rfind(suffix_for_gate)
+                if last_pos >= 0 and not raw_compact[last_pos + len(suffix_for_gate) :]:
+                    return None
+            self._reconnect_preview_suppress_until_delta = False
+
         def accept(text: str):
             self._preview_desync_count = 0
             self._preview_ambiguous_skip_count = 0
@@ -304,6 +312,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         """재연결 직후 full probe 재유입으로 인한 중복 append를 줄이기 위해 history를 맞춘다."""
         self._preview_desync_count = 0
         self._preview_ambiguous_skip_count = 0
+        self._reconnect_preview_suppress_until_delta = True
         if self.capture_state.entries:
             self._soft_resync()
         attempt = ""
@@ -385,6 +394,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         self._preview_desync_count = 0
         self._preview_ambiguous_skip_count = 0
         self._last_good_raw_compact = ""
+        self._reconnect_preview_suppress_until_delta = False
         self.capture_state.preview_text = ""
         self.capture_state.last_observed_raw = ""
         self.capture_state.last_processed_raw = ""

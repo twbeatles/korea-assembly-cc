@@ -23,8 +23,14 @@ def test_release_verification_offline_skip_build_keeps_source_checks(
     )
 
     labels = [label for label, _args, _env in calls]
-    assert labels == ["pytest", "pyright", "source smoke", "source storage preflight"]
-    source_smoke_args = calls[2][1]
+    assert labels == [
+        "pip install requirements-dev",
+        "pytest",
+        "pyright",
+        "source smoke",
+        "source storage preflight",
+    ]
+    source_smoke_args = calls[3][1]
     assert "--smoke-instantiate-window" in source_smoke_args
     assert not any(label == "live contract smoke" for label in labels)
     assert not any(label == "PyInstaller clean build" for label in labels)

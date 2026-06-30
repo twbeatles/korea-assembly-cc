@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.14.7
+# 🏛️ 국회 의사중계 자막 추출기 v16.14.8
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 데스크톱 프로그램입니다.
 
@@ -63,7 +63,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 
 ### 1. Python 설치
 
-Python 3.10 이상이 필요합니다.  
+Python 3.10–3.12를 권장합니다(3.10 이상 동작). 개발·CI에서는 `requirements-dev.txt` 핀을 그대로 설치하세요.  
 [Python 공식 사이트](https://www.python.org/downloads/)에서 다운로드하세요.
 
 ### 2. 의존성 설치
@@ -244,7 +244,7 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 ```bash
 pip install pyinstaller
 pyinstaller subtitle_extractor.spec
-# dist/국회의사중계자막추출기 v16.14.7.exe
+# dist/국회의사중계자막추출기 v16.14.8.exe
 ```
 
 **Portable 모드**: EXE 파일 옆에 `portable.flag` 파일을 만들어두면 로그·세션·DB·설정을 EXE 폴더에 저장합니다.  
@@ -257,8 +257,10 @@ pyinstaller subtitle_extractor.spec
 ```bash
 pip install -r requirements-dev.txt
 pyright           # 정적 분석 (0 errors 기준)
-pytest -q         # 회귀 테스트 전체 통과 기준
+pytest -q         # 회귀 테스트 전체 통과 기준 (in-process smoke 포함)
 ```
+
+에이전트/샌드박스 환경에서는 `*_subprocess` 회귀가 skip될 수 있습니다. 기본 `pytest -q`는 in-process smoke·pyright fallback으로 녹색을 유지합니다.
 
 릴리스 전 전체 검증:
 
@@ -280,6 +282,11 @@ python scripts/run_release_verification.py --with-live-smoke   # live contract s
 ---
 
 ## 📝 변경 이력
+
+### v16.14.8 (2026-06-30)
+- **감사 후속 자동화/TDD 보강** — in-process smoke·pyright fallback, `_prepare_preview_raw`·salvage·reconnect handshake 테스트, capture Protocol, release verifier `pip install`/`--init-codegraph`
+- **재연결 중복 append 완화** — `_reconnect_preview_suppress_until_delta` handshake
+- 회귀 기준: `pytest -q` 299 pass / 2 skipped, `pyright` 0 errors
 
 ### v16.14.7 (2026-04-01 ~ 2026-06-25)
 - **감사 후속 안정화 (2026-06-25)** — preview coalescing 제거, overflow 우선순위 trim, stopping 시 preview 완전 drain, worker/control 큐 분리(`AppControlMessageQueue`), DB `DatabaseOperationResult`, extraction worker non-daemon, CSS selector 사전 검증, 복구 다이얼로그 우선순위 안내

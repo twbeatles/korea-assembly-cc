@@ -76,10 +76,44 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="source/frozen smoke에서 MainWindow() 생성까지 검증합니다.",
     )
+    parser.add_argument(
+        "--skip-deps",
+        action="store_true",
+        help="requirements-dev.txt 설치 단계를 건너뜁니다.",
+    )
+    parser.add_argument(
+        "--init-codegraph",
+        action="store_true",
+        help="가능한 경우 codegraph init을 실행합니다.",
+    )
     args = parser.parse_args(argv)
     if args.with_live_smoke and args.offline:
         parser.error("--with-live-smoke cannot be combined with --offline")
     return args
+
+
+def _maybe_init_codegraph() -> None:
+    codegraph_cmd = "codegraph"
+    if os.name == "nt":
+        codegraph_cmd = "cmd"
+        init_args = ["/c", "codegraph", "init"]
+    else:
+        init_args = ["init"]
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                [codegraph_cmd, *init_args],
+                cwd=REPO_ROOT,
+                check=True,
+            )
+        else:
+            subprocess.run(
+                [codegraph_cmd, *init_args],
+                cwd=REPO_ROOT,
+                check=True,
+            )
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        print(f"codegraph init skipped: {exc}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,6 +121,15 @@ def main(argv: list[str] | None = None) -> int:
     python = sys.executable
     smoke_root = REPO_ROOT / ".pytest_tmp"
     smoke_root.mkdir(exist_ok=True)
+
+    if not args.skip_deps:
+        _run(
+            "pip install requirements-dev",
+            [python, "-m", "pip", "install", "-r", "requirements-dev.txt"],
+        )
+    if args.init_codegraph:
+        print("\n==> codegraph init")
+        _maybe_init_codegraph()
 
     _run("pytest", [python, "-m", "pytest", "-q"])
     _run("pyright", [python, "-m", "pyright", "--outputjson"])

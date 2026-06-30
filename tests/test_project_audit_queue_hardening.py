@@ -106,3 +106,40 @@ def test_reconnected_handler_soft_resyncs_when_entries_exist():
 def test_priority_overflow_types_include_reset_and_segments():
     assert "subtitle_reset" in PRIORITY_OVERFLOW_WORKER_TYPES
     assert "subtitle_segments" in PRIORITY_OVERFLOW_WORKER_TYPES
+
+
+def test_overflow_preview_burst_preserves_terminal_priority_messages():
+    win = _build_queue_window()
+    win._overflow_passthrough_messages = [
+        WorkerQueueMessage(7, "preview", {"raw": f"p{i}"}) for i in range(129)
+    ] + [
+        WorkerQueueMessage(7, "subtitle_reset", {"source": "burst"}),
+        WorkerQueueMessage(7, "subtitle_segments", [{"raw": "segment"}]),
+    ]
+
+    dropped = MainWindow._trim_overflow_passthrough_messages(
+        win, win._overflow_passthrough_messages
+    )
+
+    assert dropped == 3
+    assert len(win._overflow_passthrough_messages) == int(Config.OVERFLOW_PASSTHROUGH_MAX)
+    message_types = {
+        item.msg_type
+        for item in win._overflow_passthrough_messages
+        if isinstance(item, WorkerQueueMessage)
+    }
+    assert "subtitle_reset" in message_types
+    assert "subtitle_segments" in message_types
+
+
+def test_preview_overflow_items_remain_draggable_after_burst():
+    win = _build_queue_window()
+    win.message_queue.put_nowait("occupied")
+    for index in range(5):
+        MainWindow._emit_worker_message(
+            win,
+            "preview",
+            {"raw": f"burst-{index}"},
+            run_id=7,
+        )
+    assert len(win._overflow_passthrough_messages) == 5

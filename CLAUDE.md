@@ -517,7 +517,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 
 ### 8.5 개발 품질 게이트
 - 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors`
-- 테스트 기준: 루트에서 `pytest -q` 전체 통과
+- 테스트 기준: 루트에서 `pytest -q` 전체 통과 (기본 in-process smoke·pyright fallback 포함, `*_subprocess` 테스트는 환경에 따라 skip)
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - pyright suppression policy: `tests/test_pyright_suppression_policy.py`가 파일 단위 `# pyright:` directive 재도입을 차단
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
