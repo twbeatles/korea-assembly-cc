@@ -1,226 +1,292 @@
 # Project Audit
 
-> **감사 일자**: 2026-06-30  
-> **대상 버전**: v16.14.7  
-> **분석 도구**: README.md, CLAUDE.md, CodeGraph MCP (`codegraph init` + `codegraph_explore`), 보조 grep/파일 열람, `pytest -q`, `pyright --outputjson`
+> **감사 일자**: 2026-07-22  
+> **대상 버전**: v16.14.8 (`Config.VERSION` = README 첫 줄에서 로드)  
+> **분석 방법**: README.md · CLAUDE.md 정독 → CodeGraph MCP(`codegraph_explore`) 우선 구조 분석 → 필요 구간만 보조 grep/파일 열람 → `pytest -q` · `pyright --outputjson` 교차 검증  
+> **범위**: 기능 구현 관점(잠재 결함, 예외/검증, 상태·비동기, I/O·DB, 보안, 테스트, 문서 정합).  
+> **후속 구현**: 2026-07-22 — 본 문서 1~2단계 핵심 반영 완료 (`tests/test_project_audit_20260722.py`).  
+> **후속 검증**: `pytest -q` **306 passed / 2 skipped**, `pyright` **0 errors**.
+
+---
 
 ## 1. Executive Summary
 
-이 프로젝트는 국회 의사중계 AI 자막을 PyQt6 GUI + Selenium worker + runtime archive + SQLite DB로 수집·저장하는 Windows 중심 데스크톱 앱이다. 2026-06-25 감사 후속 조치(preview coalescing 제거, control 큐 분리, non-daemon worker, selector 검증, 복구 UX 등)가 코드·테스트에 반영된 상태이며, **핵심 기능 결함 수준의 미해결 이슈는 제한적**이다.
+국회 의사중계 AI 자막을 **PyQt6 UI 스레드 + Selenium ExtractionWorker + 자막 파이프라인 + runtime archive + SQLite** 로 수집·저장하는 Windows 중심 데스크톱 앱이다.  
+v16.14.7 감사 후속(2026-06-25), v16.14.8 자동화/TDD 보강(2026-06-30), **2026-07-22 감사 후속 수정**까지 반영된 상태다.
 
-**전체 위험도: Low–Medium** (기능 안정성) / **Medium** (에이전트 자율 개발·자동화 적합성)
+| 축 | 위험도 (후속 반영 후) | 한 줄 요약 |
+|----|----------------------|------------|
+| **기능 안정성(일반 사용)** | **Low** | 핵심 경로 방어 + 회귀 306건 |
+| **극단 부하·종료 경계** | **Low–Medium** | `finished` terminal stash 경로로 수정 완료 |
+| **파이프라인 정확성** | **Medium** | suffix/compact 구조 한계는 본질적으로 잔존 |
+| **보안** | **Low** | URL host·selector·SQL·runtime path 가드 |
+| **문서/에이전트 가이드** | **Low** | CLAUDE/GEMINI/README v16.14.8 동기화 |
 
-| 구분 | 요약 |
-|------|------|
-| 강점 | facade+impl 분리, storage preflight, atomic I/O, runtime manifest 무결성, DB degraded mode, queue overflow/terminal 보존, 38개 테스트 모듈·279건 규모 회귀, smoke CLI·release verifier 스크립트 |
-| 잔여 리스크 | suffix/compact 파이프라인 구조적 한계, Selenium 실연동 E2E 부재, **핫패스(`_prepare_preview_raw` 등) 직접 단위 테스트 공백**, **subprocess 기반 회귀 테스트의 샌드박스/에이전트 환경 취약성** |
-| 자동화 격차 | `requirements-dev.txt` 핀(pytest 9.0.2)과 실제 환경(pytest 8.4.2) 불일치, CodeGraph 인덱스 미커밋(`.gitignore`), PowerShell에서 `codegraph` 실행 정책 차단 |
+**검증 결과**
 
-**검증 결과 (2026-06-30 감사 세션)**
+| 시점 | `pytest -q` | `pyright` |
+|------|-------------|-----------|
+| 2026-07-22 감사 직후 | 299 passed / 2 skipped | 0 errors |
+| 2026-07-22 후속 구현 후 | **306 passed / 2 skipped** | **0 errors** |
 
-| 항목 | 결과 | 비고 |
-|------|------|------|
-| `pytest -q` | **276 passed, 1 skipped, 3 failed** | 실패 3건은 subprocess `WinError 50` (에이전트/제한 환경). 직접 CLI smoke는 성공 |
-| `pyright --outputjson` (직접 실행) | **0 errors, 0 warnings** | `test_pyright_regression.py`는 동일 환경에서 subprocess 실패 |
-| `--smoke-storage-preflight` (직접 실행) | **exit 0, ok=true** | JSON payload 정상 |
-| CodeGraph 인덱스 | **123 files, 2,581 nodes, 7,187 edges** | 감사 중 `codegraph init` 생성. `.codegraph/`는 gitignore |
+**핵심 결론 (후속 반영 후)**
 
-**Superpowers(TDD·계획 기반·환경 격리) 관점**: 코어 파이프라인·DB·URL 정책·큐 하드닝은 `MainWindow.__new__` 기반 부분 구성 테스트로 Red-Green 루프가 가능하나, **GUI 통합·Selenium·subprocess smoke·PyInstaller 빌드**는 에이전트 샌드박스에서 독립 루프가 깨지기 쉽다. 에이전트가 안전하게 수정하려면 핫패스 직접 테스트 확장과 in-process smoke 대안이 필요하다.
+1. Critical 결함 없음.  
+2. High였던 worker `finished` raw put 경로는 **`_emit_worker_message(..., run_id=)` + terminal stash** 로 수정.  
+3. stop 중 finished/error 멱등 흡수, Observer 짧은 발화 정책 정렬, 문서 버전 동기화 완료.  
+4. 잔여: suffix 알고리즘 구조 한계(의도적 보류), Selenium E2E/CI matrix(장기).
 
 ---
 
 ## 2. Project Understanding
 
-### 2.1 프로젝트 목적
+### 2.1 목적 (README · CLAUDE)
 
-README.md·CLAUDE.md 기준 목적은 국회 의사중계 AI 자막을 **딜레이 없이** 실시간 수집하고 TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/JSON/SQLite로 저장하는 것이다. 핵심 가치는 실시간 스트리밍, 멀티스레드 안정성, SQLite 세션 관리, 장시간 세션(runtime archive), frozen/portable 실행 안정성이다.
+- 국회 의사중계 웹의 **실시간 AI 자막**을 딜레이 없이 추출·저장
+- 출력: TXT / SRT / VTT / DOCX / HWPX / HWP / RTF / JSON 세션 / SQLite
+- 운영 축: 자동 재연결, runtime segmented session, portable/`%LOCALAPPDATA%` 저장소, DB 검색·계보
 
-### 2.2 아키텍처 개요
+### 2.2 아키텍처 (CodeGraph + 문서)
 
 ```
 국회의사중계 자막.py
-  └─ Config.run_storage_preflight()
-  └─ QApplication + MainWindow (facade, 9 mixin 조합)
+  └─ storage preflight
+  └─ QApplication + MainWindow (facade + mixin 조합)
 
 MainWindow (ui/main_window.py)
-  ├─ RuntimeLifecycle  : _start / _stop / closeEvent
-  ├─ Capture           : _extraction_worker (Selenium, non-daemon)
-  ├─ Pipeline          : preview → _prepare_preview_raw → _process_raw_text
-  ├─ Persistence       : session/backup/export/runtime archive
-  ├─ Database          : DBWorker + DatabaseManager (impl mixin)
-  └─ View/UI           : render/search/editing/theme
+  ├─ RuntimeState / Lifecycle / Driver
+  ├─ Capture (browser/dom/observer/live)
+  ├─ Pipeline (queue / messages / stream / state)
+  ├─ Persistence (session / runtime archive / export)
+  ├─ Database (DBWorker + DatabaseManager mixin)
+  └─ View / UI (render, search, theme, tray)
 
-Worker Thread ──MainWindowMessageQueue(maxsize=500)──▶ UI (_process_message_queue)
-Control plane  ──AppControlMessageQueue(maxsize=200)─┘
+ExtractionWorker (non-daemon)
+  -- MainWindowMessageQueue(maxsize=500, run_id envelope) --> UI
+Control plane
+  -- AppControlMessageQueue(maxsize=200) ------------------┘
 ```
 
-### 2.3 주요 실행 흐름 (CodeGraph 기준)
+### 2.3 주요 실행 흐름 (CodeGraph call path)
 
-1. **시작**: `runtime_lifecycle._start()` → `validate_assembly_url()` + `validate_subtitle_selector()` → runtime archive 시작 → worker 큐만 `_clear_message_queue()` → `ExtractionWorker`(daemon=False) 시작.
-2. **수집**: `capture_browser._extraction_worker()` → Observer/structured probe → `message_queue.put(preview/keepalive/subtitle_reset/...)`.
-3. **처리**: `pipeline_messages._process_message_queue()` (time budget ~8ms, 최대 50건) → `_prepare_preview_raw()` → `_process_raw_text()` (GlobalHistory + suffix) → `SubtitleEntry` 반영.
-4. **재연결**: recoverable WebDriver 오류 → 지수 백오프 → driver 재기동 → `reconnected` 메시지 → `_on_capture_reconnected()` → `_soft_resync()`.
-5. **장시간 세션**: `backups/runtime_sessions/<run_id>/manifest.json` + `segment_*.json` + `tail_checkpoint.json` + fingerprint 무결성 검증.
-6. **종료**: dirty session → background drain → DB worker shutdown → diagnostic escalation.
+1. **시작**  
+   `runtime_lifecycle._start()`  
+   → `validate_assembly_url` + `validate_subtitle_selector`  
+   → `_activate_capture_run` + runtime archive  
+   → worker 큐 clear 후 `ExtractionWorker` 시작 (`daemon=False`)
 
-### 2.4 CodeGraph 영향 범위 (변경 시 주의)
+2. **수집**  
+   `capture_browser._extraction_worker`  
+   → health check / MutationObserver / structured probe  
+   → `message_queue.put((type, payload))`  
+   → wrapper가 worker thread-local `run_id`가 있으면 `_emit_worker_message`로 envelope·overflow 처리
 
-| 심볼 | blast radius | 테스트 커버리지 (CodeGraph) |
-|------|----------------|---------------------------|
-| `_prepare_preview_raw` | 파이프라인 핵심 게이트 | ⚠️ dedicated test 없음 |
-| `_emit_worker_message` / overflow trim | capture·persistence·DB 등 40+ | `test_project_audit_queue_hardening.py` 등 |
-| `DatabaseManager.save_session` / `search_subtitles` | DBWorker, history/search | `test_database_manager.py` |
-| `normalize_live_xcode` / `xcgcd` | live_list, capture_live, dialog | `test_url_policy.py`, opt-in live smoke |
-| `_build_salvaged_runtime_segments` | manifest salvage 복구 | ⚠️ dedicated test 없음 |
-| `_has_runtime_archived_segments` | hydrate/search/render 분기 | ⚠️ dedicated test 없음 |
+3. **처리**  
+   `pipeline_messages._process_message_queue` (≈8ms / 최대 50건 + backlog follow-up)  
+   → `preview` → `_prepare_preview_raw` → `_process_raw_text` (GlobalHistory + suffix)  
+   → `SubtitleEntry` / UI 증분 반영
 
-### 2.5 2026-06-25 감사 후속 조치 상태
+4. **재연결**  
+   recoverable WebDriver 오류 → 지수 백오프 → session 재오픈  
+   → `reconnected` → `_on_capture_reconnected` → `_soft_resync` + `_reconnect_preview_suppress_until_delta`
 
-| 조치 | 상태 |
-|------|------|
-| preview coalescing 제거 + overflow 우선순위 trim | ✅ 완료 |
-| stopping 시 preview unlimited drain | ✅ 완료 |
-| `AppControlMessageQueue` 분리 | ✅ 완료 |
-| `DatabaseOperationResult` | ✅ 완료 |
-| extraction worker non-daemon | ✅ 완료 |
-| selector 사전 검증 | ✅ 완료 |
-| 재연결 `_on_capture_reconnected` + `_soft_resync` | ✅ 완료 (잔여 handshake는 Low) |
-| README runtime 백업 설명 | ✅ 완료 |
+5. **중지/종료**  
+   `_stop`: preview drain → finalize → worker 대기 → queue clear  
+   `closeEvent`: dirty save, background/DB drain, diagnostic escalation, driver/DB 정리
+
+### 2.4 변경 시 영향 범위 (CodeGraph blast radius 요약)
+
+| 영역 | 대표 심볼 | 비고 |
+|------|-----------|------|
+| Worker 메시지 계약 | `MainWindowMessageQueue`, `_emit_worker_message`, `WorkerQueueMessage` | capture 전역 + 큐 하드닝 테스트 |
+| 파이프라인 게이트 | `_prepare_preview_raw`, `_process_raw_text`, `_soft_resync` | 정확성 핵심, PIPELINE_LOCK 대상 |
+| 종료 | `closeEvent`, `_wait_for_background_threads_during_exit` | 저장/DB/driver 교차 |
+| DB | `DatabaseManager.save_session` / `search_subtitles` | DBWorker 직렬화 |
+| URL | `validate_assembly_url` | start/preset/history 공유 |
+
+### 2.5 이전 감사 대비 상태 (v16.14.8)
+
+| 2026-06-30 지적 | 현재 상태 |
+|-----------------|-----------|
+| subprocess 회귀 샌드박스 실패 | ✅ in-process fallback + `requires_subprocess` skip (299/2) |
+| `_prepare_preview_raw` 전용 테스트 부재 | ✅ `tests/test_prepare_preview_raw.py` |
+| 재연결 중복 append | ✅ `_reconnect_preview_suppress_until_delta` + handshake 테스트 |
+| runtime salvage 테스트 부재 | ✅ `tests/test_runtime_salvage_audit.py` |
+| overflow burst | ✅ queue hardening 테스트 확장 |
+| CLAUDE/GEMINI 버전 동기화 | ✅ v16.14.8 (2026-07-22 후속) |
 
 ---
 
 ## 3. High-Risk Issues
 
-### 3.1 subprocess 기반 회귀 테스트가 에이전트/제한 환경에서 실패
+> 아래는 **실제 코드 근거**가 있는 항목만 포함한다. 추정은 §4로 분리한다.
 
-* **위치**: `tests/test_config_paths.py` (L184–224), `tests/test_pyright_regression.py` (L12–28), `scripts/run_release_verification.py` (전체 subprocess 체인)
-* **문제**: `subprocess.run([sys.executable, "국회의사중계 자막.py", ...])` 및 `subprocess.run([sys.executable, "-m", "pyright", ...])`가 Windows 에이전트/샌드박스에서 `OSError: [WinError 50] 지원되지 않는 요청입니다`로 실패한다. 동일 명령을 직접 실행하면 smoke preflight는 성공하고 pyright도 0 errors다.
-* **영향**: Superpowers/CI 에이전트가 `pytest -q` 전체 통과를 게이트로 삼을 때 **거짓 음성(false negative)** 발생. Red-Green-Refactor 루프가 중단된다. `run_release_verification.py`도 동일 패턴으로 연쇄 실패 가능.
-* **근거**: 감사 세션 `pytest -q` → 276 pass / **3 fail** (모두 subprocess WinError 50). 직접 실행: `python "국회의사중계 자막.py" --smoke-storage-preflight` → `{"ok": true, ...}`. `pyright --outputjson` 직접 실행 → 0 errors.
-* **권장 수정 방향**: (1) smoke/pyright 회귀를 **in-process 호출**(`main([...])`, `pyright` API 또는 import)로 전환하거나, (2) subprocess 실패 시 skip 대신 **환경 capability probe** fixture 도입, (3) release verifier에 `--in-process-smoke` 옵션 추가.
-* **우선순위**: **High** (자동화 저해)
+### 3.1 Worker `finished`가 run_id 해제 후 raw put 되어 terminal 보호를 우회 — ✅ Resolved
+
+* **위치**: `ui/main_window_impl/capture_browser.py` — `_extraction_worker()` `finally`
+* **문제(감사 시점)**: `clear_worker_run_id()` 이후 raw `put(("finished", ...))`로 terminal stash 우회.
+* **상태 (2026-07-22)**: **✅ 해소** — `_emit_worker_message("finished", payload, run_id=run_id)` 후 `clear_worker_run_id()`.  
+  회귀: `tests/test_project_audit_20260722.py::test_extraction_worker_finished_survives_full_queue`
+* **우선순위**: ~~High~~ → **Resolved**
 
 ### 3.2 글로벌 히스토리 + suffix 파이프라인의 구조적 정확성 한계
 
-* **위치**: `ui/main_window_impl/pipeline_stream.py` `_prepare_preview_raw()` (L173–264), `_process_raw_text()` / `core/text_utils.py` `compact_subtitle_text()`
-* **문제**: 50자 suffix, compact(공백 제거) 매칭, ambiguous suffix 분기는 반복 구문·compact collision 구간에서 false positive/negative를 유발할 수 있다. `rfind`·`_soft_resync()`로 완화됐으나 알고리즘 한계는 남아 있다.
-* **영향**: 동일 문구 반복 회의, 빠른 발언자 전환, AI 인식 오류 구간에서 짧은 중복·누락·잘못된 merge boundary.
-* **근거**: `_prepare_preview_raw()`의 `first_pos != last_pos` ambiguous 분기(L231–262), `preview suffix desync reset` / `preview ambiguous suffix reset` 로그 경로. CodeGraph: **dedicated unit test 없음**. `tests/test_core_algorithm.py`는 `_extract_new_part`·`_soft_resync`만 검증.
-* **권장 수정 방향**: `PIPELINE_LOCK.md` 절차 준수 하에 회귀 fixture 확장. 운영 로그 모니터링 유지. 알고리즘 변경은 사용자 승인 후.
+* **위치**:  
+  `ui/main_window_impl/pipeline_stream.py` — `_prepare_preview_raw`, `_process_raw_text`, `_soft_resync`  
+  `core/text_utils.py` — `compact_subtitle_text` 등  
+  고정 문서: `PIPELINE_LOCK.md`
+* **문제**: compact(공백 제거) + 고정 길이 suffix(`rfind`/`find`) 매칭은 반복 구문·ambiguous suffix·desync 구간에서 false positive/negative가 구조적으로 가능하다.  
+  `_soft_resync()`는 **최근 5개 엔트리** 텍스트만으로 history를 재구성한다.
+* **영향**: 같은 문장 반복, 빠른 발언자 전환, AI 인식 흔들림 구간에서 **짧은 중복·누락·잘못된 merge**가 남을 수 있다. 대부분 soft resync·reconnect suppress로 완화되나 완전 제거는 불가.
+* **근거**:  
+  - `_prepare_preview_raw`의 `first_pos != last_pos` ambiguous 분기 및 desync threshold resync  
+  - `_soft_resync`: `self.subtitles[-5:]`  
+  - 전용 테스트는 존재하나(`test_prepare_preview_raw.py`, `test_core_algorithm.py`) 실방송 길이·반복 코퍼스 수준은 아님
+* **권장 수정 방향**:  
+  운영 로그 키워드 모니터링 유지. 알고리즘 변경은 `PIPELINE_LOCK.md` 절차·사용자 승인 후.  
+  resync window를 “최근 N compact chars”로 조정하는 실험은 회귀 fixture 선행.
 * **우선순위**: **Medium**
 
-### 3.3 overflow passthrough 보존 상한 초과 시 worker 메시지 드롭
+### 3.3 중지 중(`_is_stopping`) 일반 워커 메시지 드롭과 `finished` 비화이트리스트
 
-* **위치**: `ui/main_window_impl/pipeline_queue.py` `_trim_overflow_passthrough_messages()` (L112–125), `Config.OVERFLOW_PASSTHROUGH_MAX=128`
-* **문제**: 큐 포화 시 overflow stash가 128건을 넘으면 타입별 우선순위 trim으로 메시지가 드롭된다. preview coalescing 제거 후 완화됐으나 극단 burst에서는 여전히 손실 가능.
-* **영향**: UI 스레드 장기 정체 시 자막 delta 누락. 사용자는 짧은 구간 누락으로 인지할 수 있다.
-* **근거**: `_record_overflow_drop()` + rate-limited toast. `tests/test_project_audit_queue_hardening.py`가 coalescing·trim·stopping drain을 검증하나 **128건 초과 sustained burst** 시나리오는 없음.
-* **권장 수정 방향**: burst 부하 테스트 추가. 필요 시 preview에 대한 overflow 상한 별도 정책 검토.
-* **우선순위**: **Low** (완화됨)
+* **위치**:  
+  `ui/main_window_impl/pipeline_messages.py` — `_handle_message` (L227–240)  
+  `ui/main_window_impl/runtime_lifecycle.py` — `_stop` (L194–281)
+* **문제**: `_is_stopping=True` 동안 DB/hydrate/session 계열을 제외한 메시지는 **수신 후 무시**된다.  
+  화이트리스트에 `finished`/`error`/`preview`가 없다.  
+  `_stop` 자체는 drain·finalize·UI reset을 수행하므로 **의도적 설계에 가깝다**.  
+  그러나 큐 타이머가 stop 중간에 `finished`를 dequeue+drop 하면, §3.1과 결합 시 “종료 이벤트 미도달” 디버깅이 어려워진다.
+* **영향**: 정상 수동 중지에서는 큰 문제 없음.  
+  비정상 종료·부분 실패·동시 stop/error 레이스에서 **상태 정리 경로가 한쪽으로만 의존**.
+* **근거**: `_handle_message` early return 목록에 terminal capture 메시지 없음. `_stop` finally에서 `_is_stopping=False`.
+* **권장 수정 방향**:  
+  - stop 중에도 `finished`/`error`는 no-op이 아니라 **멱등 finalize 헬퍼**로 흡수하거나  
+  - drop 시 카운터/로그를 남겨 관측 가능하게  
+  - §3.1 수정과 함께 종료 단일 경로 문서화
+* **우선순위**: **Medium** (단독보다는 §3.1과 결합 시 의미)
 
-### 3.4 `requirements-dev.txt` 핀과 실제 개발 환경 불일치
+### 3.4 문서·코드 버전 불일치 (에이전트/개발자 오판 유발)
 
-* **위치**: `requirements-dev.txt` (pytest==9.0.2, PyQt6==6.10.2), 감사 환경 Python 3.14.6 / pytest 8.4.2
-* **문제**: 문서·핀 기준(pytest 9.0.2)과 실제 실행 환경(pytest 8.4.2)이 다르다. Python 버전도 README는 3.10+만 명시하고 상한·권장 버전이 없다.
-* **영향**: 에이전트/worktree/CI마다 다른 pytest 동작·경고·fixture 차이 가능. **환경 격리 재현성** 저하.
-* **근거**: `requirements-dev.txt` L4 `pytest==9.0.2` vs `python -m pytest --version` → `pytest 8.4.2`. CLAUDE.md 회귀 기준선은 279 pass로 기록돼 있으나 감사 세션은 276 pass( subprocess 3 fail).
-* **권장 수정 방향**: `pip install -r requirements-dev.txt`를 release verifier 선행 단계로 고정. Python 3.10–3.12 권장 범위를 README에 명시. lock 파일 또는 CI matrix 추가.
-* **우선순위**: **Medium** (자동화 재현성)
+* **위치**: `CLAUDE.md` / `GEMINI.md` / `README.md` / `Config.VERSION`
+* **문제**: (감사 시점) AI 컨텍스트 문서가 v16.14.7에 고정되어 있었다.
+* **영향**: 에이전트가 구버전 기준으로 판단할 수 있었음.
+* **상태 (2026-07-22 후속)**: **✅ 해소** — CLAUDE/GEMINI/README 모두 v16.14.8, 변경 요약 절 추가.
+* **우선순위**: ~~Medium~~ → **Resolved**
 
-### 3.5 재연결 시 worker raw buffer 초기화와 UI history 불일치 (잔여)
+### 3.5 Observer 단 “짧은 발화” 필터와 파이프라인 정책 불일치 — ✅ Resolved
 
-* **위치**: `ui/main_window_impl/capture_browser.py` `_extraction_worker()` 재연결 성공 분기; `ui/main_window_impl/pipeline_stream.py` `_on_capture_reconnected()` (L303–313)
-* **문제**: 재연결 후 worker의 `worker_last_raw_text`/`worker_last_raw_compact`가 비워지면 동일 full probe text가 다시 전송될 수 있다. UI는 `_on_capture_reconnected()`에서 `_soft_resync()`를 호출해 완화하지만, duplicate append 완전 방지 handshake는 없다.
-* **영향**: 재연결 직후 일시적 suffix desync·중복 문장 표시. 대부분 수렴.
-* **근거**: CodeGraph call path: `reconnected` → `_on_capture_reconnected` → `_soft_resync`. `test_project_audit_queue_hardening.py::test_reconnected_handler_soft_resyncs_when_entries_exist`는 handler 호출만 검증, end-to-end duplicate 없음은 미검증.
-* **권장 수정 방향**: 재연결 후 첫 N개 preview에 대해 “resync without duplicate append” 정책 테스트·구현.
+* **위치**: `ui/main_window_impl/capture_observer.py` — JS `isLikelySubtitleText`
+* **문제(감사 시점)**: `text.length < 3` 으로 1–2자 발화 차단.
+* **상태 (2026-07-22)**: **✅ 해소** — 길이 하한 제거, 한글/영문 1자 허용.  
+  회귀: `test_observer_js_allows_short_hangul_utterance`
+* **우선순위**: ~~Medium~~ → **Resolved**
+
+### 3.6 overflow passthrough 상한 초과 시 preview 드롭 (완화됨, 잔존)
+
+* **위치**: `pipeline_queue._trim_overflow_passthrough_messages`, `Config.OVERFLOW_PASSTHROUGH_MAX=128`
+* **문제**: 극단 burst에서 overflow stash trim으로 메시지 손실 가능. preview coalescing 제거 후 개선됐으나 상한은 존재.
+* **영향**: UI 장기 정체 + 초고속 자막 갱신 시 짧은 구간 누락
+* **근거**: trim/drop 카운터·toast, `test_project_audit_queue_hardening.py`
+* **권장 수정 방향**: sustained burst 부하 테스트 유지, 필요 시 preview 전용 상한/압축 정책
+* **우선순위**: **Low**
+
+### 3.7 보안·입력 검증 — 잔여이지만 낮은 위험
+
+* **위치/상태**:
+  - URL: `core/url_policy.validate_assembly_url` — scheme + `assembly.webcast.go.kr` host만 허용 (**path는 미검증**)
+  - Selector: `validate_subtitle_selector` — 길이·문자 화이트리스트, JS에는 **인자 전달**(문자열 보간 삽입 아님)
+  - SQL: 파라미터 바인딩 + LIKE escape
+  - Runtime path: `_resolve_runtime_relative_path`로 root 이탈 차단
+  - pickle/yaml.unsafe/`shell=True` 앱 런타임 경로 없음(검증 스크립트 subprocess는 로컬 개발용)
+* **문제**: host 허용 내 임의의 path/query는 열 수 있음. 실질 공격면은 로컬 사용자가 악의 URL을 넣는 수준.
+* **영향**: 제한적 (로컬 데스크톱 + 고정 공공 사이트)
+* **권장 수정 방향**: 필요 시 path allowlist(`/main/player.asp`, `pressplayer.asp` 등) 추가
 * **우선순위**: **Low**
 
 ---
 
 ## 4. Potential Functional Gaps
 
-### 확인된 gap (코드·CodeGraph 근거)
+### 4.1 코드·테스트로 확인된 gap
 
-- **`_prepare_preview_raw` 직접 단위 테스트 부재**: CodeGraph가 “no covering tests found”로 표기. 파이프라인 정확성 회귀의 Red 단계가 약하다.
-- **`_build_salvaged_runtime_segments` / `_has_runtime_archived_segments` 테스트 부재**: salvage·full-session search/render 분기 검증 공백.
-- **Selenium 실연동 테스트 부재**: `tests/test_live_contract_smoke.py`는 `RUN_LIVE_SMOKE=1` opt-in이며 DOM/Observer/Chrome 동작은 CI 기본 경로에서 검증하지 않는다.
-- **MainWindow mixin 통합 테스트 부재**: 다수 mixin(`MainWindowPipelineStreamMixin`, `MainWindowPipelineQueueMixin` 등)이 CodeGraph상 dedicated test 없음. `__new__` 부분 구성 패턴에 의존.
-- **CodeGraph 인덱스 미공유**: `.codegraph/`가 `.gitignore`에 포함돼 에이전트 세션마다 `codegraph init` 재실행 필요. PowerShell 기본 실행 정책에서 `codegraph` 직접 호출 실패 → `cmd /c` 우회 필요.
+| Gap | 근거 |
+|-----|------|
+| **Selenium/Chrome 실연동 E2E 부재** | `test_live_contract_smoke.py`는 live_list API opt-in. DOM/Observer/재연결 E2E 없음 |
+| **DBWorker 전용 단위 테스트 약함** | CodeGraph: `database_worker.worker_loop` “no covering tests found”. 간접 테스트는 존재할 수 있음 |
+| **impl contracts가 빈 Protocol** | `ui/main_window_impl/contracts.py`의 Host들이 `pass` 수준 → mixin 계약의 정적 강제력 약함 |
+| **장시간 세션 + soft_resync 결합 시나리오** | resync는 in-memory tail 기준. archive된 과거와 compact history 정합은 간접 검증 |
+| **CLAUDE/GEMINI 구버전** | §3.4 |
 
-### 추정 gap
+### 4.2 추정 gap (미확정 — “추정” 명시)
 
-- **추정**: Python 3.14 환경에서 PyQt6·selenium·pyinstaller 조합이 공식 검증 범위를 벗어날 수 있다. 현재 276+ 테스트는 통과하나 장기 호환 리스크.
-- **추정**: 비정상 종료 후 runtime archive 손상 + flat backup 부재 조합에서 복구본 선택 혼란이 남을 수 있다 (salvage 경고는 코드에 존재).
-- **추정**: Linux/macOS에서 PyQt6+Chrome 동작 가능성은 있으나 README·HWP·pywin32·QSettings·`LOCALAPPDATA`는 Windows 전제.
-- **추정**: `validate_assembly_url()`은 host만 제한하고 path는 검증하지 않는다. 같은 host의 비의도 path도 허용되나 실질 피해는 제한적.
+- **추정**: Python 3.14 + 핀된 PyQt6/Selenium/PyInstaller 조합은 README 권장(3.10–3.12) 밖일 수 있다. 현재 로컬 299 pass는 통과하나 장기 호환은 미검증.
+- **추정**: `keep_browser_on_stop` + 즉시 재시작 시 driver handoff 레이스가 드물게 남을 수 있다(`_driver_lock`·identity helper로 상당 부분 완화).
+- **추정**: 비정상 종료 직후 runtime salvage 경고가 많은 경우, 사용자 복구 UX가 여전히 복잡할 수 있다(기능 자체는 구현됨).
+- **추정**: Linux/macOS는 1급 지원 대상이 아님(README Platform=Windows, HWP/pywin32/LOCALAPPDATA).
+- **추정**: FTS `syntax="fts"` UI 노출이 제한적이면 raw FTS 경로는 사실상 미사용일 수 있음(literal 기본은 의도적).
+
+### 4.3 README/CLAUDE vs 구현 정합
+
+| 항목 | 정합 |
+|------|------|
+| 실시간 수집 / 재연결 / 저장 포맷 | 대체로 일치 |
+| worker/control 큐 분리, non-daemon worker | 일치 |
+| runtime archive + recovery | 일치 |
+| URL host 정책 | 일치 |
+| 버전 번호 | **불일치** (CLAUDE/GEMINI 16.14.7 vs 코드 16.14.8) |
+| 짧은 발화 수집 | **부분 불일치** (Observer JS min length 3) |
+| 회귀 기준선 수치 | CLAUDE 본문 여러 절이 과거 pass 수를 혼재 — README 변경 이력이 더 최신 |
 
 ---
 
 ## 5. Recommended Fix Plan
 
-### 1단계 (즉시 수정): 자동화 빌드·TDD 루프 차단 요소
+### 1단계 — 즉시 수정 (기능 경계 결함)
 
-1. **subprocess 회귀 테스트 견고화** — smoke/pyright를 in-process 또는 capability-gated로 전환해 에이전트 샌드박스 false negative 제거.
-2. **개발 환경 재현성** — `requirements-dev.txt` 설치를 verifier 선행 단계로 강제, Python 권장 버전 문서화.
-3. **핫패스 직접 테스트 추가** — `_prepare_preview_raw` suffix/ambiguous/desync 시나리오 최소 5건.
+1. **`finished`/`error` 전달 경로 수정** (§3.1)  
+   - `run_id` 캡처 → `_emit_worker_message` → 그 다음 `clear_worker_run_id`  
+   - 포화 큐 회귀 테스트 추가
+2. **문서 버전 동기화** (§3.4)  
+   - CLAUDE.md / GEMINI.md → v16.14.8 + v16.14.8 요약 절
+3. **Observer 짧은 발화 정책 정렬** (§3.5)  
+   - JS `isLikelySubtitleText`를 파이프라인 게이트와 동일화
 
-### 2단계 (안정성 개선): 예외 처리·환경 격리
+### 2단계 — 안정성 개선
 
-1. **runtime salvage 테스트** — `_build_salvaged_runtime_segments` 손상 manifest + sibling segment 시나리오.
-2. **overflow sustained burst 테스트** — 128건 초과 preview stash trim 후 tail 무결성.
-3. **재연결 duplicate append 회귀** — worker buffer clear + 동일 probe 재전송 fixture.
-4. **CodeGraph 운영** — CI/에이전트 bootstrap에 `codegraph init` 추가(선택). 또는 인덱스 산출물 공유 정책 검토.
+1. stop 중 terminal 메시지 멱등 처리 또는 관측 로그 (§3.3)  
+2. soft_resync window·ambiguous suffix 실측 로그 기반 튜닝 (PIPELINE_LOCK 준수)  
+3. DBWorker enqueue/shutdown/stale token 단위 테스트 보강  
+4. overflow sustained burst + finished 동시 시나리오
 
-### 3단계 (구조 및 TDD 개선): 모듈화·문서 동기화
+### 3단계 — 구조·장기 개선
 
-1. **파이프라인 테스트 계층 분리** — `core/subtitle_pipeline` 단위 테스트(已有)와 `pipeline_stream` 게이트 테스트를 명시적으로 연결.
-2. **Selenium 추상화 인터페이스** — capture worker의 DOM 읽기를 protocol/mock으로 분리해 에이전트가 Chrome 없이 Red-Green 가능하게 (장기).
-3. **문서 동기화** — README/CLAUDE.md 회귀 기준선을 “subprocess 포함 전체 pytest” vs “in-process subset”으로 구분 기록.
-4. **suffix 알고리즘 개선** — 사용자 요청·`PIPELINE_LOCK.md` 승인 후 (보류 중).
+1. Capture DOM 읽기 Protocol을 테스트 더블로 고정해 Chrome 없는 E2E 시뮬  
+2. `contracts.py` Host에 실제 속성/메서드 시그니처 보강 (pyright 실효성)  
+3. CI matrix: Python 3.10–3.12 + `pip install -r requirements-dev.txt`  
+4. suffix 알고리즘 개선은 사용자 요청·로그 근거 있을 때만 (보류 권장)
 
 ---
 
 ## 6. Test Recommendations
 
-### 6.1 자동화·환경 격리 (Superpowers 우선)
+### 6.1 필수 추가 (1단계)
 
-- `test_entrypoint_*` / `test_pyright_regression`를 in-process 래퍼로 대체하거나, `subprocess` 실패 시 `@pytest.mark.requires_subprocess`로 분리해 기본 `pytest -q`가 에이전트 환경에서 녹색 유지되게 한다.
-- `run_release_verification.py --offline`에 “subprocess-free” 모드 추가 검증.
-- CI matrix: Python 3.10 / 3.11 / 3.12 + `pip install -r requirements-dev.txt` 고정.
+| 테스트 | 내용 |
+|--------|------|
+| `test_worker_finished_survives_full_queue` | maxsize=1 포화 상태에서 worker finally의 `finished`가 UI 핸들러까지 도달 |
+| `test_finished_emitted_with_run_id_envelope` | `clear_worker_run_id` 이후가 아니라 envelope/terminal stash 경로 사용 검증 |
+| `test_observer_short_utterance_policy` | Observer 필터가 “네”/“예” 등 1–2자를 파이프라인과 동일하게 취급하는지(또는 probe 보정) |
 
-### 6.2 `_prepare_preview_raw` (핵심 Red-Green 대상)
+### 6.2 안정성 보강 (2단계)
 
-- suffix 없음 → full normalized 반환.
-- suffix 일치·신규 delta만 추출.
-- suffix 미발견 → `_extract_stream_delta` / `_slice_incremental_part` fallback.
-- ambiguous suffix (`first_pos != last_pos`) → skip 후 threshold에서 `_soft_resync`.
-- desync count ≥ threshold → `preview suffix desync reset` + full accept.
+| 테스트 | 내용 |
+|--------|------|
+| stop 중 finished/error 멱등 | `_is_stopping=True`에서도 UI가 깨지지 않음 |
+| soft_resync after 100+ entries | 최근 5개만으로 suffix 재구성 후 다음 preview delta 정확성 |
+| DBWorker serial + shutdown | 종료 중 enqueue 거부, done_event, stale request token |
+| reconnect + full queue | reconnected + preview suppress + finished 순서 |
 
-### 6.3 큐 압력·coalescing (기존 확장)
-
-- fake queue `maxsize=1` + 연속 preview 100건 → overflow passthrough 후 drain 시 delta 누락 없음.
-- overflow 129건 적재 → `subtitle_reset` 보존·drop 통계 노출.
-- `_is_stopping=True` + 2000건 preview → tail 확정 보장 (기존 테스트 유지·확장).
-
-### 6.4 persistence/recovery
-
-- manifest 손상 + sibling `segment_*.json` salvage → warning payload·`skipped_files` 검증.
-- `_runtime_entries_fingerprint_matches` 불일치 시 strict load 실패 / salvage 제외.
-- runtime archive 활성 시 `_auto_backup()`이 flat JSON이 아닌 recovery pointer 갱신임을 검증.
-
-### 6.5 재연결·파이프라인
-
-- 재연결 후 동일 probe text 재전송 → duplicate append 없음 정책 명시 테스트.
-- `subtitle_reset` 직후 첫 preview가 이전 entry와 merge되지 않음 (기존 `test_pipeline_risk_hardening.py` 유지).
-
-### 6.6 live list / URL (기존 유지)
-
-- `normalize_live_xcode/xcgcd` reject/accept matrix.
-- `validate_assembly_url` press player·subdomain·invalid scheme 회귀.
-- `RUN_LIVE_SMOKE=1` opt-in + `check_live_list_drift.py` 주기 실행.
-
-### 6.7 회귀 게이트 (권장 명령)
+### 6.3 기존 유지 게이트
 
 ```bash
 pip install -r requirements-dev.txt
@@ -230,43 +296,47 @@ python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/sm
 python scripts/run_release_verification.py --offline --skip-build --instantiate-window
 ```
 
-에이전트 환경에서는 subprocess 회귀 3건 실패 가능성을 인지하고, 직접 smoke·pyright로 교차 검증할 것.
+- live 계약: `RUN_LIVE_SMOKE=1 pytest tests/test_live_contract_smoke.py` (opt-in)
+- 파이프라인 변경 시: `PIPELINE_LOCK.md` §2 이력 + `test_prepare_preview_raw.py` / `test_core_algorithm.py` 필수
+
+### 6.4 이번 감사에서 확인된 기준선
+
+| 명령 | 결과 |
+|------|------|
+| `pytest -q` | 299 passed, 2 skipped |
+| `pyright --outputjson` | 0 errors / 0 warnings |
 
 ---
 
-## 7. 조치 이력 참고 (2026-06-25 완료 항목)
+## 7. Appendix — 이전 조치 이력 (요약)
 
-| 항목 | 파일/심볼 | 테스트 |
-|------|-----------|--------|
-| preview coalescing 제거 | `pipeline_queue.py` | `test_project_audit_queue_hardening.py` |
-| overflow 우선순위 trim | `pipeline_queue.py`, `Config.OVERFLOW_PASSTHROUGH_MAX` | 동일 |
-| stopping preview drain | `pipeline_stream.py` | 동일 |
-| 재연결 resync | `pipeline_messages.py`, `pipeline_stream.py` | `test_reconnected_handler_soft_resyncs_when_entries_exist` |
-| selector 검증 | `core/selector_policy.py` | `test_selector_policy.py` |
-| control 큐 분리 | `AppControlMessageQueue` | `test_project_audit_phase3.py` |
-| DB Result 타입 | `core/database_result.py` | `test_database_result.py` |
-| non-daemon worker | `runtime_lifecycle.py` | lifecycle 회귀 |
-| 복구 UX | `persistence_session.py` | `test_prompt_session_recovery_*` |
-| release verifier | `--with-live-smoke` | `test_release_verification_script.py` |
+### 2026-06-25 (v16.14.7 감사 후속)
 
----
+preview coalescing 제거, overflow 우선순위 trim, stopping preview drain, control 큐 분리, `DatabaseOperationResult`, non-daemon worker, selector 검증, 재연결 soft_resync, 복구 UX 등.
 
-## 8. 2026-06-30 감사 후속 구현 요약
+### 2026-06-30 (v16.14.8)
 
-| 항목 | 구현 | 테스트 |
-|------|------|--------|
-| in-process smoke/pyright fallback | `tests/test_support/subprocess_compat.py` | `test_config_paths.py`, `test_pyright_regression.py` |
-| subprocess 회귀 분리 | `@pytest.mark.requires_subprocess` + conftest skip | `*_subprocess` 3건 |
-| `_prepare_preview_raw` 직접 테스트 | — | `tests/test_prepare_preview_raw.py` |
-| 재연결 duplicate handshake | `pipeline_stream.py` `_reconnect_preview_suppress_until_delta` | `tests/test_reconnect_preview_handshake.py` |
-| runtime salvage 테스트 | — | `tests/test_runtime_salvage_audit.py` |
-| overflow burst 확장 | — | `test_project_audit_queue_hardening.py` |
-| capture Protocol | `core/capture_contracts.py` | `tests/test_capture_contracts.py` |
-| release verifier deps/codegraph | `run_release_verification.py --skip-deps`, `--init-codegraph` | `test_release_verification_script.py` |
-| pytest stub 보강 | `typings/pytest/__init__.pyi` | `test_pyright_regression.py` |
+in-process smoke/pyright fallback, `_prepare_preview_raw` 전용 테스트, reconnect handshake, runtime salvage 테스트, capture Protocol, release verifier deps/codegraph 옵션.
 
-**회귀 기준선 (구현 후)**: `pytest -q` **299 passed / 2 skipped**, `pyright --outputjson` **0 errors**
+### 2026-07-22 (본 감사)
+
+초기 감사: 기능 코드 변경 없음. High로 worker `finished` raw put 경로를 식별.
+
+### 2026-07-22 (감사 후속 구현)
+
+| 권고 | 상태 | 비고 |
+|------|------|------|
+| §3.1 finished run_id envelope + terminal stash | ✅ | `capture_browser.py` finally |
+| §3.3 stop 중 finished/error 멱등 | ✅ | `pipeline_messages.py` |
+| §3.4 CLAUDE/GEMINI 버전 동기화 | ✅ | v16.14.8 |
+| §3.5 Observer 짧은 발화 | ✅ | `length < 3` 제거 |
+| §3.2 suffix 구조 한계 | 보류 | PIPELINE_LOCK — 알고리즘 변경 없음, soft_resync 회귀만 보강 |
+| DBWorker 단위 테스트 | ✅ | shutdown 거부 + result emit |
+| contracts Protocol 보강 | ⚠️ 보류 | 시그니처 명시는 pyright abstract/override 회귀 → 문서화만 유지 |
+| Selenium E2E / CI matrix | 미착수 | 장기(3단계 잔여) |
+
+**회귀 파일**: `tests/test_project_audit_20260722.py`
 
 ---
 
-*이 문서는 기능 감사·Superpowers 자동화 적합성 검증 결과이다. CodeGraph 인덱스는 로컬 생성(`.codegraph/`, gitignore 대상)되며 `run_release_verification.py --init-codegraph`로 재생성할 수 있다.*
+*감사 리포트 + 후속 구현 현황 문서. suffix 알고리즘 재설계는 별도 승인 작업.*

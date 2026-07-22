@@ -224,9 +224,12 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
     def _handle_message(self, msg_type, data):
         pipeline_mod = _pipeline_public()
         try:
+            # stop 중에도 finished/error는 멱등 흡수한다(큐에서 dequeue 후 유실 방지).
             if self._is_stopping and msg_type not in (
                 "db_task_result",
                 "db_task_error",
+                "error",
+                "finished",
                 "hydrate_cancelled",
                 "hydrate_done",
                 "hydrate_failed",
@@ -294,6 +297,14 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self._show_toast(str(message), str(toast_type), duration)
 
             elif msg_type == "error":
+                if bool(self.__dict__.get("_is_stopping", False)):
+                    logger.info(
+                        "stop 진행 중 error 수신(멱등 흡수): %s",
+                        str(data)[:200],
+                    )
+                    self._retire_capture_run()
+                    self.worker = None
+                    return
                 self._retire_capture_run()
                 self.worker = None
                 self.progress.hide()
@@ -312,6 +323,15 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     success = True
                     error_message = ""
                     finalize_preview = True
+                if bool(self.__dict__.get("_is_stopping", False)):
+                    logger.info(
+                        "stop 진행 중 finished 수신(멱등 흡수): success=%s error=%s",
+                        success,
+                        error_message[:200] if error_message else "",
+                    )
+                    self._retire_capture_run()
+                    self.worker = None
+                    return
                 self._retire_capture_run()
                 self.worker = None
                 if finalize_preview:

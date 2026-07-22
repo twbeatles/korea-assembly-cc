@@ -682,15 +682,27 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                     preserve_driver = False
             if not preserve_driver:
                 self._dispose_driver(driver, source="worker_finally")
-            if callable(clear_worker_run_id):
-                clear_worker_run_id()
-            self.message_queue.put(
-                (
-                    "finished",
-                    {
-                        "success": terminal_success,
-                        "error": terminal_error,
-                        "finalize_preview": terminal_finalize_preview,
-                    },
+            # run_id를 먼저 clear하면 finished가 raw put 경로로 빠져
+            # terminal overflow stash 보호를 받지 못한다. envelope 전달 후 해제.
+            finished_payload = {
+                "success": terminal_success,
+                "error": terminal_error,
+                "finalize_preview": terminal_finalize_preview,
+            }
+            try:
+                emit = getattr(self, "_emit_worker_message", None)
+                if callable(emit):
+                    emit("finished", finished_payload, run_id=run_id)
+                else:
+                    if callable(set_worker_run_id):
+                        set_worker_run_id(run_id)
+                    self.message_queue.put(("finished", finished_payload))
+            except Exception as emit_err:
+                logger.error(
+                    "finished 메시지 전달 실패 (run_id=%s): %s",
+                    run_id,
+                    emit_err,
                 )
-            )
+            finally:
+                if callable(clear_worker_run_id):
+                    clear_worker_run_id()

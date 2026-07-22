@@ -4,8 +4,20 @@ import time
 
 import pytest
 
+from ui.main_window_common import WorkerQueueMessage
+
 mw_mod = pytest.importorskip("ui.main_window")
 MainWindow = mw_mod.MainWindow
+
+
+def _iter_queue_messages(message_queue):
+    while not message_queue.empty():
+        item = message_queue.get_nowait()
+        if isinstance(item, WorkerQueueMessage):
+            yield str(item.msg_type), item.payload
+            continue
+        if isinstance(item, tuple) and len(item) == 2:
+            yield str(item[0]), item[1]
 
 
 class _FakeDriver:
@@ -100,8 +112,7 @@ def test_extraction_worker_emits_structured_preview_payload(monkeypatch):
     )
 
     preview_payloads = []
-    while not win.message_queue.empty():
-        msg_type, payload = win.message_queue.get_nowait()
+    for msg_type, payload in _iter_queue_messages(win.message_queue):
         if msg_type == "preview":
             preview_payloads.append(payload)
 

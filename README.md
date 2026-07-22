@@ -283,10 +283,11 @@ python scripts/run_release_verification.py --with-live-smoke   # live contract s
 
 ## 📝 변경 이력
 
-### v16.14.8 (2026-06-30)
+### v16.14.8 (2026-06-30 ~ 2026-07-22)
 - **감사 후속 자동화/TDD 보강** — in-process smoke·pyright fallback, `_prepare_preview_raw`·salvage·reconnect handshake 테스트, capture Protocol, release verifier `pip install`/`--init-codegraph`
 - **재연결 중복 append 완화** — `_reconnect_preview_suppress_until_delta` handshake
-- 회귀 기준: `pytest -q` 299 pass / 2 skipped, `pyright` 0 errors
+- **2026-07-22 감사 후속** — worker `finished` terminal 전달 수정, stop 중 finished/error 멱등 흡수, Observer 짧은 발화 정책 정렬, CLAUDE/GEMINI v16.14.8 동기화
+- 회귀 기준: `pytest -q` 306 pass / 2 skipped, `pyright` 0 errors
 
 ### v16.14.7 (2026-04-01 ~ 2026-06-25)
 - **감사 후속 안정화 (2026-06-25)** — preview coalescing 제거, overflow 우선순위 trim, stopping 시 preview 완전 drain, worker/control 큐 분리(`AppControlMessageQueue`), DB `DatabaseOperationResult`, extraction worker non-daemon, CSS selector 사전 검증, 복구 다이얼로그 우선순위 안내

@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.7
+- **버전**: v16.14.8
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -221,7 +221,14 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.7 기준)
+## 6. 최신 변경 요약 (v16.14.8 기준)
+
+### v16.14.8 PROJECT_AUDIT 후속 개선 메모 (2026-07-22)
+- **finished terminal 전달**: ExtractionWorker `finally`에서 `clear_worker_run_id` 전에 `_emit_worker_message("finished", ..., run_id=)`로 terminal overflow stash 보호
+- **stop 중 finished/error 멱등 흡수**: `_is_stopping` 화이트리스트에 포함하고 UI 이중 finalize/다이얼로그를 피함
+- **Observer 짧은 발화**: JS `isLikelySubtitleText`를 파이프라인과 같이 한글/영문 1자 허용(길이 하한 제거)
+- **문서 버전**: CLAUDE/GEMINI를 v16.14.8로 동기화
+- **회귀**: `tests/test_project_audit_20260722.py` (finished 포화 큐, stop 멱등, observer 정책, soft_resync, DBWorker)
 
 ### v16.14.7 브라우저 자동 복구 + 내부 구조 분리 정합화 메모
 - **Chrome 세션 헬스체크**: Worker가 `window_handles`, `current_url`, script ping 기준으로 브라우저 생존을 확인하고 연속 실패 시 recoverable WebDriver 오류로 승격

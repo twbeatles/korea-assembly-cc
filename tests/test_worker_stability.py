@@ -3,8 +3,23 @@ import threading
 
 import pytest
 
+from ui.main_window_common import WorkerQueueMessage
+
 mw_mod = pytest.importorskip("ui.main_window")
 MainWindow = mw_mod.MainWindow
+
+
+def _drain_worker_queue(message_queue) -> list[tuple[str, object]]:
+    """plain tuple 또는 WorkerQueueMessage envelope를 (type, payload)로 정규화한다."""
+    drained: list[tuple[str, object]] = []
+    while not message_queue.empty():
+        item = message_queue.get_nowait()
+        if isinstance(item, WorkerQueueMessage):
+            drained.append((str(item.msg_type), item.payload))
+            continue
+        if isinstance(item, tuple) and len(item) == 2:
+            drained.append((str(item[0]), item[1]))
+    return drained
 
 
 class _ImmediateEvent:
@@ -231,9 +246,7 @@ def test_extraction_worker_respects_auto_reconnect_setting(monkeypatch):
 
     MainWindow._extraction_worker(win, "https://example.com/live", "#viewSubtit", False)
 
-    queued = []
-    while not win.message_queue.empty():
-        queued.append(win.message_queue.get_nowait())
+    queued = _drain_worker_queue(win.message_queue)
 
     assert delay_calls == []
     assert any(
@@ -242,7 +255,6 @@ def test_extraction_worker_respects_auto_reconnect_setting(monkeypatch):
         and payload.get("success") is False
         and "Chrome 연결이 끊겨 수집을 종료합니다" in str(payload.get("error", ""))
         for msg_type, payload in queued
-        if isinstance((msg_type, payload), tuple)
     )
     assert not any(msg_type == "error" for msg_type, _payload in queued)
 
@@ -341,9 +353,7 @@ def test_extraction_worker_detects_live_url_when_xcgcd_missing(monkeypatch):
     assert detect_calls == [original_url]
     assert driver.get_calls[:2] == [original_url, resolved_url]
 
-    queued = []
-    while not win.message_queue.empty():
-        queued.append(win.message_queue.get_nowait())
+    queued = _drain_worker_queue(win.message_queue)
     assert ("resolved_url", resolved_url) in queued
 
 
@@ -367,9 +377,7 @@ def test_extraction_worker_skips_live_detect_when_xcgcd_exists(monkeypatch):
 
     assert driver.get_calls == [url_with_xcgcd]
 
-    queued = []
-    while not win.message_queue.empty():
-        queued.append(win.message_queue.get_nowait())
+    queued = _drain_worker_queue(win.message_queue)
     assert not any(msg_type == "resolved_url" for msg_type, _ in queued)
 
 
@@ -404,9 +412,7 @@ def test_extraction_worker_reconnect_reuses_detected_url(monkeypatch):
     assert drivers[1].get_calls[0] == detected_url
     assert detect_calls == [original_url]
 
-    queued = []
-    while not win.message_queue.empty():
-        queued.append(win.message_queue.get_nowait())
+    queued = _drain_worker_queue(win.message_queue)
     assert any(msg_type == "reconnected" for msg_type, _payload in queued)
 
 
@@ -495,9 +501,7 @@ def test_extraction_worker_reconnects_after_healthcheck_failures(monkeypatch):
     assert drivers[1].get_calls[0] == detected_url
     assert detect_calls == [original_url]
 
-    queued = []
-    while not win.message_queue.empty():
-        queued.append(win.message_queue.get_nowait())
+    queued = _drain_worker_queue(win.message_queue)
     assert any(msg_type == "reconnecting" for msg_type, _payload in queued)
     assert any(msg_type == "reconnected" for msg_type, _payload in queued)
 
@@ -529,9 +533,7 @@ def test_extraction_worker_keeps_single_driver_when_healthcheck_is_healthy(
 
     assert len(drivers) == 1
 
-    queued = []
-    while not win.message_queue.empty():
-        queued.append(win.message_queue.get_nowait())
+    queued = _drain_worker_queue(win.message_queue)
     assert not any(msg_type == "reconnecting" for msg_type, _payload in queued)
 
 

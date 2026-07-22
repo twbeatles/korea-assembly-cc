@@ -3,8 +3,8 @@
 > **내부 개발 문서** — 자막 수집 파이프라인의 정확성 분석 및 개선 제안을 담은 개발자용 문서입니다.
 
 > **분석 일자**: 2026-02-12 (v16.12 기준)  
-> **현재 상태**: v16.14.7까지 반영 완료. 아래 §2의 분석 범위(글로벌 히스토리 + suffix 코어 의미론)는 전 버전에 걸쳐 변경 없이 유지됨.  
-> **참조 문서**: [PIPELINE_LOCK.md](PIPELINE_LOCK.md), [CLAUDE.md](CLAUDE.md)
+> **현재 상태**: v16.14.8까지 반영 완료. 아래 §2의 분석 범위(글로벌 히스토리 + suffix 코어 의미론)는 전 버전에 걸쳐 변경 없이 유지됨.  
+> **참조 문서**: [PIPELINE_LOCK.md](PIPELINE_LOCK.md), [CLAUDE.md](CLAUDE.md), [PROJECT_AUDIT.md](PROJECT_AUDIT.md)
 
 ---
 

@@ -95,8 +95,10 @@ class MainWindowCaptureObserverMixin(CaptureObserverBase):
                 }
 
                 function isLikelySubtitleText(text) {
+                    // 파이프라인 is_meaningful_subtitle_text 와 정렬:
+                    // 한글/영문이 1자라도 있으면 길이 하한 없이 허용 (네/예 등)
                     if (!text) return false;
-                    if (text.length < 3 || text.length > 320) return false;
+                    if (text.length > 320) return false;
                     if (!/[가-힣A-Za-z]/.test(text)) return false;
                     if (/^[\\d\\s:.,\\-_/()%]+$/.test(text)) return false;
                     return true;

@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.7
+- **버전**: v16.14.8
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ## 2. 기술 스택
@@ -434,6 +434,12 @@ pip install -r requirements-dev.txt
 - 로컬 `typings/` stub과 `pytest.ini --basetemp=.pytest_tmp`로 글로벌 Python/Windows TEMP 권한 편차를 흡수하고, 루트 `.hwpx` 산출물도 `.gitignore`에 반영
 - `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
 - `pytest -q` 85 pass, `pyright` 0 errors
+
+## 9.9.4a v16.14.8 PROJECT_AUDIT 후속 개선 (2026-07-22)
+- Worker `finished`를 run_id envelope + terminal stash 경로로 전달 (`clear_worker_run_id` 이후 raw put 제거)
+- stop 중 `finished`/`error` 멱등 흡수
+- Observer 짧은 발화(네/예) 정책을 파이프라인과 정렬
+- CLAUDE/GEMINI 버전 v16.14.8 동기화, `tests/test_project_audit_20260722.py` 추가
 
 ## 9.9.4 v16.14.7 브라우저 자동 복구 + 내부 구조 분리 정합화 (2026-04-01)
 ### 🛡️ 브라우저 자동 복구
