@@ -34,6 +34,13 @@ ENV/
 .idea/
 .claude/
 .grok/
+.cursor/
+.codex/
+.continue/
+.agents/
+.specify/
+# Speckit 로컬 기능 명세/워크플로 (프로젝트 제품 문서 docs/ 와 구분)
+specs/
 *.code-workspace
 *.local
 
