@@ -21,6 +21,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          # 이 저장소는 requirements.txt / pyproject.toml 대신
+          # requirements-dev.txt 를 단일 의존성 핀 파일로 쓴다.
+          # cache: pip 기본 검색 경로만 쓰면 setup-python 이 즉시 실패한다.
+          cache-dependency-path: requirements-dev.txt
 
       - name: Install dependencies
         run: |

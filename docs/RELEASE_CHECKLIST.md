@@ -18,6 +18,15 @@ python scripts/run_release_verification.py --offline --skip-build --instantiate-
 python scripts/run_release_verification.py
 ```
 
+### GitHub Actions (`.github/workflows/ci.yml`)
+
+- 의존성 핀은 **`requirements-dev.txt` 단일 파일**이다 (`requirements.txt` / `pyproject.toml` 없음).
+- `actions/setup-python` 에 `cache: pip` 를 쓸 때는 반드시  
+  `cache-dependency-path: requirements-dev.txt` 를 함께 지정한다.  
+  누락 시 setup 단계에서  
+  `No file ... matched to [**/requirements.txt or **/pyproject.toml]` 로 즉시 실패한다.
+- 회귀: `tests/test_ci_workflow.py`
+
 ## 2. 패키징
 
 ```bash
