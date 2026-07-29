@@ -25,7 +25,11 @@ python scripts/run_release_verification.py
   `cache-dependency-path: requirements-dev.txt` 를 함께 지정한다.  
   누락 시 setup 단계에서  
   `No file ... matched to [**/requirements.txt or **/pyproject.toml]` 로 즉시 실패한다.
-- 회귀: `tests/test_ci_workflow.py`
+- Windows runner 환경 변수 고정:
+  - `PYTHONUTF8=1`, `PYTHONIOENCODING=utf-8` (한글 smoke JSON stdout 유실 방지)
+  - `QT_QPA_PLATFORM=offscreen` (GUI 없는 runner 에서 MainWindow smoke)
+- subprocess smoke 는 `--smoke-output` 파일 fallback 을 사용한다.
+- 회귀: `tests/test_ci_workflow.py`, `tests/test_config_paths.py`
 
 ## 2. 패키징
 

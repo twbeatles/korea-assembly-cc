@@ -77,3 +77,11 @@ def test_ci_does_not_assume_missing_requirements_txt() -> None:
         r"pip\s+install\s+-r\s+requirements\.txt\b",
         text,
     ), "CI must not pip install -r requirements.txt when the file is absent"
+
+
+def test_ci_forces_utf8_and_offscreen_for_windows_runner() -> None:
+    """Windows runner 에서 한글 JSON smoke / Qt 창 생성이 안정적으로 동작하도록 환경 고정."""
+    text = _workflow_text()
+    assert re.search(r"(?m)^\s*PYTHONUTF8:\s*[\"']?1[\"']?\s*$", text)
+    assert re.search(r"(?m)^\s*PYTHONIOENCODING:\s*utf-8\s*$", text)
+    assert re.search(r"(?m)^\s*QT_QPA_PLATFORM:\s*offscreen\s*$", text)

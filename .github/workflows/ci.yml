@@ -12,6 +12,11 @@ jobs:
     name: pytest + pyright (Windows)
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      # Windows runner 기본 코드페이지에서도 한글 JSON/로그 stdout 이 깨지지 않게 한다.
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      QT_QPA_PLATFORM: offscreen
     steps:
       - name: Checkout
         uses: actions/checkout@v4

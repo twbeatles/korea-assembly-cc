@@ -112,17 +112,46 @@ def _print_json_line(payload: dict[str, object], *, output_path: str = "") -> No
 
 
 def _write_json_line(stream: object, line: str) -> bool:
+    """스트림에 JSON 한 줄을 기록한다.
+
+    Windows CI 등에서 stdout 인코딩이 cp949/cp1252 이면 한글 payload 가
+    UnicodeEncodeError 로 실패한다. 텍스트 기록 실패 시 UTF-8 버퍼 기록과
+    reconfigure 를 순서대로 시도한다.
+    """
+    payload = f"{line}\n"
     write = getattr(stream, "write", None)
     flush = getattr(stream, "flush", None)
-    if not callable(write):
-        return False
-    try:
-        write(f"{line}\n")
-        if callable(flush):
-            flush()
-    except (OSError, UnicodeError, ValueError):
-        return False
-    return True
+    if callable(write):
+        try:
+            write(payload)
+            if callable(flush):
+                flush()
+            return True
+        except (OSError, UnicodeError, ValueError):
+            pass
+
+    buffer = getattr(stream, "buffer", None)
+    if buffer is not None:
+        try:
+            buffer.write(payload.encode("utf-8"))
+            buffer_flush = getattr(buffer, "flush", None)
+            if callable(buffer_flush):
+                buffer_flush()
+            return True
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    reconfigure = getattr(stream, "reconfigure", None)
+    if callable(reconfigure) and callable(write):
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+            write(payload)
+            if callable(flush):
+                flush()
+            return True
+        except Exception:
+            pass
+    return False
 
 
 def _run_storage_preflight_for_cli(storage_dir: str = "") -> tuple[bool, str, dict[str, str]]:

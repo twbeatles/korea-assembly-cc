@@ -199,6 +199,43 @@ def _assert_window_smoke_payload(payload: dict, target: Path) -> None:
     assert Path(payload["storage"]["storage_dir"]) == target.resolve()
 
 
+def _subprocess_env_for_smoke() -> dict[str, str]:
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    # Windows CI 코드페이지에서 한글 smoke JSON 이 stdout 에서 유실되지 않도록 고정
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def _load_smoke_payload(
+    *,
+    stdout: str,
+    stderr: str,
+    output_file: Path | None = None,
+) -> dict:
+    """stdout / --smoke-output / stderr 순으로 smoke JSON 한 줄을 파싱한다."""
+    if output_file is not None and output_file.is_file():
+        text = output_file.read_text(encoding="utf-8").strip()
+        if text:
+            return json.loads(text.splitlines()[-1])
+    for stream_text in (stdout, stderr):
+        for line in reversed((stream_text or "").splitlines()):
+            candidate = line.strip()
+            if not candidate.startswith("{"):
+                continue
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+    raise AssertionError(
+        "smoke JSON payload not found\n"
+        f"stdout={stdout!r}\n"
+        f"stderr={stderr!r}\n"
+        f"output_file={output_file}"
+    )
+
+
 def test_entrypoint_storage_preflight_smoke_outputs_json_in_process(tmp_path):
     from tests.test_support.subprocess_compat import run_entrypoint_main
 
@@ -218,6 +255,8 @@ def test_entrypoint_storage_preflight_smoke_outputs_json_in_process(tmp_path):
 @pytest.mark.requires_subprocess
 def test_entrypoint_storage_preflight_smoke_outputs_json_subprocess(tmp_path):
     target = tmp_path / "smoke-storage"
+    smoke_output = tmp_path / "storage-smoke.json"
+    env = _subprocess_env_for_smoke()
     result = subprocess.run(
         [
             sys.executable,
@@ -225,14 +264,27 @@ def test_entrypoint_storage_preflight_smoke_outputs_json_subprocess(tmp_path):
             "--smoke-storage-preflight",
             "--smoke-storage-dir",
             str(target),
+            "--smoke-output",
+            str(smoke_output),
         ],
         check=False,
         capture_output=True,
         encoding="utf-8",
+        errors="replace",
+        env=env,
     )
 
-    assert result.returncode == 0
-    _assert_storage_preflight_payload(json.loads(result.stdout.strip()), target)
+    assert result.returncode == 0, (
+        f"returncode={result.returncode}\n"
+        f"stdout={result.stdout!r}\n"
+        f"stderr={result.stderr!r}"
+    )
+    payload = _load_smoke_payload(
+        stdout=result.stdout,
+        stderr=result.stderr,
+        output_file=smoke_output,
+    )
+    _assert_storage_preflight_payload(payload, target)
 
 
 def test_entrypoint_smoke_instantiate_window_outputs_json_in_process(tmp_path, monkeypatch):
@@ -256,8 +308,8 @@ def test_entrypoint_smoke_instantiate_window_outputs_json_in_process(tmp_path, m
 @pytest.mark.requires_subprocess
 def test_entrypoint_smoke_instantiate_window_outputs_json_subprocess(tmp_path):
     target = tmp_path / "window-smoke-storage"
-    env = os.environ.copy()
-    env["QT_QPA_PLATFORM"] = "offscreen"
+    smoke_output = tmp_path / "window-smoke.json"
+    env = _subprocess_env_for_smoke()
     result = subprocess.run(
         [
             sys.executable,
@@ -266,15 +318,27 @@ def test_entrypoint_smoke_instantiate_window_outputs_json_subprocess(tmp_path):
             "--smoke-instantiate-window",
             "--smoke-storage-dir",
             str(target),
+            "--smoke-output",
+            str(smoke_output),
         ],
         check=False,
         capture_output=True,
         encoding="utf-8",
+        errors="replace",
         env=env,
     )
 
-    assert result.returncode == 0, result.stderr
-    _assert_window_smoke_payload(json.loads(result.stdout.strip()), target)
+    assert result.returncode == 0, (
+        f"returncode={result.returncode}\n"
+        f"stdout={result.stdout!r}\n"
+        f"stderr={result.stderr!r}"
+    )
+    payload = _load_smoke_payload(
+        stdout=result.stdout,
+        stderr=result.stderr,
+        output_file=smoke_output,
+    )
+    _assert_window_smoke_payload(payload, target)
 
 
 def test_entrypoint_json_output_prefers_working_stdout(monkeypatch):
@@ -307,6 +371,46 @@ def test_entrypoint_json_output_falls_back_when_stdout_is_invalid(monkeypatch):
     entrypoint._print_json_line({"ok": True})
 
     assert json.loads(stderr.getvalue()) == {"ok": True}
+
+
+def test_entrypoint_json_output_uses_utf8_buffer_when_codepage_rejects_korean(
+    monkeypatch,
+):
+    """cp1252 등 레거시 stdout 에서도 한글 smoke JSON 이 유실되지 않아야 한다."""
+    entrypoint = _load_entrypoint_module()
+    buffer = io.BytesIO()
+
+    class LegacyCodepageStdout:
+        encoding = "cp1252"
+
+        def __init__(self) -> None:
+            self.buffer = buffer
+
+        def write(self, text: str) -> int:
+            # Windows 기본 코드페이지처럼 한글을 거부한다.
+            text.encode(self.encoding)
+            raise AssertionError("text write should fail before this for Korean")
+
+        def flush(self) -> None:
+            return None
+
+    stdout = LegacyCodepageStdout()
+    stderr = io.StringIO()
+    monkeypatch.setattr(entrypoint.sys, "stdout", stdout)
+    monkeypatch.setattr(entrypoint.sys, "stderr", stderr)
+
+    entrypoint._print_json_line(
+        {
+            "ok": True,
+            "window_title": "국회 의사중계 자막 추출기 v16.14.8",
+        }
+    )
+
+    raw = buffer.getvalue().decode("utf-8").strip()
+    payload = json.loads(raw)
+    assert payload["ok"] is True
+    assert "국회" in payload["window_title"]
+    assert stderr.getvalue() == ""
 
 
 def test_merge_and_streaming_config_defaults():
