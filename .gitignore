@@ -13,12 +13,16 @@ mcps/
 .mypy_cache/
 .tox/
 .nox/
+.hypothesis/
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
+*.cover
+.cache/
 
 # -----------------------------------------------------------------------------
-# Virtual environments / local IDE
+# Virtual environments / local IDE / agent scratch
 # -----------------------------------------------------------------------------
 .venv/
 venv/
@@ -29,7 +33,16 @@ ENV/
 !.vscode/settings.json
 .idea/
 .claude/
+.grok/
 *.code-workspace
+*.local
+
+# -----------------------------------------------------------------------------
+# Secrets / local env (never commit)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
 
 # -----------------------------------------------------------------------------
 # Build / packaging artifacts
@@ -39,6 +52,7 @@ agent-tools/
 build/
 dist/
 *.pkg
+*.egg
 *.egg-info/
 *.spec.bak
 /*.manifest
@@ -48,6 +62,7 @@ dist/
 /*.xref
 /warn-*.txt
 pip-wheel-metadata/
+__pypackages__/
 
 # -----------------------------------------------------------------------------
 # Project runtime outputs (do not upload)
@@ -63,6 +78,9 @@ tmp_extension.crx
 /portable.flag
 /settings.ini
 .storage_probe
+# 종료 진단 JSON (기본 위치 logs/ 이지만 루트 유출 방지)
+shutdown_diagnostic_*.json
+**/shutdown_diagnostic_*.json
 
 # -----------------------------------------------------------------------------
 # Local database/state files
@@ -106,4 +124,6 @@ backup_*.json
 # -----------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
+ehthumbs.db
 desktop.ini
+$RECYCLE.BIN/

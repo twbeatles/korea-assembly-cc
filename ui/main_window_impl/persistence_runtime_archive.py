@@ -3,6 +3,7 @@
 import hashlib
 import bisect
 import shutil
+import time
 from typing import Any, Iterable, cast
 from uuid import uuid4
 
@@ -412,15 +413,64 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                         continue
 
             children = [child for child in runtime_root.iterdir() if child.is_dir()]
-            children.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-            keep_dirs = set(children[:3]) | preserved_dirs
+            try:
+                children.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+            except Exception:
+                children.sort(key=lambda path: str(path), reverse=True)
+
+            keep_recent = max(
+                1, int(getattr(Config, "RUNTIME_ARCHIVE_KEEP_RECENT", 3) or 3)
+            )
+            try:
+                max_age_days = float(
+                    getattr(Config, "RUNTIME_ARCHIVE_MAX_AGE_DAYS", 7) or 7
+                )
+            except Exception:
+                max_age_days = 7.0
+            max_age_seconds = max(0.0, max_age_days) * 86400.0
+            now_ts = time.time()
+            recent_dirs = set(children[:keep_recent])
+
+            preserved_resolved: set[Path] = set()
+            for path in preserved_dirs:
+                try:
+                    preserved_resolved.add(Path(path).resolve())
+                except Exception:
+                    continue
+
+            removed = 0
             for child in children:
-                if child in keep_dirs:
+                try:
+                    resolved = child.resolve()
+                except Exception:
+                    resolved = child
+                if resolved in preserved_resolved:
+                    continue
+                try:
+                    mtime = float(child.stat().st_mtime)
+                except Exception:
+                    mtime = now_ts
+                age_seconds = max(0.0, now_ts - mtime)
+                too_old = max_age_seconds > 0 and age_seconds > max_age_seconds
+                is_recent = child in recent_dirs
+                # 보존 대상이 아니면: (너무 오래됨) 또는 (최근 N개 밖)
+                if not too_old and is_recent:
                     continue
                 try:
                     shutil.rmtree(child, ignore_errors=True)
+                    removed += 1
+                    logger.info(
+                        "stale runtime archive 정리: %s (age_days=%.1f, recent=%s)",
+                        child.name,
+                        age_seconds / 86400.0,
+                        is_recent,
+                    )
                 except Exception:
-                    logger.debug("orphan runtime archive 정리 실패: %s", child, exc_info=True)
+                    logger.debug(
+                        "orphan runtime archive 정리 실패: %s", child, exc_info=True
+                    )
+            if removed:
+                logger.info("runtime archive 정리 완료: %s개 삭제", removed)
 
     def _start_runtime_session_archive(self, run_id: int | None = None) -> None:
             previous_root = self.__dict__.get("_runtime_session_root")

@@ -223,6 +223,19 @@ korea-assembly-cc/
 
 ## 6. 최신 변경 요약 (v16.14.8 기준)
 
+### v16.14.8 PROJECT_AUDIT / EXTENDED 후속 개선 메모 (2026-07-29)
+- **시작 세션 보호**: dirty 세션은 저장/버리기/취소, clean이지만 자막이 있으면 교체 확인 후 `_begin_extraction_run`
+- **soft_resync**: 기존 compact와 최근 엔트리가 정합하면 긴 히스토리 유지(archive tail 완화). 코어 suffix 의미론 유지 — `PIPELINE_LOCK.md` 이력 참고
+- **runtime archive GC**: `RUNTIME_ARCHIVE_MAX_AGE_DAYS` + `RUNTIME_ARCHIVE_KEEP_RECENT`, recovery 보존
+- **orphan segment**: fingerprint 불일치 시 manifest 미등록 파일 best-effort 삭제
+- **로그 정책**: 파일/콘솔 기본 INFO, `safe_log_text`, `SUBTITLE_LOG_LEVEL` env
+- **종료 가드**: `_exit_in_progress`로 종료 중 start/파괴적 액션 차단
+- **hydrate**: `HYDRATE_MAX_ENTRIES` 상한, 엔트리 단위 cancel, result_token 슬롯 전달
+- **검색 UI**: 결과 절단 시 `상위 N건+` 표시
+- **CI/문서**: `.github/workflows/ci.yml`, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT_EXTENDED.md`
+- **회귀 기준선**: `pytest -q` 332 pass / 2 skipped, `pyright` 0 errors
+- **회귀 파일**: `tests/test_project_audit_20260729.py`, `tests/test_project_audit_extended_20260729.py`
+
 ### v16.14.8 PROJECT_AUDIT 후속 개선 메모 (2026-07-22)
 - **finished terminal 전달**: ExtractionWorker `finally`에서 `clear_worker_run_id` 전에 `_emit_worker_message("finished", ..., run_id=)`로 terminal overflow stash 보호
 - **stop 중 finished/error 멱등 흡수**: `_is_stopping` 화이트리스트에 포함하고 UI 이중 finalize/다이얼로그를 피함

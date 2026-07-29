@@ -1,0 +1,54 @@
+# 릴리스 체크리스트
+
+Windows 데스크톱 배포용 운영 체크리스트입니다.  
+(코드 서명 인증서·자동 업데이트 인프라는 별도 준비)
+
+## 1. 품질 게이트
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+python -m pyright
+python scripts/run_release_verification.py --offline --skip-build --instantiate-window
+```
+
+라이브/빌드 포함 전체:
+
+```bash
+python scripts/run_release_verification.py
+```
+
+## 2. 패키징
+
+```bash
+pyinstaller --clean subtitle_extractor.spec
+# dist/국회의사중계자막추출기 vX.Y.Z.exe
+```
+
+- [ ] frozen `--smoke` exit 0  
+- [ ] `portable.flag` 옆 `--smoke-storage-preflight` exit 0  
+- [ ] (선택) `--smoke-instantiate-window`
+
+## 3. 보안·프라이버시 안내 (배포 노트)
+
+- [ ] 자막/DB/로그가 로컬 평문 저장임을 사용자 문서에 명시  
+- [ ] portable 모드는 EXE 옆에 데이터가 쌓이므로 공유 PC·USB 주의  
+- [ ] 로그 기본 레벨 INFO, `SUBTITLE_LOG_LEVEL=DEBUG` 로만 상세 로그  
+- [ ] 로그 보존 일수: `Config.LOG_RETENTION_DAYS` (기본 14)
+
+## 4. 코드 서명 (권장, 정책 따름)
+
+- [ ] Authenticode 서명 (기관 인증서)  
+- [ ] SmartScreen 평판 축적 계획  
+- [ ] 서명 후 해시(SHA-256)를 릴리스 노트에 게시
+
+## 5. 버전 동기화
+
+- [ ] README 첫 줄 버전  
+- [ ] `Config.VERSION` (README 로드)  
+- [ ] CLAUDE/GEMINI/CHANGELOG 요약  
+
+## 6. 롤백
+
+- [ ] 직전 EXE + portable 데이터 백업 경로 안내  
+- [ ] DB(`subtitle_history.db`) 호환(additive migration) 확인

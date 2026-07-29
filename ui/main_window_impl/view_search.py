@@ -35,15 +35,20 @@ class MainWindowViewSearchMixin(ViewSearchBase):
             search_count.setText(rendered)
             return
 
-        total_label = (
-            f"{total_matches}+건"
-            if bool(self.__dict__.get("_runtime_search_truncated", False))
-            else f"{total_matches}건"
-        )
+        truncated = bool(self.__dict__.get("_runtime_search_truncated", False))
+        if truncated:
+            try:
+                limit = max(1, int(Config.RUNTIME_SEARCH_MATCH_LIMIT))
+            except Exception:
+                limit = total_matches
+            # 사용자에게 결과 절단(상위 N건)을 명시
+            total_label = f"상위 {min(total_matches, limit)}건+"
+        else:
+            total_label = f"{total_matches}건"
         if current_index is None:
             search_count.setText(total_label)
             return
-        if not bool(self.__dict__.get("_runtime_search_truncated", False)):
+        if not truncated:
             search_count.setText(f"{current_index + 1}/{total_matches}")
             return
         search_count.setText(f"{current_index + 1}/{total_label}")

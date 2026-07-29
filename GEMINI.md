@@ -435,6 +435,14 @@ pip install -r requirements-dev.txt
 - `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
 - `pytest -q` 85 pass, `pyright` 0 errors
 
+## 9.9.4b v16.14.8 PROJECT_AUDIT / EXTENDED 후속 (2026-07-29)
+- 추출 시작 시 dirty/세션 교체 보호 (`_begin_extraction_run`)
+- soft_resync 정합 시 긴 compact 유지, orphan segment/runtime archive 연령 GC
+- 로그 INFO 기본·`safe_log_text`, 종료 중 `_exit_in_progress` 가드
+- hydrate 상한·result_token 전달, 검색 `상위 N건+` UI
+- GitHub Actions CI, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT_EXTENDED.md`
+- 회귀: `pytest -q` 332 pass / 2 skipped, `pyright` 0 errors
+
 ## 9.9.4a v16.14.8 PROJECT_AUDIT 후속 개선 (2026-07-22)
 - Worker `finished`를 run_id envelope + terminal stash 경로로 전달 (`clear_worker_run_id` 이후 raw put 제거)
 - stop 중 `finished`/`error` 멱등 흡수

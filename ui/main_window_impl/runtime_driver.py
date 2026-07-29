@@ -345,11 +345,24 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
             )
         )
 
+    def _is_exit_in_progress(self) -> bool:
+        return bool(self.__dict__.get("_exit_in_progress", False)) or bool(
+            self.__dict__.get("_background_shutdown_initiated", False)
+        )
+
     def _is_runtime_mutation_blocked(self, action_name: str) -> bool:
+        action_label = str(action_name or "작업").strip() or "작업"
+        if self._is_exit_in_progress():
+            self._show_toast(
+                f"종료 중에는 {action_label}을 할 수 없습니다.",
+                "warning",
+                2500,
+            )
+            return True
         if not self.is_running:
             return False
         self._show_toast(
-            f"추출 중에는 {action_name}을 할 수 없습니다. 먼저 중지하세요.",
+            f"추출 중에는 {action_label}을 할 수 없습니다. 먼저 중지하세요.",
             "warning",
             3000,
         )

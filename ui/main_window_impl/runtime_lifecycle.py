@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QCloseEvent
@@ -31,9 +31,47 @@ RuntimeLifecycleBase = RuntimeHost if TYPE_CHECKING else object
 
 
 class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
+    def _current_session_entry_count_for_start(self) -> int:
+        """시작 전 교체될 현재 세션 자막 수(아카이브 포함)."""
+        getter = getattr(self, "_get_global_subtitle_count", None)
+        if callable(getter):
+            try:
+                return max(0, int(cast(Any, getter())))
+            except Exception:
+                pass
+        subtitles = getattr(self, "subtitles", None) or []
+        try:
+            active = len(subtitles)
+        except Exception:
+            active = 0
+        archived = int(self.__dict__.get("_runtime_archived_count", 0) or 0)
+        return max(0, active + archived)
+
+    def _confirm_replace_session_for_start(self, subtitle_count: int) -> bool:
+        """clean 세션이지만 자막이 있을 때 시작 교체 확인."""
+        main_window_mod = _main_window_public()
+        reply = main_window_mod.QMessageBox.question(
+            self,
+            "추출 시작 확인",
+            f"현재 {subtitle_count}개의 자막이 있습니다.\n"
+            "새 추출을 시작하면 현재 자막이 화면에서 사라집니다.\n"
+            "계속하시겠습니까?",
+            main_window_mod.QMessageBox.StandardButton.Yes
+            | main_window_mod.QMessageBox.StandardButton.No,
+            main_window_mod.QMessageBox.StandardButton.No,
+        )
+        return reply == main_window_mod.QMessageBox.StandardButton.Yes
+
     def _start(self):
         main_window_mod = _main_window_public()
         if self.is_running:
+            return
+        if bool(self.__dict__.get("_exit_in_progress", False)) or (
+            callable(getattr(self, "_is_background_shutdown_active", None))
+            and self._is_background_shutdown_active()
+        ):
+            self._set_status("종료 중...", "warning")
+            self._show_toast("종료 중에는 추출을 시작할 수 없습니다.", "warning", 2500)
             return
         if bool(self.__dict__.get("_session_save_in_progress", False)):
             self._set_status("세션 저장 마무리 대기 중...", "warning")
@@ -73,6 +111,37 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
             )
             return
         url = normalized_url
+
+        def continue_start() -> None:
+            self._begin_extraction_run(url, selector)
+
+        # dirty 세션: 종료/불러오기와 동일한 저장·버리기·취소 흐름
+        if bool(self._has_dirty_session()):
+            self._run_after_dirty_session_action("추출 시작", continue_start)
+            return
+
+        # clean 이지만 자막이 남아 있으면 교체 확인 (미저장 데이터 손실 방지와 동일 UX)
+        existing_count = self._current_session_entry_count_for_start()
+        if existing_count > 0 and not self._confirm_replace_session_for_start(
+            existing_count
+        ):
+            return
+
+        continue_start()
+
+    def _begin_extraction_run(self, url: str, selector: str) -> None:
+        """검증된 URL/selector로 추출 worker를 기동한다 (세션 교체 포함)."""
+        main_window_mod = _main_window_public()
+        if self.is_running:
+            return
+        if bool(self.__dict__.get("_session_save_in_progress", False)):
+            self._set_status("세션 저장 마무리 대기 중...", "warning")
+            self._show_toast("세션 저장 완료 후 추출을 시작하세요.", "warning", 3000)
+            return
+        if bool(self.__dict__.get("_session_load_in_progress", False)):
+            self._set_status("세션 불러오기 마무리 대기 중...", "warning")
+            self._show_toast("세션 불러오기 완료 후 추출을 시작하세요.", "warning", 3000)
+            return
 
         try:
             retained_driver = self._take_current_driver()
@@ -288,6 +357,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
 
         done = threading.Event()
         error_holder: dict[str, Exception | None] = {"error": None}
+        driver_id = hex(id(driver))
 
         def _quit_driver():
             try:
@@ -305,18 +375,50 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
 
         if not done.wait(timeout=timeout):
             logger.warning(
-                "WebDriver 종료 타임아웃 (source=%s, timeout=%.1fs)",
+                "WebDriver 종료 타임아웃 (source=%s, timeout=%.1fs, driver=%s)",
                 source,
                 timeout,
+                driver_id,
             )
+            # 타임아웃 시 분리 목록에 남겨 이후 cleanup/진단이 추적 가능하게 한다.
+            try:
+                register = getattr(self, "_register_detached_driver", None)
+                if callable(register):
+                    register(driver)
+            except Exception:
+                logger.debug("timeout driver 등록 실패", exc_info=True)
+            failures = list(self.__dict__.get("_driver_quit_failures", []) or [])
+            failures.append(
+                {
+                    "source": str(source),
+                    "timeout": float(timeout),
+                    "driver_id": driver_id,
+                    "reason": "timeout",
+                    "at": datetime.now().isoformat(),
+                }
+            )
+            self._driver_quit_failures = failures[-20:]
             return False
 
         if error_holder["error"] is not None:
             logger.debug(
-                "WebDriver 종료 오류 (source=%s): %s",
+                "WebDriver 종료 오류 (source=%s, driver=%s): %s",
                 source,
+                driver_id,
                 error_holder["error"],
             )
+            failures = list(self.__dict__.get("_driver_quit_failures", []) or [])
+            failures.append(
+                {
+                    "source": str(source),
+                    "timeout": float(timeout),
+                    "driver_id": driver_id,
+                    "reason": "error",
+                    "error": str(error_holder["error"])[:300],
+                    "at": datetime.now().isoformat(),
+                }
+            )
+            self._driver_quit_failures = failures[-20:]
             return False
 
         return True
@@ -414,6 +516,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
 
     def _begin_background_shutdown(self) -> None:
         self._ensure_background_registry()
+        self._exit_in_progress = True
         with self._active_background_threads_lock:
             self._background_shutdown_initiated = True
 
@@ -563,7 +666,17 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
                 "attached": bool(self.driver is not None),
                 "detached_count": detached_count,
                 "connection_status": str(self.__dict__.get("connection_status", "") or ""),
+                "quit_failures": list(self.__dict__.get("_driver_quit_failures", []) or []),
             },
+            "worker": (
+                lambda _worker: {
+                    "name": str(getattr(_worker, "name", "") or "") if _worker else "",
+                    "alive": bool(
+                        _worker is not None and bool(getattr(_worker, "is_alive", lambda: False)())
+                    ),
+                    "ident": int(getattr(_worker, "ident", 0) or 0) if _worker else 0,
+                }
+            )(self.__dict__.get("worker")),
             "session_state": {
                 "dirty": bool(self.__dict__.get("_session_dirty", False)),
                 "session_save_in_progress": bool(
@@ -574,6 +687,7 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
                 ),
                 "reflow_in_progress": bool(self.__dict__.get("_reflow_in_progress", False)),
                 "is_running": bool(self.__dict__.get("is_running", False)),
+                "exit_in_progress": bool(self.__dict__.get("_exit_in_progress", False)),
             },
         }
 

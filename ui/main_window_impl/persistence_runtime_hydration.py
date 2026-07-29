@@ -63,9 +63,20 @@ class MainWindowRuntimeHydrationMixin(MainWindowHost):
     def _handle_hydrate_done(self, payload: dict[str, object]) -> None:
             action = self.__dict__.get("_pending_hydration_action")
             action_name = str(self.__dict__.get("_pending_hydration_action_name", "") or "")
-            subtitles = payload.get("subtitles", [])
-            if not isinstance(subtitles, list):
-                subtitles = []
+            # 신규: result_token 슬롯 전달 / 구버전 호환: payload["subtitles"]
+            subtitles: list = []
+            payload_token = str(payload.get("result_token", "") or "").strip()
+            expected_token = str(self.__dict__.get("_hydrate_result_token", "") or "").strip()
+            held = self.__dict__.get("_hydrate_result_entries")
+            if payload_token and expected_token and payload_token == expected_token:
+                if isinstance(held, list):
+                    subtitles = held
+            else:
+                raw = payload.get("subtitles", [])
+                if isinstance(raw, list):
+                    subtitles = raw
+            self._hydrate_result_entries = None
+            self._hydrate_result_token = ""
             self._reset_hydration_state()
             self._replace_subtitles_and_refresh(
                 subtitles,
@@ -83,12 +94,16 @@ class MainWindowRuntimeHydrationMixin(MainWindowHost):
 
     def _handle_hydrate_failed(self, payload: dict[str, object]) -> None:
             error = str(payload.get("error", "세션 hydrate 실패") or "세션 hydrate 실패")
+            self._hydrate_result_entries = None
+            self._hydrate_result_token = ""
             self._reset_hydration_state()
             self._set_status(f"세션 hydrate 실패: {error}", "error")
             QMessageBox.critical(self, "오류", f"장시간 세션 hydrate 실패: {error}")
 
     def _handle_hydrate_cancelled(self, payload: dict[str, object]) -> None:
             reason = str(payload.get("reason", "") or "")
+            self._hydrate_result_entries = None
+            self._hydrate_result_token = ""
             self._reset_hydration_state()
             message = "세션 전체 불러오기를 취소했습니다."
             if reason:
@@ -118,11 +133,29 @@ class MainWindowRuntimeHydrationMixin(MainWindowHost):
                 for item in runtime_manifest
             ) + len(prepared_entries)
             total_entries = max(1, total_entries)
+            try:
+                hydrate_max = int(getattr(Config, "HYDRATE_MAX_ENTRIES", 150_000) or 150_000)
+            except Exception:
+                hydrate_max = 150_000
+            if hydrate_max > 0 and total_entries > hydrate_max:
+                self._show_toast(
+                    f"세션이 너무 큽니다({total_entries:,}개 > {hydrate_max:,}개). "
+                    "편집 대신 내보내기/검색을 사용하세요.",
+                    "warning",
+                    5000,
+                )
+                self._set_status(
+                    f"hydrate 거부: 엔트리 {total_entries:,}개 상한 초과",
+                    "warning",
+                )
+                return False
 
             self._hydrate_in_progress = True
             self._hydrate_cancel_event.clear()
             self._pending_hydration_action = callback
             self._pending_hydration_action_name = str(reason or "").strip()
+            self._hydrate_result_token = ""
+            self._hydrate_result_entries = None
 
             dialog = QProgressDialog(
                 "장시간 세션 전체를 불러오는 중입니다...",
@@ -146,24 +179,34 @@ class MainWindowRuntimeHydrationMixin(MainWindowHost):
                     completed = 0
                     for segment_info in runtime_manifest:
                         if self._hydrate_cancel_event.is_set():
+                            self._hydrate_result_entries = None
                             self._emit_control_message("hydrate_cancelled", {"reason": reason})
                             return
                         segment_entries = self._load_runtime_segment_entries(
                             segment_info,
                             runtime_root=runtime_root,
                         )
-                        full_entries.extend(entry.clone() for entry in segment_entries)
-                        completed += len(segment_entries)
-                        self._emit_control_message(
-                            "hydrate_progress",
-                            {
-                                "reason": reason,
-                                "current": completed,
-                                "total": total_entries,
-                            },
-                        )
+                        for entry in segment_entries:
+                            if self._hydrate_cancel_event.is_set():
+                                self._hydrate_result_entries = None
+                                self._emit_control_message(
+                                    "hydrate_cancelled", {"reason": reason}
+                                )
+                                return
+                            full_entries.append(entry.clone())
+                            completed += 1
+                            if completed == total_entries or completed % 50 == 0:
+                                self._emit_control_message(
+                                    "hydrate_progress",
+                                    {
+                                        "reason": reason,
+                                        "current": completed,
+                                        "total": total_entries,
+                                    },
+                                )
                     for entry in prepared_entries:
                         if self._hydrate_cancel_event.is_set():
+                            self._hydrate_result_entries = None
                             self._emit_control_message("hydrate_cancelled", {"reason": reason})
                             return
                         full_entries.append(entry.clone())
@@ -177,17 +220,26 @@ class MainWindowRuntimeHydrationMixin(MainWindowHost):
                                     "total": total_entries,
                                 },
                             )
+                    if self._hydrate_cancel_event.is_set():
+                        self._hydrate_result_entries = None
+                        self._emit_control_message("hydrate_cancelled", {"reason": reason})
+                        return
+                    # 대용량 리스트를 control 큐에 실지 않고 슬롯 + 토큰으로 전달
+                    result_token = uuid4().hex
+                    self._hydrate_result_token = result_token
+                    self._hydrate_result_entries = full_entries
                     self._emit_control_message(
                         "hydrate_done",
                         {
                             "reason": reason,
-                            "subtitles": full_entries,
+                            "result_token": result_token,
                             "current": total_entries,
                             "total": total_entries,
                         },
                     )
                 except Exception as exc:
                     logger.exception("세션 hydrate 실패")
+                    self._hydrate_result_entries = None
                     self._emit_control_message(
                         "hydrate_failed",
                         {"reason": reason, "error": str(exc)},

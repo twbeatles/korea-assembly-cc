@@ -593,23 +593,73 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         return raw
 
     def _soft_resync(self) -> None:
+        """desync 시 히스토리를 소프트 복원한다.
+
+        기본은 최근 5개 활성 엔트리 compact. 다만 기존 `_confirmed_compact`가
+        최근 엔트리와 정합하면(포함/접미) 더 긴 히스토리를 유지한다.
+        runtime archive 이후 active tail만 남은 경우에도 긴 suffix 맥락을 보존한다.
+        """
         with self.subtitle_lock:
-            if self.subtitles:
-                recent = " ".join(e.text for e in self.subtitles[-5:] if e and e.text)
-                self._confirmed_compact = utils.compact_subtitle_text(recent)
-                self._trim_confirmed_compact_history()
-                if len(self._confirmed_compact) >= self._suffix_length:
-                    self._trailing_suffix = self._confirmed_compact[-self._suffix_length :]
-                else:
-                    self._trailing_suffix = self._confirmed_compact
-                logger.info(
-                    "소프트 리셋: suffix=%s",
-                    self._trailing_suffix[-20:] if self._trailing_suffix else "(empty)",
-                )
-            else:
-                self._confirmed_compact = ""
-                self._trailing_suffix = ""
-                logger.info("소프트 리셋: 자막 없음, 전체 리셋")
+            recent_entries = (
+                [e for e in self.subtitles[-5:] if e and getattr(e, "text", None)]
+                if self.subtitles
+                else []
+            )
+            recent_text = " ".join(e.text for e in recent_entries if e.text)
+
+        if not recent_text:
+            self._confirmed_compact = ""
+            self._trailing_suffix = ""
+            logger.info("소프트 리셋: 자막 없음, 전체 리셋")
+            return
+
+        recent_compact = utils.compact_subtitle_text(recent_text)
+        # QObject 미초기화 테스트 더블에서도 안전하게 읽는다.
+        previous = str(self.__dict__.get("_confirmed_compact", "") or "")
+        last_entry_compact = ""
+        if recent_entries:
+            last_entry_compact = utils.compact_subtitle_text(
+                str(recent_entries[-1].text or "")
+            )
+
+        rebuilt = recent_compact
+        keep_previous = False
+        if previous and recent_compact:
+            # 최근 창이 기존 히스토리 안에 있으면 긴 히스토리 유지
+            if recent_compact in previous or previous.endswith(recent_compact):
+                keep_previous = True
+            # 마지막 엔트리가 히스토리 말단 근처에 있으면 정렬된 것으로 보고 유지
+            elif last_entry_compact:
+                scan_window = previous[
+                    -max(5000, len(last_entry_compact) * 3, self._suffix_length * 4) :
+                ]
+                if last_entry_compact in scan_window:
+                    keep_previous = True
+
+        if keep_previous:
+            rebuilt = previous
+            logger.info(
+                "소프트 리셋: 기존 compact 히스토리 유지 (len=%s, recent=%s)",
+                len(previous),
+                len(recent_compact),
+            )
+        else:
+            logger.info(
+                "소프트 리셋: 최근 엔트리 기반 재구성 (len=%s)",
+                len(recent_compact),
+            )
+
+        self._confirmed_compact = rebuilt
+        self._trim_confirmed_compact_history()
+        confirmed = str(self.__dict__.get("_confirmed_compact", "") or "")
+        if len(confirmed) >= self._suffix_length:
+            self._trailing_suffix = confirmed[-self._suffix_length :]
+        else:
+            self._trailing_suffix = confirmed
+        logger.info(
+            "소프트 리셋: suffix=%s",
+            self._trailing_suffix[-20:] if self._trailing_suffix else "(empty)",
+        )
 
     def _find_overlap(self, suffix: str, text: str) -> int:
         max_overlap = min(len(suffix), len(text))

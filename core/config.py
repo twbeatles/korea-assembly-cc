@@ -317,6 +317,11 @@ class Config:
     RUNTIME_SEGMENT_FLUSH_THRESHOLD = 2000
     RUNTIME_ACTIVE_TAIL_ENTRIES = 1000
     RUNTIME_SEARCH_MATCH_LIMIT = 5000
+    # 최근 N개 runtime archive는 유지하되, 이 일수를 넘으면 recovery 보존 대상이 아니면 삭제
+    RUNTIME_ARCHIVE_KEEP_RECENT = 3
+    RUNTIME_ARCHIVE_MAX_AGE_DAYS = 7
+    # 장시간 세션 hydrate 안전 상한 (초과 시 편집 전 hydrate 거부)
+    HYDRATE_MAX_ENTRIES = 150_000
     EXIT_ESCALATION_AFTER_SECONDS = 30.0
     EXIT_ESCALATION_REPEAT_SECONDS = 30.0
 
@@ -507,7 +512,14 @@ class Config:
     # 데이터베이스 (#26)
     DATABASE_PATH = str(Path(STORAGE_DIR) / "subtitle_history.db")
     DB_SYNC_TASK_TIMEOUT_SECONDS = 15.0
+    # 로그 보존·민감 정책 (프라이버시: 자막 전문은 기본 로그에 남기지 않음)
     LOG_RETENTION_DAYS = 14
+    # 파일 로그 기본 레벨. 환경변수 SUBTITLE_LOG_LEVEL=DEBUG 로 상향 가능
+    LOG_FILE_LEVEL = "INFO"
+    LOG_CONSOLE_LEVEL = "INFO"
+    # True면 로그 헬퍼가 긴 자막 본문을 잘라 기록 (운영 기본)
+    LOG_REDACT_LONG_TEXT = True
+    LOG_REDACT_MAX_CHARS = 80
     
     # 성능 최적화: 사전 컴파일된 정규식 패턴
     RE_YEAR = re.compile(r'\b\d{4}년\b')              # 년도 제거용

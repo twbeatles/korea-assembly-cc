@@ -161,6 +161,11 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
                     segment_index,
                     relative_path,
                 )
+                # manifest에 올리지 못한 orphan segment 파일 best-effort 정리
+                self._cleanup_orphan_runtime_segment_file(
+                    relative_path,
+                    segment_index=segment_index,
+                )
                 self._maybe_schedule_runtime_segment_flush()
                 return
 
@@ -194,6 +199,57 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
             )
             self._schedule_ui_refresh(count=True, render=True, force_full=True)
             self._maybe_schedule_runtime_segment_flush()
+
+    def _cleanup_orphan_runtime_segment_file(
+            self,
+            relative_path: object,
+            *,
+            segment_index: int | None = None,
+        ) -> bool:
+            """manifest에 없는 orphan segment 파일을 best-effort로 삭제한다."""
+            rel = str(relative_path or "").strip()
+            if not rel:
+                return False
+            runtime_root = self.__dict__.get("_runtime_session_root")
+            if runtime_root is None:
+                return False
+            known_paths = {
+                str(item.get("path", "") or "").strip()
+                for item in list(self.__dict__.get("_runtime_segment_manifest", []) or [])
+                if isinstance(item, dict)
+            }
+            if rel in known_paths:
+                return False
+            try:
+                orphan_path, _safe_rel = self._resolve_runtime_relative_path(
+                    Path(runtime_root),
+                    rel,
+                    source="orphan runtime segment",
+                )
+            except ValueError:
+                logger.debug(
+                    "orphan segment path 거부: index=%s path=%s",
+                    segment_index,
+                    rel,
+                )
+                return False
+            try:
+                if orphan_path.is_file():
+                    orphan_path.unlink(missing_ok=True)
+                    logger.info(
+                        "orphan runtime segment 삭제: index=%s path=%s",
+                        segment_index,
+                        rel,
+                    )
+                    return True
+            except Exception:
+                logger.debug(
+                    "orphan runtime segment 삭제 실패: index=%s path=%s",
+                    segment_index,
+                    rel,
+                    exc_info=True,
+                )
+            return False
 
     def _handle_runtime_segment_flush_failed(self, payload: dict[str, Any]) -> None:
             payload_token = str(payload.get("archive_token", "") or "")

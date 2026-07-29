@@ -239,6 +239,8 @@ def test_soft_resync_uses_only_recent_five_of_many_entries() -> None:
     win = MainWindow.__new__(MainWindow)
     win.subtitle_lock = threading.Lock()
     win._suffix_length = 50
+    # 기존 compact 가 비어 있으면 최근 5개 엔트리로만 재구성한다.
+    win._confirmed_compact = ""
     win.subtitles = [
         SubtitleEntry(f"오래된 자막 번호 {i} 입니다") for i in range(1, 21)
     ] + [
