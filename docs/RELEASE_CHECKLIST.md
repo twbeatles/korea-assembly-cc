@@ -58,9 +58,11 @@ pyinstaller --clean subtitle_extractor.spec
 # dist/국회의사중계자막추출기 vX.Y.Z.exe
 ```
 
-- [ ] frozen `--smoke` exit 0  
+- [ ] frozen `--smoke` exit 0 (`hwpx_ok` 등 JSON ok)  
 - [ ] `portable.flag` 옆 `--smoke-storage-preflight` exit 0  
-- [ ] (선택) `--smoke-instantiate-window`
+- [ ] (선택) `--smoke-instantiate-window`  
+- [ ] (선택) DOCX: 빌드 env에 `python-docx` 포함 여부 확인  
+- [ ] GitHub Actions 최신 main CI **success** 확인
 
 ## 3. 보안·프라이버시 안내 (배포 노트)
 

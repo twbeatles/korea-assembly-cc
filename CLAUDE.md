@@ -19,8 +19,9 @@
 |------|------|
 | [`docs/CHROME_EXTENSION_PARITY.md`](docs/CHROME_EXTENSION_PARITY.md) | Chrome 확장(`korea-assembly-cc-chrome`)과 사이트/수집 계약 정합·이식 정책 |
 | [`docs/HWPX_EXPORT_ANALYSIS.md`](docs/HWPX_EXPORT_ANALYSIS.md) | HWPX 최소 패키지 설계, **스키마 전면 개편 불필요** 판정 |
+| [`PROJECT_AUDIT.md`](PROJECT_AUDIT.md) | 기능 감사·리스크·후속 조치 현황 |
 | [`PIPELINE_LOCK.md`](PIPELINE_LOCK.md) | 자막 파이프라인 코어 의미론 고정 |
-| [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) | 릴리스·빌드 체크리스트 |
+| [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) | 릴리스·빌드·CI 체크리스트 |
 
 ## 2. 기술 스택
 
@@ -138,8 +139,15 @@ korea-assembly-cc/
     subtitle_pipeline_impl/     # pipeline type/history/incremental/entry helper 내부 구현
     text_utils.py
     url_policy.py               # 시작 URL/프리셋/URL 히스토리 sanitize 공통 정책
+    export_text.py              # export 공통 sanitize / SRT·VTT 상대 타임코드
+    subtitle_row_split.py       # multi-speaker 분할 규칙 순수 미러 (probe JS 정합)
     hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim
+  scripts/
+    check_before_push.py        # 푸시 전 pyright (CI fail-fast 와 동일 진입점)
+    install_git_hooks.py        # pre-push 훅 설치
+    git-hooks/pre-push
+    run_release_verification.py
   ui/                           # UI 구성요소
     dialogs.py
     main_window_capture.py
@@ -231,6 +239,13 @@ korea-assembly-cc/
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
 ## 6. 최신 변경 요약 (v16.14.8 기준)
+
+### v16.14.8 수집 정합·export·CI 게이트 (2026-08-10)
+- **Chrome 확장 수집 P1**: AI 자막 버튼 우선 + **active(ON) 재클릭 방지**, multi-speaker span 분할 (`capture_dom` probe / `capture_observer`)
+- **export 견고화**: `core/export_text.py` (XML·cue sanitize), SRT/VTT **세션 첫 큐 기준 상대 타임코드**, DOCX 원자 저장, HWP smart filename·GetDefault·Visible 우선 숨김·실패 단일 통지·대용량 HWPX 권장, 동일 path 저장 중 중복 거부
+- **품질 게이트**: `scripts/check_before_push.py` + git `pre-push` 훅, GitHub CI **pyright fail-fast → pytest**, `requirements-dev.txt` pyright 핀 공유
+- **문서**: `docs/CHROME_EXTENSION_PARITY.md`, `docs/HWPX_EXPORT_ANALYSIS.md`, `PROJECT_AUDIT.md` 갱신
+- **회귀**: `tests/test_capture_chrome_parity_p1.py`, `test_export_hardening.py`, `test_subtitle_row_split.py` 등 / 로컬 `pytest` 360 pass 수준, `pyright` 0 errors
 
 ### v16.14.8 PROJECT_AUDIT / EXTENDED 후속 개선 메모 (2026-07-29)
 - **시작 세션 보호**: dirty 세션은 저장/버리기/취소, clean이지만 자막이 있으면 교체 확인 후 `_begin_extraction_run`
@@ -512,12 +527,12 @@ korea-assembly-cc/
 
 | 형식 | 파일 확장자 | 특징 |
 |------|-------------|------|
-| TXT | `.txt` | 타임스탬프 + 텍스트 |
-| SRT | `.srt` | 영상 자막 표준 형식 |
-| VTT | `.vtt` | WebVTT 형식 |
-| DOCX | `.docx` | Word 문서 (python-docx 필요) |
+| TXT | `.txt` | 수집 시각(벽시계) 타임스탬프 + 텍스트 |
+| SRT | `.srt` | SubRip — **세션 첫 자막 기준 상대 타임코드** |
+| VTT | `.vtt` | WebVTT — **세션 첫 자막 기준 상대 타임코드** |
+| DOCX | `.docx` | Word 문서 (python-docx 필요, frozen 빌드 env 포함 권장) |
 | HWPX | `.hwpx` | 한글 문서 기본 포맷 (추가 외부 프로그램 불필요) |
-| HWP | `.hwp` | 한글 문서 (pywin32/한컴오피스 필요) |
+| HWP | `.hwp` | 한글 COM (pywin32/한컴; 미설치·실패 시 HWPX 등 대체) |
 | RTF | `.rtf` | 리치 텍스트 형식 |
 | JSON (세션) | `.json` | 전체 세션 복원용 |
 | SQLite | `.db` | 데이터베이스 히스토리 |
@@ -547,7 +562,11 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - `--remote-debugging-port=0`으로 동적 포트 할당 (다중 인스턴스 충돌 방지)
 
 ### 8.5 개발 품질 게이트
-- 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors`
+- 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors` (`requirements-dev.txt` 핀 사용)
+- **푸시 전 (필수 권장)**:
+  - `python scripts/install_git_hooks.py` (1회) → `git push` 시 pre-push 가 pyright 실행
+  - 수동: `python scripts/check_before_push.py --pyright-only`
+- **GitHub CI** (`.github/workflows/ci.yml`): **pyright fail-fast → pytest** 순서 (Windows, Python 3.12)
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과 (기본 in-process smoke·pyright fallback 포함, `*_subprocess` 테스트는 환경에 따라 skip)
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - pyright suppression policy: `tests/test_pyright_suppression_policy.py`가 파일 단위 `# pyright:` directive 재도입을 차단

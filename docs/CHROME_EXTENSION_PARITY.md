@@ -93,10 +93,10 @@
 
 | ID | 내용 | 데스크톱 위치 |
 |----|------|----------------|
-| P1-B | AI 자막 버튼 우선 클릭 (`.btn_subtit_ai` → `.btn_subtit_def` → …) | `ui/main_window_impl/capture_observer.py` |
-| P1-A | 한 `.smi_word` 안 다중 화자 span 분할 (`#segarr_*`) | `ui/main_window_impl/capture_dom.py` probe JS |
+| P1-B | AI 자막 버튼 우선 + **ON(active)이면 재클릭 안 함** (끄기/토글 OFF 방지), `layerSubtit` 후에도 AI active 재확인 | `ui/main_window_impl/capture_observer.py` |
+| P1-A | 한 `.smi_word` 안 다중 화자 span 분할 (`#segarr_*`) | `ui/main_window_impl/capture_dom.py` probe JS · `core/subtitle_row_split.py` 미러 |
 
-회귀: `tests/test_capture_chrome_parity_p1.py`
+회귀: `tests/test_capture_chrome_parity_p1.py`, `tests/test_subtitle_row_split.py`
 
 ### 의도적으로 이식하지 않은 것
 

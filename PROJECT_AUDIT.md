@@ -25,21 +25,21 @@
 | **문서 정합** | **Low~Medium** | 신규 docs 양호, README Python 범위 vs 실빌드 3.14 편차 |
 | **보안** | **Low** | URL host 정책·atomic write 유지, 외부 네트워크 최소 |
 
-**검증 스냅샷 (감사 시점)**
+**검증 스냅샷**
 
-| 항목 | 결과 |
-|------|------|
-| `pytest` collect | 356 tests |
-| `pytest -q` | **352 passed / 2 skipped / 2 failed** (`test_pyright_regression` ×2) |
-| `pyright` | **5 errors** — 모두 `persistence_exports.py` HWP `insert_text` |
-| frozen smoke (직전 빌드) | exit 0, `hwpx_ok: true` |
+| 시점 | 항목 | 결과 |
+|------|------|------|
+| 2026-08-10 감사 직후 | `pytest` / `pyright` | 352 pass / 2 fail (pyright 5 errors) |
+| **2026-08-10 후속 구현 후** | 로컬 `pytest` | **~360 passed / 2 skipped** |
+| | `pyright` | **0 errors** |
+| | GitHub CI | **success** (pyright fail-fast → pytest) |
+| | pre-push 훅 | pyright 0 통과 후 push |
 
-**핵심 결론**
+**핵심 결론 (후속 반영 후)**
 
-1. Critical 급 데이터 손실 결함은 신규 코드에서 확인되지 않았다.  
-2. **즉시 조치**: pyright 회귀 5건(품질 게이트·CI 실패 원인).  
-3. **기능 High 후보**: AI 자막 버튼이 “이미 ON”일 때 재클릭으로 **OFF 토글** 가능 — 크롬 확장은 active 검사 후 클릭.  
-4. multi-speaker·export sanitize는 방향이 올바르나, **probe JS 실 DOM 단위 테스트 부재**와 **병렬 FileSaveWorker 경로 충돌**은 잔여 리스크다.
+1. Critical 급 데이터 손실 결함 없음. H1 pyright·H2 AI 토글·H5 저장 가드·H6 HWP 통지·H7 상대 타임코드 등 **1~3단계 조치 반영**.  
+2. **품질 게이트**: 로컬 pre-push + CI fail-fast pyright + `test_pyright_regression` 3중.  
+3. 잔여: probe **실 DOM E2E**(opt-in), suffix 구조 한계(의도적 보류), Node 20 Actions deprecation 경고(빌드 비차단).
 
 ---
 

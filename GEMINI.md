@@ -8,9 +8,19 @@
 - **버전**: v16.14.8
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
+### 관련 문서
+
+| 문서 | 내용 |
+|------|------|
+| `docs/CHROME_EXTENSION_PARITY.md` | Chrome 확장과 수집 계약 정합 |
+| `docs/HWPX_EXPORT_ANALYSIS.md` | HWPX 최소 패키지 / 스키마 전면 개편 불필요 |
+| `PROJECT_AUDIT.md` | 기능 감사·후속 조치 |
+| `docs/RELEASE_CHECKLIST.md` | 릴리스·CI·pyright 게이트 |
+| `PIPELINE_LOCK.md` | 파이프라인 코어 고정 |
+
 ## 2. 기술 스택
 
-- **언어**: Python 3.10+
+- **언어**: Python 3.10+ (CI 3.12, 로컬 3.10–3.14)
 - **GUI**: PyQt6 (Qt)
 - **웹 자동화**: Selenium + Chrome WebDriver
 - **동시성**: threading, bounded `queue.Queue` wrapper (`MainWindowMessageQueue`)
@@ -207,7 +217,9 @@ pip install -r requirements-dev.txt
 - HWPX 저장은 기본 내장 기능이며 별도 외부 프로그램이 필요하지 않음
 
 ### 8.1 개발 품질 게이트
-- 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors`
+- 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors` (`requirements-dev.txt` 핀)
+- **푸시 전**: `python scripts/install_git_hooks.py` (1회), `python scripts/check_before_push.py --pyright-only`
+- **CI**: `.github/workflows/ci.yml` — **pyright fail-fast → pytest** (Windows / Python 3.12)
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
@@ -434,6 +446,13 @@ pip install -r requirements-dev.txt
 - 로컬 `typings/` stub과 `pytest.ini --basetemp=.pytest_tmp`로 글로벌 Python/Windows TEMP 권한 편차를 흡수하고, 루트 `.hwpx` 산출물도 `.gitignore`에 반영
 - `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
 - `pytest -q` 85 pass, `pyright` 0 errors
+
+## 9.9.4c v16.14.8 수집 정합·export·CI 게이트 (2026-08-10)
+- Chrome 확장 P1: AI 자막 active 재클릭 방지, multi-speaker span 분할
+- export: `export_text` sanitize, SRT/VTT 상대 타임코드, HWP/DOCX 견고화, path 중복 저장 가드
+- 품질 게이트: `scripts/check_before_push.py` + pre-push 훅, CI pyright fail-fast → pytest
+- 문서: `CHROME_EXTENSION_PARITY`, `HWPX_EXPORT_ANALYSIS`, `PROJECT_AUDIT` 갱신
+- 회귀: 로컬 `pytest` ~360 pass, `pyright` 0 errors, CI success
 
 ## 9.9.4b v16.14.8 PROJECT_AUDIT / EXTENDED 후속 (2026-07-29)
 - 추출 시작 시 dirty/세션 교체 보호 (`_begin_extraction_run`)

@@ -285,7 +285,9 @@ python scripts/run_release_verification.py --with-live-smoke   # live contract s
 | [CLAUDE.md](CLAUDE.md) | 아키텍처, 핵심 규칙, 개발 가이드 |
 | [PROJECT_AUDIT.md](PROJECT_AUDIT.md) | 기능 감사·리스크·조치 현황 |
 | [PROJECT_AUDIT_EXTENDED.md](PROJECT_AUDIT_EXTENDED.md) | 보안·동시성·성능·CI·패키징 확장 감사 |
-| [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | 릴리스·서명·프라이버시 배포 체크리스트 |
+| [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | 릴리스·서명·프라이버시·CI 배포 체크리스트 |
+| [docs/CHROME_EXTENSION_PARITY.md](docs/CHROME_EXTENSION_PARITY.md) | Chrome 확장과 수집 계약 정합 |
+| [docs/HWPX_EXPORT_ANALYSIS.md](docs/HWPX_EXPORT_ANALYSIS.md) | HWPX 내보내기 설계·스키마 방침 |
 | [PIPELINE_LOCK.md](PIPELINE_LOCK.md) | 자막 수집 파이프라인 고정 기준 |
 | [ALGORITHM_ANALYSIS.md](ALGORITHM_ANALYSIS.md) | 알고리즘 잠재 이슈 분석 |
 
@@ -293,13 +295,14 @@ python scripts/run_release_verification.py --with-live-smoke   # live contract s
 
 ## 📝 변경 이력
 
-### v16.14.8 (2026-06-30 ~ 2026-07-29)
+### v16.14.8 (2026-06-30 ~ 2026-08-10)
+- **2026-08-10 수집 정합·export·CI** — Chrome 확장 AI 버튼/active 검사·multi-speaker, export sanitize·SRT/VTT 상대 타임코드, 푸시 전 pyright 훅, CI pyright fail-fast → pytest
 - **감사 후속 자동화/TDD 보강** — in-process smoke·pyright fallback, `_prepare_preview_raw`·salvage·reconnect handshake 테스트, capture Protocol, release verifier `pip install`/`--init-codegraph`
 - **재연결 중복 append 완화** — `_reconnect_preview_suppress_until_delta` handshake
 - **2026-07-22 감사 후속** — worker `finished` terminal 전달 수정, stop 중 finished/error 멱등 흡수, Observer 짧은 발화 정책 정렬, CLAUDE/GEMINI v16.14.8 동기화
 - **2026-07-29 기능 감사 후속** — 추출 시작 시 dirty/세션 교체 보호, soft_resync 긴 compact 유지, orphan segment 정리
 - **2026-07-29 확장 감사 후속** — 로그 INFO 기본·`safe_log_text`, runtime archive 연령 GC, 종료 중 액션 가드, hydrate 상한·토큰 전달, 검색 `상위 N건+` 표시, GitHub Actions CI, 릴리스 체크리스트
-- 회귀 기준: `pytest -q` **332 pass / 2 skipped**, `pyright` 0 errors
+- 회귀 기준: `pytest` ~360 pass / 2 skipped, `pyright` 0 errors, CI green
 
 ### v16.14.7 (2026-04-01 ~ 2026-06-25)
 - **감사 후속 안정화 (2026-06-25)** — preview coalescing 제거, overflow 우선순위 trim, stopping 시 preview 완전 drain, worker/control 큐 분리(`AppControlMessageQueue`), DB `DatabaseOperationResult`, extraction worker non-daemon, CSS selector 사전 검증, 복구 다이얼로그 우선순위 안내

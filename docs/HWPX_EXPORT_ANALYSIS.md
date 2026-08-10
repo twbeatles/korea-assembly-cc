@@ -65,12 +65,15 @@ META-INF/
 
 ## 4. 전면 개편 대신 유지·선택 개선
 
-**이미 반영 (export hardening, 2026-08)**
+**이미 반영 (export hardening · 감사 후속, 2026-08)**
 
 - 제어문자 sanitize (`core/export_text.py` + `hwpx_export`)
 - 빈 엔트리 skip
 - header 템플릿 부재 시 명확한 오류
-- HWP 경로: smart filename, multiline `\r\n`, InsertText 전 GetDefault, pywin32 없으면 HWPX 폴백
+- HWP 경로: smart filename, multiline `\r\n`, InsertText 전 GetDefault, Visible 우선 숨김, 실패 시 다이얼로그만(이중 토스트 방지), 대용량 시 HWPX 권장
+- DOCX: 임시 파일 + `os.replace` 원자 저장
+- SRT/VTT: 세션 첫 큐 기준 **상대 타임코드** + cue 본문 sanitize
+- 동일 path 백그라운드 저장 중복 거부
 
 **선택 (이슈 관측 시)**
 
