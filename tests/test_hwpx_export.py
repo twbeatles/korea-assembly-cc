@@ -43,6 +43,38 @@ def test_build_hwpx_bytes_escapes_special_characters_and_preserves_multiline() -
     assert "[10:02:00] 줄바꿈 첫째\r\n줄바꿈 둘째" in preview_text
 
 
+def test_build_hwpx_bytes_strips_illegal_xml_control_characters() -> None:
+    entries = [
+        (datetime(2026, 3, 23, 10, 0, 0), "정상\x00텍스트\x08입니다"),
+    ]
+
+    payload = build_hwpx_bytes(entries, datetime(2026, 3, 23, 18, 0, 0))
+
+    with ZipFile(BytesIO(payload)) as archive:
+        section_xml = archive.read("Contents/section0.xml").decode("utf-8")
+        preview_text = archive.read("Preview/PrvText.txt").decode("utf-8")
+
+    assert "\x00" not in section_xml
+    assert "\x08" not in section_xml
+    assert "정상텍스트입니다" in section_xml or "정상텍스트입니다" in preview_text
+    assert "정상" in preview_text and "텍스트" in preview_text
+
+
+def test_build_hwpx_lines_skips_empty_entries() -> None:
+    entries = [
+        (datetime(2026, 3, 23, 10, 0, 0), "첫 문장"),
+        (datetime(2026, 3, 23, 10, 0, 30), "   "),
+        (datetime(2026, 3, 23, 10, 1, 5), "둘째 문장"),
+    ]
+
+    lines = build_hwpx_lines(entries, datetime(2026, 3, 23, 18, 0, 0))
+
+    assert lines[-1] == "총 2문장, 9자"
+    joined = "\n".join(lines)
+    assert "첫 문장" in joined
+    assert "둘째 문장" in joined
+
+
 def test_build_hwpx_bytes_omits_stale_linesegarray_for_dynamic_paragraphs() -> None:
     entries = [
         (

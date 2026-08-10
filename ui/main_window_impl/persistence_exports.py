@@ -1,10 +1,21 @@
 # -*- coding: utf-8 -*-
 
+import os
 import sys
+import tempfile
+from pathlib import Path
 
 from ui.main_window_common import *
 from ui.main_window_common import _import_optional_module as _common_import_optional_module
 from ui.main_window_types import MainWindowHost
+from core.export_text import (
+    format_srt_timestamp,
+    format_vtt_timestamp,
+    normalize_hwp_insert_text,
+    resolve_cue_time_range,
+    sanitize_document_text,
+    sanitize_subtitle_cue_text,
+)
 from core.hwpx_export import save_hwpx_document
 
 
@@ -202,10 +213,13 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
                     ):
+                        safe_text = sanitize_document_text(text)
+                        if not safe_text.strip():
+                            continue
                         if should_print_ts:
-                            handle.write(f"[{timestamp.strftime('%H:%M:%S')}] {text}\n")
+                            handle.write(f"[{timestamp.strftime('%H:%M:%S')}] {safe_text}\n")
                         else:
-                            handle.write(f"{text}\n")
+                            handle.write(f"{safe_text}\n")
 
                 utils.atomic_write_text_via_writer(
                     filepath,
@@ -232,22 +246,22 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
 
             def do_save(filepath):
                 def writer(handle) -> None:
-                    for index, (start_time, end_time, timestamp, text) in enumerate(
-                        self._iter_full_session_timed_rows(
-                            prepared_entries,
-                            runtime_root=runtime_root,
-                            runtime_manifest=runtime_manifest,
-                        ),
-                        1,
+                    cue_index = 0
+                    for start_time, end_time, timestamp, text in self._iter_full_session_timed_rows(
+                        prepared_entries,
+                        runtime_root=runtime_root,
+                        runtime_manifest=runtime_manifest,
                     ):
-                        if start_time and end_time:
-                            start = f"{start_time.strftime('%H:%M:%S')},{start_time.microsecond // 1000:03d}"
-                            end = f"{end_time.strftime('%H:%M:%S')},{end_time.microsecond // 1000:03d}"
-                        else:
-                            start = f"{timestamp.strftime('%H:%M:%S')},{timestamp.microsecond // 1000:03d}"
-                            fallback_end = timestamp + timedelta(seconds=3)
-                            end = f"{fallback_end.strftime('%H:%M:%S')},{fallback_end.microsecond // 1000:03d}"
-                        handle.write(f"{index}\n{start} --> {end}\n{text}\n\n")
+                        cue_text = sanitize_subtitle_cue_text(text)
+                        if not cue_text:
+                            continue
+                        cue_start, cue_end = resolve_cue_time_range(
+                            start_time, end_time, timestamp
+                        )
+                        cue_index += 1
+                        start = format_srt_timestamp(cue_start)
+                        end = format_srt_timestamp(cue_end)
+                        handle.write(f"{cue_index}\n{start} --> {end}\n{cue_text}\n\n")
 
                 utils.atomic_write_text_via_writer(filepath, writer, encoding="utf-8")
 
@@ -271,22 +285,22 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
             def do_save(filepath):
                 def writer(handle) -> None:
                     handle.write("WEBVTT\n\n")
-                    for index, (start_time, end_time, timestamp, text) in enumerate(
-                        self._iter_full_session_timed_rows(
-                            prepared_entries,
-                            runtime_root=runtime_root,
-                            runtime_manifest=runtime_manifest,
-                        ),
-                        1,
+                    cue_index = 0
+                    for start_time, end_time, timestamp, text in self._iter_full_session_timed_rows(
+                        prepared_entries,
+                        runtime_root=runtime_root,
+                        runtime_manifest=runtime_manifest,
                     ):
-                        if start_time and end_time:
-                            start = f"{start_time.strftime('%H:%M:%S')}.{start_time.microsecond // 1000:03d}"
-                            end = f"{end_time.strftime('%H:%M:%S')}.{end_time.microsecond // 1000:03d}"
-                        else:
-                            start = f"{timestamp.strftime('%H:%M:%S')}.{timestamp.microsecond // 1000:03d}"
-                            fallback_end = timestamp + timedelta(seconds=3)
-                            end = f"{fallback_end.strftime('%H:%M:%S')}.{fallback_end.microsecond // 1000:03d}"
-                        handle.write(f"{index}\n{start} --> {end}\n{text}\n\n")
+                        cue_text = sanitize_subtitle_cue_text(text)
+                        if not cue_text:
+                            continue
+                        cue_start, cue_end = resolve_cue_time_range(
+                            start_time, end_time, timestamp
+                        )
+                        cue_index += 1
+                        start = format_vtt_timestamp(cue_start)
+                        end = format_vtt_timestamp(cue_end)
+                        handle.write(f"{cue_index}\n{start} --> {end}\n{cue_text}\n\n")
 
                 utils.atomic_write_text_via_writer(filepath, writer, encoding="utf-8")
 
@@ -354,19 +368,41 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                     runtime_root=runtime_root,
                     runtime_manifest=runtime_manifest,
                 ):
+                    safe_text = sanitize_document_text(text)
+                    if not safe_text.strip():
+                        continue
                     total_count += 1
-                    total_chars += len(text)
+                    total_chars += len(safe_text)
                     paragraph = doc.add_paragraph()
                     if should_print_ts:
                         ts = timestamp.strftime("%H:%M:%S")
                         run = paragraph.add_run(f"[{ts}] ")
                         run.font.size = point_factory(9)
                         run.font.color.rgb = None
-                    self._add_docx_multiline_text(paragraph, text, break_types)
+                    self._add_docx_multiline_text(paragraph, safe_text, break_types)
 
                 doc.add_paragraph()
                 doc.add_paragraph(f"총 {total_count}문장, {total_chars:,}자")
-                doc.save(filepath)
+
+                # 비원자적 doc.save 대신 임시 파일 후 replace (부분 손상 파일 방지)
+                target = Path(filepath)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                fd, temp_path = tempfile.mkstemp(
+                    prefix=f".{target.name}.",
+                    suffix=".docx.tmp",
+                    dir=str(target.parent),
+                )
+                os.close(fd)
+                temp_file = Path(temp_path)
+                try:
+                    doc.save(str(temp_file))
+                    os.replace(str(temp_file), str(target))
+                except Exception:
+                    try:
+                        temp_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    raise
 
             self._save_in_background(do_save, path, "DOCX 저장 완료!", "DOCX 저장 실패")
 
@@ -422,7 +458,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                 self._save_hwpx()
                 return
 
-            filename = f"국회자막_{datetime.now().strftime('%Y%m%d_%H%M%S')}.hwp"
+            filename = self._generate_smart_filename("hwp")
             path, _ = QFileDialog.getSaveFileName(
                 self, "HWP 저장", filename, "HWP 문서 (*.hwp)"
             )
@@ -435,6 +471,17 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
             def do_save(filepath):
                 hwp = None
                 pythoncom_module = None
+
+                def insert_text(value: str) -> None:
+                    """한컴 일부 버전은 InsertText 전 GetDefault 재호출이 필요하다."""
+                    hwp.HAction.GetDefault(
+                        "InsertText", hwp.HParameterSet.HInsertText.HSet
+                    )
+                    hwp.HParameterSet.HInsertText.Text = value
+                    hwp.HAction.Execute(
+                        "InsertText", hwp.HParameterSet.HInsertText.HSet
+                    )
+
                 try:
                     try:
                         pythoncom_module = self._import_optional_module("pythoncom")
@@ -452,13 +499,10 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                     hwp.HAction.Run("FileNew")
                     hwp.HAction.Run("CharShapeBold")
                     hwp.HAction.Run("ParagraphShapeAlignCenter")
-                    hwp.HAction.GetDefault("InsertText", hwp.HParameterSet.HInsertText.HSet)
-                    hwp.HParameterSet.HInsertText.Text = "국회 의사중계 자막\r\n"
-                    hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
+                    insert_text("국회 의사중계 자막\r\n")
                     hwp.HAction.Run("CharShapeBold")
                     hwp.HAction.Run("ParagraphShapeAlignLeft")
-                    hwp.HParameterSet.HInsertText.Text = f"생성 일시: {generated_at}\r\n\r\n"
-                    hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
+                    insert_text(f"생성 일시: {generated_at}\r\n\r\n")
 
                     total_count = 0
                     total_chars = 0
@@ -467,21 +511,18 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
                     ):
+                        safe_text = normalize_hwp_insert_text(text)
+                        if not safe_text.strip():
+                            continue
                         total_count += 1
-                        total_chars += len(text)
+                        total_chars += len(safe_text.replace("\r\n", "\n"))
                         if should_print_ts:
                             ts = timestamp.strftime("%H:%M:%S")
-                            hwp.HParameterSet.HInsertText.Text = f"[{ts}] {text}\r\n"
+                            insert_text(f"[{ts}] {safe_text}\r\n")
                         else:
-                            hwp.HParameterSet.HInsertText.Text = f"{text}\r\n"
-                        hwp.HAction.Execute(
-                            "InsertText", hwp.HParameterSet.HInsertText.HSet
-                        )
+                            insert_text(f"{safe_text}\r\n")
 
-                    hwp.HParameterSet.HInsertText.Text = (
-                        f"\r\n총 {total_count}문장, {total_chars:,}자\r\n"
-                    )
-                    hwp.HAction.Execute("InsertText", hwp.HParameterSet.HInsertText.HSet)
+                    insert_text(f"\r\n총 {total_count}문장, {total_chars:,}자\r\n")
                     hwp.HAction.GetDefault(
                         "FileSaveAs_S", hwp.HParameterSet.HFileOpenSave.HSet
                     )
@@ -646,9 +687,12 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
                     ):
+                        safe_text = sanitize_document_text(text)
+                        if not safe_text.strip():
+                            continue
                         total_count += 1
-                        total_chars += len(text)
-                        encoded_text = self._rtf_encode(text)
+                        total_chars += len(safe_text)
+                        encoded_text = self._rtf_encode(safe_text)
                         handle.write(
                             (
                                 f"\\cf2[{timestamp.strftime('%H:%M:%S')}]\\cf1 "

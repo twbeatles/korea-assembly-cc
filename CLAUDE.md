@@ -13,6 +13,15 @@
   - 다양한 출력 형식 지원
   - **SQLite 데이터베이스 기반 세션 관리**
 
+### 관련 문서 (운영·형제 제품)
+
+| 문서 | 내용 |
+|------|------|
+| [`docs/CHROME_EXTENSION_PARITY.md`](docs/CHROME_EXTENSION_PARITY.md) | Chrome 확장(`korea-assembly-cc-chrome`)과 사이트/수집 계약 정합·이식 정책 |
+| [`docs/HWPX_EXPORT_ANALYSIS.md`](docs/HWPX_EXPORT_ANALYSIS.md) | HWPX 최소 패키지 설계, **스키마 전면 개편 불필요** 판정 |
+| [`PIPELINE_LOCK.md`](PIPELINE_LOCK.md) | 자막 파이프라인 코어 의미론 고정 |
+| [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) | 릴리스·빌드 체크리스트 |
+
 ## 2. 기술 스택
 
 | 구성요소 | 기술 |
@@ -407,6 +416,8 @@ korea-assembly-cc/
 - **패키지 구조**: `assets/hwpx/header.xml` 템플릿과 `Contents/section0.xml`, `Preview/PrvText.txt`, `Contents/content.hpf`를 조합해 최소 유효 HWPX 패키지를 작성
 - **검증 보강**: HWPX 저장 회귀 테스트와 특수문자/XML escape, 줄바꿈 preview 검증을 추가해 `pytest -q` 85 pass, `pyright` 0 errors 확인
 - **multiline 정책**: DOCX/HWPX는 한 `SubtitleEntry`를 한 문단/블록으로 유지하고, 엔트리 내부 개행은 line break로 표현
+- **스키마 전면 개편**: 불필요 판정 — 상세는 [`docs/HWPX_EXPORT_ANALYSIS.md`](docs/HWPX_EXPORT_ANALYSIS.md)
+- **export 견고성 (2026-08)**: `core/export_text.py` (XML/SRT cue sanitize, cue time range), HWP smart filename·InsertText GetDefault, DOCX 원자적 저장
 
 ### v16.14.3 운영 정합성 동기화 메모
 - **driver lifecycle 정리**: `self.driver` 접근을 `_driver_lock` + identity helper로 통일해 start/stop/reconnect/finally handoff race를 줄임

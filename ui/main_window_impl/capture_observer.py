@@ -281,10 +281,17 @@ class MainWindowCaptureObserverMixin(CaptureObserverBase):
                 pass
 
     def _activate_subtitle(self, driver) -> bool:
-        """자막 레이어 활성화 - 다양한 방법 시도"""
+        """자막 레이어 활성화 - 다양한 방법 시도
+
+        클릭 후보는 크롬 확장(subtitle-layer)과 같이 AI 버튼을 일반 자막보다 우선한다.
+        """
         activation_scripts = [
             "if(typeof layerSubtit==='function'){layerSubtit(); return true;} return false;",
+            # AI / 기본 자막 토글 (assembly player smi 버튼 영역)
+            "var btn=document.querySelector('.btn_subtit_ai'); if(btn){btn.click(); return true;} return false;",
+            "var btn=document.querySelector('.btn_subtit_def'); if(btn){btn.click(); return true;} return false;",
             "var btn=document.querySelector('.btn_subtit'); if(btn){btn.click(); return true;} return false;",
+            "var btn=document.querySelector('#smi_btn'); if(btn){btn.click(); return true;} return false;",
             "var btn=document.querySelector('#btnSubtit'); if(btn){btn.click(); return true;} return false;",
             "var btn=document.querySelector('[data-action=\\'subtitle\\']'); if(btn){btn.click(); return true;} return false;",
             "var layer=document.querySelector('#viewSubtit'); if(layer){layer.style.display='block'; return true;} return false;",

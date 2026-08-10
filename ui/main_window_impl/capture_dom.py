@@ -204,6 +204,60 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                             }
                             return node.dataset.assemblyRowKey;
                         }
+                        // 한 smi_word 안 서로 다른 색 span → 화자 단위 분할 (chrome subtitle-rows 정합)
+                        function collectMultiSpeakerSegments(node) {
+                            if (!node || !window.getComputedStyle) return [];
+                            var directSpans = Array.from(node.children || []).filter(function(child) {
+                                return child && child.tagName === 'SPAN';
+                            });
+                            var spans = directSpans.length
+                                ? directSpans
+                                : Array.from(node.querySelectorAll('span')).filter(function(span) {
+                                    var parentSpan = span.parentElement
+                                        ? span.parentElement.closest('span')
+                                        : null;
+                                    return !parentSpan || parentSpan === node || !node.contains(parentSpan);
+                                });
+                            var segments = [];
+                            spans.forEach(function(span, index) {
+                                var text = normalizeText(span.innerText || span.textContent || '');
+                                if (!compactText(text)) return;
+                                var speakerColor = normalizeSpeakerColor(
+                                    window.getComputedStyle(span).color
+                                );
+                                var id = String(span.id || '').trim();
+                                segments.push({
+                                    element: span,
+                                    text: text,
+                                    speakerColor: speakerColor,
+                                    keySuffix: id || ('span' + index)
+                                });
+                            });
+                            if (segments.length <= 1) return [];
+                            var colors = {};
+                            var distinct = 0;
+                            for (var i = 0; i < segments.length; i++) {
+                                var c = segments[i].speakerColor;
+                                if (!colors[c]) {
+                                    colors[c] = true;
+                                    distinct += 1;
+                                }
+                            }
+                            if (distinct <= 1) return [];
+                            return segments;
+                        }
+                        function pushObservedRow(rows, row) {
+                            var previous = rows.length ? rows[rows.length - 1] : null;
+                            if (
+                                previous &&
+                                compactText(previous.text) === compactText(row.text) &&
+                                (previous.nodeKey === row.nodeKey || (previous.unstableKey && row.unstableKey))
+                            ) {
+                                rows[rows.length - 1] = row;
+                                return;
+                            }
+                            rows.push(row);
+                        }
                         function readObservedRows(selector) {
                             var rows = [];
                             var nodes = getSmiWordNodes(selector);
@@ -214,36 +268,45 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                                 classKeyCounts.set(classKey, (classKeyCounts.get(classKey) || 0) + 1);
                             });
                             nodes.forEach(function(node) {
+                                var classNodeKey = extractClassNodeKey(node);
+                                var attrNodeKey = extractAttributeNodeKey(node);
+                                var uniqueClassKey = Boolean(classNodeKey) && classKeyCounts.get(classNodeKey) === 1;
+                                var baseNodeKey = uniqueClassKey
+                                    ? 'class:' + classNodeKey
+                                    : (attrNodeKey ? 'attr:' + attrNodeKey : ensureGeneratedNodeKey(node));
+                                var unstableKey = !uniqueClassKey && !attrNodeKey;
+
+                                var multiSegments = collectMultiSpeakerSegments(node);
+                                if (multiSegments.length > 0) {
+                                    multiSegments.forEach(function(segment) {
+                                        if (filterUnconfirmedArg && !isConfirmedSubtitleNode(segment.element)) {
+                                            return;
+                                        }
+                                        pushObservedRow(rows, {
+                                            nodeKey: baseNodeKey + '#' + segment.keySuffix,
+                                            text: segment.text,
+                                            speakerColor: segment.speakerColor,
+                                            speakerChannel: classifySpeakerChannel(segment.speakerColor),
+                                            unstableKey: unstableKey
+                                        });
+                                    });
+                                    return;
+                                }
+
                                 if (filterUnconfirmedArg && !isConfirmedSubtitleNode(node)) {
                                     return;
                                 }
                                 var text = normalizeText(node.innerText || node.textContent || '');
                                 if (!compactText(text)) return;
-                                var classNodeKey = extractClassNodeKey(node);
-                                var attrNodeKey = extractAttributeNodeKey(node);
-                                var uniqueClassKey = Boolean(classNodeKey) && classKeyCounts.get(classNodeKey) === 1;
-                                var nodeKey = uniqueClassKey
-                                    ? 'class:' + classNodeKey
-                                    : (attrNodeKey ? 'attr:' + attrNodeKey : ensureGeneratedNodeKey(node));
                                 var speakerNode = node.querySelector('span') || node.querySelector('[style*="color"]') || node;
                                 var speakerColor = normalizeSpeakerColor(window.getComputedStyle(speakerNode).color);
-                                var row = {
-                                    nodeKey: nodeKey,
+                                pushObservedRow(rows, {
+                                    nodeKey: baseNodeKey,
                                     text: text,
                                     speakerColor: speakerColor,
                                     speakerChannel: classifySpeakerChannel(speakerColor),
-                                    unstableKey: !uniqueClassKey && !attrNodeKey
-                                };
-                                var previous = rows.length ? rows[rows.length - 1] : null;
-                                if (
-                                    previous &&
-                                    compactText(previous.text) === compactText(row.text) &&
-                                    (previous.nodeKey === row.nodeKey || (previous.unstableKey && row.unstableKey))
-                                ) {
-                                    rows[rows.length - 1] = row;
-                                    return;
-                                }
-                                rows.push(row);
+                                    unstableKey: unstableKey
+                                });
                             });
                             return rows;
                         }

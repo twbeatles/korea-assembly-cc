@@ -3,6 +3,11 @@
 Windows 데스크톱 배포용 운영 체크리스트입니다.  
 (코드 서명 인증서·자동 업데이트 인프라는 별도 준비)
 
+참고 문서:
+
+- [`CHROME_EXTENSION_PARITY.md`](CHROME_EXTENSION_PARITY.md) — Chrome 확장과의 수집 계약 정합
+- [`HWPX_EXPORT_ANALYSIS.md`](HWPX_EXPORT_ANALYSIS.md) — HWPX 패키지 유지 방침 (스키마 전면 개편 비대상)
+
 ## 1. 품질 게이트
 
 ```bash

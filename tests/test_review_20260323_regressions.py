@@ -396,6 +396,7 @@ def test_save_hwp_success_path_runs_with_fake_com_objects(tmp_path, monkeypatch)
     entry = SubtitleEntry("첫 문장", datetime(2026, 3, 23, 10, 0, 0))
     win._build_prepared_entries_snapshot = lambda: [entry]
     win._save_in_background = lambda save_func, path, *_args: save_func(path)
+    win._generate_smart_filename = lambda extension: f"output.{extension}"
 
     target = tmp_path / "output.hwp"
     fake_hwp = _FakeHwp()

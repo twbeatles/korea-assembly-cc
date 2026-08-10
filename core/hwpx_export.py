@@ -6,6 +6,7 @@ from typing import Iterable, Sequence
 from xml.sax.saxutils import escape
 from zipfile import ZIP_STORED, ZipFile
 
+from core.export_text import sanitize_document_text, strip_illegal_xml_chars
 from core.file_io import atomic_write_bytes
 
 _TITLE = "국회 의사중계 자막"
@@ -82,8 +83,11 @@ def build_hwpx_lines(
 
     last_printed_ts: datetime | None = None
     for timestamp, text in subtitles_snapshot:
+        safe_text = sanitize_document_text(text)
+        if not safe_text.strip():
+            continue
         total_count += 1
-        total_chars += len(text)
+        total_chars += len(safe_text)
         should_print_ts = False
         if last_printed_ts is None:
             should_print_ts = True
@@ -96,7 +100,7 @@ def build_hwpx_lines(
         else:
             prefix = ""
 
-        normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+        normalized = safe_text.replace("\r\n", "\n").replace("\r", "\n")
         parts = normalized.split("\n")
         first_part = parts[0] if parts else ""
         if len(parts) > 1:
@@ -109,9 +113,10 @@ def build_hwpx_lines(
 
 
 def _text_node(text: str) -> str:
-    if not text:
+    safe = strip_illegal_xml_chars(text)
+    if not safe:
         return "<hp:t/>"
-    parts = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    parts = safe.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     nodes: list[str] = []
     for index, part in enumerate(parts):
         nodes.append(f'<hp:t xml:space="preserve">{escape(part)}</hp:t>')
@@ -181,6 +186,10 @@ def build_hwpx_bytes(
     generated_at: datetime | None = None,
 ) -> bytes:
     generated = generated_at or datetime.now().astimezone()
+    if not _HEADER_TEMPLATE_PATH.is_file():
+        raise FileNotFoundError(
+            f"HWPX 헤더 템플릿을 찾을 수 없습니다: {_HEADER_TEMPLATE_PATH}"
+        )
     header_xml = _HEADER_TEMPLATE_PATH.read_text(encoding="utf-8")
     lines = build_hwpx_lines(subtitles_snapshot, generated)
     section_xml = build_section_xml(lines)

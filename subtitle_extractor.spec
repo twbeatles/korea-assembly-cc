@@ -91,6 +91,7 @@ HIDDEN_IMPORTS = [
     'core.database_result',
     'core.file_io',
     'core.hwpx_export',
+    'core.export_text',
     'core.live_capture',
     'core.live_capture_impl',
     'core.live_capture_impl.ledger',
