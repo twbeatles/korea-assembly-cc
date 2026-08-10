@@ -19,7 +19,18 @@ python -m pyright
 python scripts/run_release_verification.py --offline --skip-build --instantiate-window
 ```
 
-푸시 전: `pre-push` 훅 또는 `check_before_push.py` 로 **pyright 0 errors** 확인.
+푸시 전: `pre-push` 훅 또는 `check_before_push.py` 로 **pyright 0 errors** 확인.  
+GitHub CI는 **pyright(fail-fast) → pytest** 순으로 실행한다. 타입 오류는 전체 테스트 전에 실패한다.
+
+### CI 실패 시 빠른 대응
+
+| 증상 | 원인 후보 | 조치 |
+|------|-----------|------|
+| `test_pyright_regression` / Pyright step 실패 | `reportOptionalMemberAccess` 등 타입 오류 | 로컬 `python scripts/check_before_push.py --pyright-only` 로 파일:줄 확인 후 수정 |
+| pytest 만 실패 | 회귀 테스트 | 로그의 FAILED 테스트 재현 |
+| pip cache / setup-python 실패 | `cache-dependency-path` 누락 | `requirements-dev.txt` 경로 유지 (이미 설정됨) |
+
+`requirements-dev.txt` 의 `pyright==…` 핀을 CI와 로컬이 공유한다. 임의 `pip install -U pyright` 로 버전을 올리면 CI와 결과가 달라질 수 있다.
 
 라이브/빌드 포함 전체:
 
