@@ -82,6 +82,7 @@ def resolve_cue_time_range(
 
 
 def format_srt_timestamp(value: datetime) -> str:
+    """벽시계 datetime → SRT 타임코드 (레거시/표시용)."""
     return (
         f"{value.strftime('%H:%M:%S')},"
         f"{value.microsecond // 1000:03d}"
@@ -89,10 +90,41 @@ def format_srt_timestamp(value: datetime) -> str:
 
 
 def format_vtt_timestamp(value: datetime) -> str:
+    """벽시계 datetime → VTT 타임코드 (레거시/표시용)."""
     return (
         f"{value.strftime('%H:%M:%S')}."
         f"{value.microsecond // 1000:03d}"
     )
+
+
+def format_cue_timestamp_from_seconds(
+    total_seconds: float,
+    *,
+    fractional_sep: str = ",",
+) -> str:
+    """세션 시작 기준 상대 초 → SRT/VTT 타임코드 (HH:MM:SS.mmm).
+
+    SRT는 쉼표, VTT는 점 구분자를 쓴다. 음수는 0으로 클램프한다.
+    """
+    if total_seconds is None or total_seconds != total_seconds:  # NaN
+        total_seconds = 0.0
+    seconds = max(0.0, float(total_seconds))
+    whole_ms = int(round(seconds * 1000.0))
+    ms = whole_ms % 1000
+    total_sec = whole_ms // 1000
+    s = total_sec % 60
+    total_min = total_sec // 60
+    m = total_min % 60
+    h = total_min // 60
+    return f"{h:02d}:{m:02d}:{s:02d}{fractional_sep}{ms:03d}"
+
+
+def format_srt_relative(total_seconds: float) -> str:
+    return format_cue_timestamp_from_seconds(total_seconds, fractional_sep=",")
+
+
+def format_vtt_relative(total_seconds: float) -> str:
+    return format_cue_timestamp_from_seconds(total_seconds, fractional_sep=".")
 
 
 def normalize_hwp_insert_text(text: object) -> str:

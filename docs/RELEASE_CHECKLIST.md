@@ -12,10 +12,14 @@ Windows 데스크톱 배포용 운영 체크리스트입니다.
 
 ```bash
 pip install -r requirements-dev.txt
+python scripts/install_git_hooks.py          # 푸시 전 pyright 훅 (1회)
+python scripts/check_before_push.py --pyright-only
 python -m pytest -q
 python -m pyright
 python scripts/run_release_verification.py --offline --skip-build --instantiate-window
 ```
+
+푸시 전: `pre-push` 훅 또는 `check_before_push.py` 로 **pyright 0 errors** 확인.
 
 라이브/빌드 포함 전체:
 

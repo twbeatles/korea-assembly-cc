@@ -1,44 +1,45 @@
 # Project Audit
 
-> **감사 일자**: 2026-07-29  
-> **대상 버전**: v16.14.8 (`Config.VERSION` = README 첫 줄에서 로드)  
-> **분석 방법**: README.md · CLAUDE.md 정독 → CodeGraph MCP(`codegraph_explore`) 우선 구조·호출 관계 분석 → 필요 구간만 보조 grep/파일 열람 → `pytest -q` · `pyright --outputjson` 교차 검증  
+> **감사 일자**: 2026-08-10  
+> **대상 버전**: v16.14.8 (`Config.VERSION` = README 첫 줄 로드)  
+> **초점**: 최근 추가 기능 — Chrome 확장 수집 정합(P1-A/B), export 견고화(`core/export_text`, HWP/HWPX/SRT/VTT/DOCX), 운영 문서  
+> **분석 방법**: README.md · CLAUDE.md 정독 → CodeGraph MCP(`codegraph_explore`) 우선 구조·호출 관계 분석 → 필요 구간만 보조 검색/파일 열람 → `pytest` · `pyright` 교차 검증  
 > **범위**: 기능 구현 관점(잠재 결함, 예외/검증, 상태·비동기, I/O·DB, 보안, 테스트, 문서 정합)  
-> **후속 구현**: 2026-07-29 — 본 문서 권고 1~3단계 중 **실행 가능 항목 반영** (`tests/test_project_audit_20260729.py`).  
->   - suffix 알고리즘 **근본 재설계**와 CI Python 매트릭스(외부 CI 부재)는 의도적 보류.  
-> **선행 이력**: 2026-07-22 감사 후속(finished terminal stash, stop 멱등, Observer 짧은 발화, 문서 버전 동기화) 반영 상태를 기준으로 잔여·신규 이슈를 재평가했다.  
-> **확장 감사**: 보안·동시성·성능·아키텍처·테스트·패키징 범위는 [`PROJECT_AUDIT_EXTENDED.md`](PROJECT_AUDIT_EXTENDED.md).
+> **선행 문서**: `docs/CHROME_EXTENSION_PARITY.md`, `docs/HWPX_EXPORT_ANALYSIS.md`, `PIPELINE_LOCK.md`  
+> **확장 감사**: 보안·동시성·성능 광역은 필요 시 [`PROJECT_AUDIT_EXTENDED.md`](PROJECT_AUDIT_EXTENDED.md) 병행  
+> **후속 구현 (2026-08-10)**: 본 문서 권고 1~3단계 개선 착수 — H1 pyright HWP 바인딩, H2/H3 자막 활성화 active 검사, H5 저장 path 가드, H6 HWP 이중 통지·Visible·대용량 안내, H4 row-split 순수 미러 테스트, H7 SRT/VTT 상대 타임코드, H9/H10 README, 푸시 전 pyright 훅(`scripts/check_before_push.py`, `scripts/install_git_hooks.py`).
 
 ---
 
 ## 1. Executive Summary
 
-국회 의사중계 AI 자막을 **PyQt6 UI 스레드 + Selenium ExtractionWorker + 자막 파이프라인 + runtime archive + SQLite** 로 수집·저장하는 Windows 중심 데스크톱 앱이다.  
-v16.14.7~v16.14.8 동안 큐 하드닝, 종료 lifecycle, runtime segmented session, URL/selector 검증, DB degraded mode 등이 반복 보강되어 **일반 사용 경로의 성숙도는 높다.**
+국회 의사중계 AI 자막을 **PyQt6 UI + Selenium ExtractionWorker + structured probe + 자막 파이프라인 + runtime archive + SQLite** 로 수집·저장하는 Windows 중심 데스크톱 앱이다.  
+2026-08-10 커밋(`0da15e1`)으로 **크롬 확장 수집 정합**과 **내보내기 견고화**가 들어갔고, 전체 회귀는 대부분 유지되나 **pyright 0 errors 게이트가 깨진 상태**가 확인되었다.
 
-| 축 | 위험도 (후속 반영 후) | 한 줄 요약 |
-|----|----------------------|------------|
-| **기능 안정성(일반 사용)** | **Low** | 핵심 경로 방어 + 회귀 321건 |
-| **데이터 손실 UX 경계** | **Low** | `_start` dirty/교체 확인 반영 |
-| **파이프라인 정확성** | **Medium** | suffix 구조 한계는 잔존, soft_resync 긴 히스토리 유지 보강 |
-| **장시간 세션 I/O** | **Low** | orphan segment best-effort 삭제 |
-| **극단 부하·큐** | **Low** | overflow/terminal 보호 유지 |
-| **보안** | **Low** | host·selector·SQL·runtime path 가드 |
-| **문서 정합** | **Low** | PIPELINE_LOCK / 본 문서 후속 동기화 |
+| 축 | 위험도 | 한 줄 요약 |
+|----|--------|------------|
+| **신규 수집 정합(P1)** | **Medium** | multi-speaker·AI 버튼 의도 반영, 토글/검증 미흡 잔존 |
+| **신규 export 견고화** | **Low~Medium** | sanitize·cue time 개선됨, 동시 저장·HWP COM·pyright 이슈 |
+| **품질 게이트** | **High** | `pyright` **5 errors** (HWP `insert_text` nested closure) |
+| **기능 안정성(기존 코어)** | **Low~Medium** | 장시간 세션·큐 하드닝은 성숙, suffix 구조 한계는 잔존 |
+| **문서 정합** | **Low~Medium** | 신규 docs 양호, README Python 범위 vs 실빌드 3.14 편차 |
+| **보안** | **Low** | URL host 정책·atomic write 유지, 외부 네트워크 최소 |
 
-**검증 결과**
+**검증 스냅샷 (감사 시점)**
 
-| 시점 | `pytest -q` | `pyright` |
-|------|-------------|-----------|
-| 2026-07-29 감사 직후 | 306 passed / 2 skipped | 0 errors |
-| 2026-07-29 후속 구현 후 | **321 passed / 2 skipped** | **0 errors** |
+| 항목 | 결과 |
+|------|------|
+| `pytest` collect | 356 tests |
+| `pytest -q` | **352 passed / 2 skipped / 2 failed** (`test_pyright_regression` ×2) |
+| `pyright` | **5 errors** — 모두 `persistence_exports.py` HWP `insert_text` |
+| frozen smoke (직전 빌드) | exit 0, `hwpx_ok: true` |
 
-**핵심 결론 (후속 반영 후)**
+**핵심 결론**
 
-1. Critical 결함 없음.  
-2. High였던 `_start` dirty 미보호는 **해소**.  
-3. soft_resync 정합 유지, orphan segment 정리, capture probe 테스트 더블 초석 추가.  
-4. 잔여: suffix 알고리즘 구조 한계(의도적 보류), Selenium/Chrome 실연동 E2E, CI Python 매트릭스(리포에 `.github` 없음).
+1. Critical 급 데이터 손실 결함은 신규 코드에서 확인되지 않았다.  
+2. **즉시 조치**: pyright 회귀 5건(품질 게이트·CI 실패 원인).  
+3. **기능 High 후보**: AI 자막 버튼이 “이미 ON”일 때 재클릭으로 **OFF 토글** 가능 — 크롬 확장은 active 검사 후 클릭.  
+4. multi-speaker·export sanitize는 방향이 올바르나, **probe JS 실 DOM 단위 테스트 부재**와 **병렬 FileSaveWorker 경로 충돌**은 잔여 리스크다.
 
 ---
 
@@ -46,299 +47,281 @@ v16.14.7~v16.14.8 동안 큐 하드닝, 종료 lifecycle, runtime segmented sess
 
 ### 2.1 목적 (README · CLAUDE)
 
-- 국회 의사중계 웹의 **실시간 AI 자막**을 딜레이 없이 추출·저장
-- 출력: TXT / SRT / VTT / DOCX / HWPX / HWP / RTF / JSON 세션 / SQLite
-- 운영 축: 자동 재연결, runtime segmented session, portable/`%LOCALAPPDATA%` 저장소, DB 검색·계보, 다크/라이트 테마
+- 국회 의사중계 웹 **실시간 AI 자막**을 딜레이 없이 추출·저장
+- 출력: TXT / SRT / VTT / DOCX / **HWPX** / HWP / RTF / JSON 세션 / SQLite
+- 운영: 자동 재연결, runtime segmented session, portable/`%LOCALAPPDATA%` 저장소, DB 검색·계보
+- 형제 제품: Chrome 확장(`korea-assembly-cc-chrome`) — **코드 공유 없음**, **사이트 DOM/수집 의미론 공유** (`docs/CHROME_EXTENSION_PARITY.md`)
 
-### 2.2 아키텍처 (CodeGraph + 문서)
+### 2.2 아키텍처 (CLAUDE + CodeGraph)
 
-```
+```text
 국회의사중계 자막.py
-  └─ storage preflight
-  └─ QApplication + MainWindow (facade + mixin 조합)
+  └─ storage preflight → QApplication + MainWindow(facade+mixins)
 
-MainWindow (ui/main_window.py)
-  ├─ RuntimeState / Lifecycle / Driver
-  ├─ Capture (browser / dom / observer / live)
-  ├─ Pipeline (queue / messages / stream / state)
-  ├─ Persistence (session / runtime archive / export)
-  ├─ Database (DBWorker + DatabaseManager mixin)
-  └─ View / UI (render, search, theme, tray)
+MainWindow
+  ├─ Runtime (lifecycle / driver / background registry)
+  ├─ Capture (browser / dom probe / observer / live list)
+  ├─ Pipeline (queue / messages / stream / state · PIPELINE_LOCK)
+  ├─ Persistence (session / runtime archive / **exports**)
+  ├─ Database (DBWorker + DatabaseManager)
+  └─ View / UI
 
-ExtractionWorker (non-daemon, name="ExtractionWorker")
-  -- MainWindowMessageQueue(maxsize=500, run_id envelope) --> UI
+ExtractionWorker (non-daemon)
+  -- MainWindowMessageQueue(maxsize=500, run_id) --> UI
 Control plane
-  -- AppControlMessageQueue(maxsize=200) ------------------┘
+  -- AppControlMessageQueue(maxsize=200) --------┘
 ```
 
-### 2.3 주요 실행 흐름 (CodeGraph call path)
+### 2.3 신규·관련 실행 흐름 (CodeGraph 기준)
 
-1. **시작**  
-   `runtime_lifecycle._start()`  
-   → `validate_assembly_url` + `validate_subtitle_selector`  
-   → capture state / render / pipeline history **전체 초기화**  
-   → `_activate_capture_run` + runtime archive  
-   → worker 큐 clear 후 `ExtractionWorker` 시작 (`daemon=False`)
+#### A. 수집 정합 P1
 
-2. **수집**  
-   `capture_browser._extraction_worker`  
-   → health check / MutationObserver / structured probe  
-   → `message_queue.put((type, payload))`  
-   → worker thread-local `run_id`가 있으면 `MainWindowMessageQueue.put`이 `_emit_worker_message`로 envelope·overflow/terminal 처리
+1. Worker 시작/재연결 → `_activate_subtitle`  
+   (`capture_browser` → `capture_observer._activate_subtitle`)  
+   - 순서: `layerSubtit()` → `.btn_subtit_ai` → `.btn_subtit_def` → … → display:block  
+2. 주기 루프: Observer 버퍼(리셋 신호) 또는  
+   `_read_subtitle_probe_by_selectors` (SoT)  
+3. probe JS `collectMultiSpeakerSegments`  
+   - 서로 다른 화자색 span → `nodeKey = base#segarr_*` 분할  
+4. preview payload → pipeline → live ledger / entries
 
-3. **처리**  
-   `pipeline_messages._process_message_queue` (시간 예산 + 최대 건수 + backlog follow-up)  
-   → `preview` → `_prepare_preview_raw` → `_process_raw_text` (GlobalHistory + suffix `rfind`)  
-   → `SubtitleEntry` / UI 증분 반영  
-   → 장시간 시 runtime segment flush (fingerprint + archive_token/run_id stale-drop)
+#### B. 내보내기 견고화
 
-4. **재연결**  
-   recoverable WebDriver 오류 → 지수 백오프 → 같은 모드·URL 우선 재오픈  
-   → `reconnected` → `_on_capture_reconnected` → `_soft_resync` + `_reconnect_preview_suppress_until_delta`
+1. UI `_save_*` → `_build_persistent_entries_snapshot()` + runtime stream context  
+2. `_save_in_background` → `_start_background_thread(..., "FileSaveWorker")`  
+3. 형식별 writer:
+   - TXT/DOCX/HWP/HWPX/RTF: `sanitize_document_text` / HWPX `strip_illegal_xml_chars`
+   - SRT/VTT: `sanitize_subtitle_cue_text` + `resolve_cue_time_range`
+   - HWPX: `save_hwpx_document` → `atomic_write_bytes`
+   - DOCX: temp + `os.replace`
+   - HWP: COM `InsertText` 루프 + 실패 시 `hwp_save_failed` control 메시지
 
-5. **중지/종료**  
-   `_stop`: preview drain → finalize → worker 대기 → queue clear  
-   stop 중 `finished`/`error`는 **멱등 흡수**  
-   `closeEvent`: dirty save deferred, background/DB drain, diagnostic escalation, driver/DB 정리  
-   정상 종료 시 runtime archive 파일 제거 + recovery pointer 정리
+### 2.4 개발 규칙 (CLAUDE에서 추출)
 
-### 2.4 변경 시 영향 범위 (CodeGraph blast radius 요약)
-
-| 영역 | 대표 심볼 | 비고 |
-|------|-----------|------|
-| Worker 메시지 계약 | `MainWindowMessageQueue`, `_emit_worker_message`, `WorkerQueueMessage` | capture 전역 + queue hardening 테스트 |
-| 파이프라인 게이트 | `_prepare_preview_raw`, `_process_raw_text`, `_soft_resync` | 정확성 핵심, `PIPELINE_LOCK.md` 대상 |
-| 시작/중지 | `_start`, `_stop`, `closeEvent` | 세션 dirty·driver·archive 교차 |
-| Runtime archive | segment flush / fingerprint / `_resolve_runtime_relative_path` | 장시간 세션·복구 |
-| DB | `DatabaseManager.save_session` / `search_subtitles` | DBWorker 직렬화, parameterized SQL |
-| URL/Selector | `validate_assembly_url`, `validate_subtitle_selector` | start/preset/history 공유 |
-
-### 2.5 이전 감사 대비 해소 상태 (요약)
-
-| 2026-07-22 지적 | 현재 상태 |
-|-----------------|-----------|
-| worker `finished` raw put → terminal 보호 우회 | ✅ `_emit_worker_message(..., run_id=)` 후 `clear_worker_run_id` |
-| stop 중 finished/error 드롭 | ✅ whitelist + 멱등 흡수 |
-| Observer `length < 3` 짧은 발화 차단 | ✅ 한글/영문 1자 허용 |
-| CLAUDE/GEMINI 버전 불일치 | ✅ v16.14.8 |
-| subprocess 샌드박스 실패 | ✅ in-process fallback + skip |
+- Worker ↔ UI: bounded queue + `run_id` stale drop  
+- `subtitle_lock` 하에서 리스트 접근, I/O는 락 밖  
+- 파이프라인 suffix `rfind` 의미론 변경 시 `PIPELINE_LOCK.md` 필수  
+- pyright **0 errors** 정책, 파일 단위 `# pyright:` 금지  
+- 저장소 root 3모드(dev / portable / frozen LOCALAPPDATA)
 
 ---
 
 ## 3. High-Risk Issues
 
-> 아래는 **실제 코드 근거**가 있는 항목만 포함한다. 추정은 §4로 분리한다.  
-> 이미 해소된 과거 High 이슈는 §7에 두고, 본 절은 **현재 잔여·신규** 중심으로 서술한다.
+### H1. HWP `insert_text` nested closure — pyright 5 errors / 품질 게이트 붕괴
 
-### 3.1 `_start()`가 dirty 세션 보호 없이 자막/세션을 즉시 초기화 — ✅ Resolved
+* **위치**: `ui/main_window_impl/persistence_exports.py` — `_save_hwp` 내부 `insert_text` (약 475–482행)  
+* **문제**: `hwp = None` 이후 nested 함수가 `hwp.HAction` 등을 참조. 타입 체커는 `hwp`를 `None` 가능으로 본다.  
+* **영향**:  
+  - `tests/test_pyright_regression.py` 실패 (감사 시 2 failed)  
+  - 프로젝트 규칙 “pyright 0 errors” 위반 → CI/로컬 게이트 차단  
+* **근거**: `pyright --outputjson` → errorCount=5, 전부 해당 파일 해당 줄. `pytest` pyright 회귀 실패.  
+* **권장 수정 방향**:  
+  - `insert_text`를 `hwp` 할당 **이후**에 정의하거나, 인자로 `hwp`를 넘기고 `assert hwp is not None` / 로컬 non-optional 바인딩.  
+  - 수정 후 `pyright` 0 + 해당 회귀 테스트 통과 확인.  
+* **우선순위**: **High** (기능 즉시 장애는 아니나 게이트 Critical에 가깝고 최근 변경 도입)
 
-* **위치**: `ui/main_window_impl/runtime_lifecycle.py` — `_start()` / `_begin_extraction_run()`
-* **문제(감사 시점)**: 시작 시 dirty 확인 없이 세션 초기화.
-* **상태 (2026-07-29)**: **✅ 해소**  
-  - dirty → `_run_after_dirty_session_action("추출 시작", ...)`  
-  - clean + 자막 존재 → 교체 확인 다이얼로그  
-  - 본문은 `_begin_extraction_run(url, selector)`로 분리  
-  - 회귀: `tests/test_project_audit_20260729.py`
-* **우선순위**: ~~High~~ → **Resolved**
+---
 
-### 3.2 글로벌 히스토리 + suffix 파이프라인의 구조적 정확성 한계
+### H2. AI 자막 버튼 — “이미 ON” 상태 재클릭 시 OFF 토글 가능
 
-* **위치**: `pipeline_stream` + `PIPELINE_LOCK.md`
-* **문제**: compact + suffix 구조 한계는 **의도적으로 잔존** (근본 재설계 보류).
-* **후속 (2026-07-29)**: soft_resync만 **정합 시 긴 compact 유지**로 완화. suffix `rfind` 코어 의미론 변경 없음.
-* **우선순위**: **Medium** (잔존, 보류)
+* **위치**: `ui/main_window_impl/capture_observer.py` — `_activate_subtitle`  
+* **문제**: `.btn_subtit_ai` 등이 보이기만 하면 `click()` 후 성공 반환. **현재 활성(끄기/ON 클래스) 여부를 검사하지 않음**. 재연결·재시작 시 이미 AI 자막이 켜져 있으면 클릭으로 **꺼질 수 있음**.  
+* **영향**: 수집 시작 직후 자막이 안 잡히거나, 일반/AI 경로가 바뀌어 공백·미수집.  
+* **근거**:  
+  - 코드: `document.querySelector('.btn_subtit_ai'); if(btn){btn.click(); return true;}`  
+  - 크롬 확장(`docs/CHROME_EXTENSION_PARITY.md` 참조 경로 `subtitle-layer.ts`)은 `isActivationControlActive`로 ON이면 클릭하지 않음.  
+  - 재연결 경로: `capture_browser`가 `_activate_subtitle` 재호출.  
+* **권장 수정 방향**:  
+  - title/class/`aria-pressed`로 active 판별 후 **비활성일 때만** 클릭.  
+  - `layerSubtit()` 성공만으로 조기 종료하지 말고, AI 컨트롤 active 또는 `.smi_word` 존재를 확인하는 2단 검증 검토.  
+* **우선순위**: **High**
 
-### 3.3 soft_resync와 runtime archive active-tail의 결합 — 부분 해소
+---
 
-* **상태 (2026-07-29)**: soft_resync가 기존 compact와 최근 엔트리가 정합하면 긴 히스토리 유지.  
-  회귀: `test_soft_resync_keeps_longer_history_when_recent_is_contained`  
-* **잔여**: 완전 desync 시 최근 5개로 축소되는 동작은 유지(의도).
-* **우선순위**: ~~Medium~~ → **Low** (완화됨)
+### H3. `layerSubtit()` 우선 성공 시 AI 버튼 경로 스킵
 
-### 3.4 runtime segment fingerprint 불일치 시 디스크 orphan 파일 — ✅ Resolved
+* **위치**: 동일 `_activate_subtitle` 첫 스크립트  
+* **문제**: `layerSubtit()`이 true를 반환하면 AI 버튼 클릭 루프에 진입하지 않음. 레이어만 열리고 **AI 모드가 아닌 상태**일 수 있음.  
+* **영향**: 일반 자막/빈 레이어만 보이는 세션 → probe는 동작하나 AI 계약(stxt/segarr)과 다를 수 있음.  
+* **근거**: activation_scripts 순서 고정 + 첫 성공 시 break.  
+* **권장 수정 방향**:  
+  - `layerSubtit` 후 AI 버튼 active 검사, 미활성이면 계속 시도.  
+  - 또는 AI 버튼을 `layerSubtit`보다 우선(사이트 회귀 테스트 후).  
+* **우선순위**: **Medium** (H2와 연계)
 
-* **상태 (2026-07-29)**: `_cleanup_orphan_runtime_segment_file` + mismatch 경로 연동.  
-  회귀: `test_cleanup_orphan_*`, `test_handle_runtime_segment_flush_done_mismatch_cleans_orphan`
-* **우선순위**: ~~Low–Medium~~ → **Resolved**
+---
 
-### 3.5 overflow passthrough 상한 초과 시 메시지 드롭 (완화됨, 잔존)
+### H4. multi-speaker 분할 — 임베디드 JS의 실 DOM 회귀 부재
 
-* **위치**: `pipeline_queue._trim_overflow_passthrough_messages`, `Config.OVERFLOW_PASSTHROUGH_MAX`  
-  `MainWindowMessageQueue` + `_emit_worker_message`
-* **문제**: 극단 burst에서 overflow stash trim으로 낮은 우선순위 메시지 손실 가능.  
-  preview coalescing 제거·priority trim·terminal stash로 개선됐으나 **상한 자체는 존재**.
-* **영향**: UI 장기 정체 + 초고속 자막 갱신 시 짧은 구간 누락. 일반 국회 발화 속도에서는 드묾.
-* **근거**: drop 카운터·toast, `tests/test_project_audit_queue_hardening.py`, finished 포화 테스트(`test_project_audit_20260722.py`)
-* **권장 수정 방향**: sustained burst 부하 테스트 유지, 필요 시 preview 전용 상한/압축
+* **위치**: `ui/main_window_impl/capture_dom.py` — probe IIFE 내 `collectMultiSpeakerSegments` / `readObservedRows`  
+* **문제**: 로직은 크롬 확장과 정렬했으나, 테스트는 (1) 소스 문자열 존재, (2) driver mock이 이미 분할된 row를 돌려줄 때 Python 정규화만 검증. **브라우저 JS 실행으로 multi-color span 분할을 검증하지 않음**.  
+* **영향**: 향후 인라인 JS 수정 시 silent regression 가능. 동일 색 multi-span은 미분할(의도)이나 사이트 DOM 변형 시 미탐지.  
+* **근거**: `tests/test_capture_chrome_parity_p1.py`; CodeGraph blast: probe 경로 의존.  
+* **권장 수정 방향**:  
+  - probe JS를 테스트 가능한 문자열/모듈로 추출하거나, selenium opt-in fixture로 `stxt`+`segarr` DOM을 주입해 row 개수·channel 단언.  
+* **우선순위**: **Medium**
+
+---
+
+### H5. 동일 경로 병렬 `FileSaveWorker` — 덮어쓰기·부분 파일 경쟁
+
+* **위치**: `persistence_exports._save_in_background` → `runtime_lifecycle._start_background_thread`  
+* **문제**: 저장마다 새 스레드를 시작. **동일 `path`에 대한 직렬화/락 없음**. 사용자가 연속 저장하거나 HWP 실패 후 대체 저장이 겹치면, atomic replace 간 race 가능.  
+* **영향**: 드물게 최종 파일이 예상과 다르거나(나중 완료분 승리), 실패 토스트와 성공 토스트 혼재.  
+* **근거**: `_start_background_thread`는 shutdown 가드만 있고 path mutex 없음. CodeGraph: `background_save` 호출자 다수.  
+* **권장 수정 방향**:  
+  - path 단위 lock, 또는 “저장 중” 플래그로 동일 형식 중복 시작 거부.  
+  - 성공 토스트에 실제 기록 entry 수 표시.  
+* **우선순위**: **Medium**
+
+---
+
+### H6. HWP COM 경로 — Visible 강제·장시간 세션·이중 실패 통지
+
+* **위치**: `_save_hwp` / `do_save_with_error` / `pipeline_messages` `hwp_save_failed`  
+* **문제**:  
+  1. `XHwpWindows.Item(0).Visible = True` — 백그라운드 저장인데 UI 노출.  
+  2. 문장마다 COM `InsertText` — 수천 엔트리 시 수분~수십 분 가능, 사용자 취소 경로 약함.  
+  3. 실패 시 `hwp_save_failed` emit **후** `raise` → `_save_in_background` 에러 토스트 + UI 대체 저장 다이얼로그 **이중 통지**.  
+* **영향**: UX 혼란, 한컴 프로세스 점유, 대용량 시 앱 종료 대기 지연.  
+* **근거**: 코드 경로 및 `pipeline_messages` 핸들러.  
+* **권장 수정 방향**:  
+  - Visible=False 시도(한컴 버전별 검증), 대용량 시 HWPX 권장 안내/자동 전환 임계값.  
+  - 실패 시 emit만 하거나 raise만 하도록 단일화.  
+* **우선순위**: **Medium**
+
+---
+
+### H7. SRT/VTT 타임코드가 “영상 상대 시간”이 아닌 벽시계 `HH:MM:SS`
+
+* **위치**: `core/export_text.format_srt_timestamp` / `persistence_exports._save_srt`·`_save_vtt`  
+* **문제**: `datetime.strftime('%H:%M:%S')` 사용 → 자막 수집 시각(벽시계)이 그대로 큐 타임코드. 플레이어에 얹으면 00:00 기준 영상과 **어긋남**.  
+* **영향**: “영상 자막 파일”로 쓸 때 동기화 실패. 회의 로그 용도에는 유효.  
+* **근거**: README가 SRT/VTT를 저장 형식으로 나열하나 “영상 상대” 명시 없음. 코드는 wall-clock.  
+* **권장 수정 방향**:  
+  - 옵션: 세션 첫 entry 기준 relative cue, 또는 문서에 “벽시계 기준” 명시.  
+* **우선순위**: **Medium** (요구 정의 이슈에 가깝지만 기능 오해 가능)
+
+---
+
+### H8. (잔존) 파이프라인 suffix 구조 한계
+
+* **위치**: `core/subtitle_pipeline*` · `PIPELINE_LOCK.md`  
+* **문제**: 글로벌 compact + rfind는 장시간·대규모 반복 발화에서 desync/중복 잔존 가능. soft_resync로 완화.  
+* **영향**: 수집 정확도 이슈(기존 알려진 한계).  
+* **근거**: 기존 감사·PIPELINE_LOCK 이력. 이번 신규 기능 범위 밖.  
+* **권장 수정 방향**: 의도적 보류 유지 또는 별도 연구 과제.  
+* **우선순위**: **Low~Medium** (신규 기능 비대상)
+
+---
+
+### H9. (문서) README Python 권장 범위 vs 실제 빌드 환경
+
+* **위치**: `README.md` “Python 3.10–3.12 권장” / 로컬 PyInstaller 로그 `Python: 3.14.7`  
+* **문제**: 문서 권장과 실빌드 인터프리터 불일치. 3.14에서 미검증 의존성 이슈 가능.  
+* **영향**: 기여자/CI 환경 편차, 간헐적 패키징 차이.  
+* **근거**: README 문구, 직전 빌드 로그.  
+* **권장 수정 방향**: README를 실제 지원 범위에 맞게 수정하거나 CI 매트릭스 고정.  
 * **우선순위**: **Low**
 
-### 3.6 보안·입력 검증 — 잔여이지만 낮은 위험
+---
 
-* **위치/상태**:
-  - URL: `core/url_policy.validate_assembly_url` — scheme + `assembly.webcast.go.kr` host만 허용 (**path/query는 미제한**)
-  - Selector: `validate_subtitle_selector` — 길이·문자 화이트리스트; Observer 주입은 `execute_script(..., selectorArg)` **인자 전달**(문자열 보간 삽입 아님)
-  - SQL: 파라미터 바인딩 + LIKE `ESCAPE '\\'`
-  - Runtime path: `_resolve_runtime_relative_path`로 absolute/drive/root 이탈 차단
-  - pickle/yaml.unsafe/`shell=True` 앱 런타임 경로 없음(검증 스크립트 subprocess는 로컬 개발용)
-* **문제**: 허용 host 내 임의의 path/query는 열 수 있음. 실질 공격면은 **로컬 사용자가 악의 URL/selector를 넣는 수준**.
-* **영향**: 제한적 (로컬 데스크톱 + 고정 공공 사이트)
-* **권장 수정 방향**: 필요 시 path allowlist(`/main/player.asp`, `pressplayer.asp` 등) 추가
+### H10. (패키징) frozen EXE에서 `python-docx` hidden import 누락 가능
+
+* **위치**: `subtitle_extractor.spec` / PyInstaller 로그 `Hidden import 'docx' not found`  
+* **문제**: DOCX는 optional인데 frozen 환경에 미포함이면 메뉴는 있으나 저장 시 ImportError 안내.  
+* **영향**: 배포 EXE 사용자 DOCX 불가(문서상 optional과 정합할 수 있음).  
+* **근거**: 빌드 로그 ERROR Hidden import docx.  
+* **권장 수정 방향**: requirements를 빌드 env에 포함하거나 README/EXE 안내에 “DOCX는 소스+python-docx” 명시.  
 * **우선순위**: **Low**
-
-### 3.7 (참고) 2026-07-22 High — worker `finished` terminal 보호 — ✅ Resolved
-
-* **위치**: `capture_browser._extraction_worker` `finally`
-* **현재**: `_emit_worker_message("finished", payload, run_id=run_id)` 후 `clear_worker_run_id()`  
-* **회귀**: `tests/test_project_audit_20260722.py::test_extraction_worker_finished_survives_full_queue`  
-* **우선순위**: Resolved
 
 ---
 
 ## 4. Potential Functional Gaps
 
-### 4.1 코드·테스트로 확인된 gap
-
-| Gap | 근거 |
-|-----|------|
-| **시작 시 dirty 보호 부재** | §3.1 — 종료/로드/병합과 비대칭 |
-| **Selenium/Chrome 실연동 E2E 부재** | `test_live_contract_smoke.py`는 live_list API opt-in. DOM/Observer/재연결 E2E 없음 |
-| **archive + soft_resync 결합 테스트 부재** | §3.3 |
-| **orphan segment 정리 테스트 부재** | §3.4 |
-| **impl contracts Protocol 시그니처 빈약** | `ui/main_window_impl/contracts.py` Host가 얇음 → mixin 계약 정적 강제력 약함 (의도적 보류 이력 있음) |
-| **DBWorker 단위 테스트 범위** | shutdown/stale 일부 보강됐으나 worker_loop 전 구간 커버는 제한적 |
-| **CLAUDE.md 본문 회귀 수치 혼재** | 버전은 16.14.8이나 중간 절에 과거 pass 수가 남아 README 변경 이력이 더 최신 |
-
-### 4.2 추정 gap (미확정 — “추정” 명시)
-
-- **추정**: Python 3.14 + 핀된 PyQt6/Selenium/PyInstaller 조합은 README 권장(3.10–3.12) 밖일 수 있다. 현재 로컬 306 pass는 통과하나 장기 호환 매트릭스는 미검증.
-- **추정**: `keep_browser_on_stop` + 즉시 재시작 시 driver handoff 레이스가 드물게 남을 수 있다(`_driver_lock`·identity helper로 상당 부분 완화).
-- **추정**: 비정상 종료 직후 runtime salvage 경고가 많은 경우, 복구 UX가 여전히 복잡할 수 있다(기능 자체는 구현됨).
-- **추정**: Linux/macOS는 1급 지원 대상이 아님(README Platform=Windows, HWP/pywin32/LOCALAPPDATA).
-- **추정**: FTS `syntax="fts"` UI 노출이 제한적이면 raw FTS 경로는 사실상 미사용일 수 있음(literal 기본은 의도적).
-- **추정**: MutationObserver 주 경로(텍스트 push)는 `isLikelySubtitleText`를 거치지 않고 poll fallback만 필터한다. 파이프라인 게이트가 후단에서 거르므로 치명적이진 않으나, 버퍼 노이즈가 늘 수 있다.
-
-### 4.3 README/CLAUDE vs 구현 정합
-
-| 항목 | 정합 |
-|------|------|
-| 실시간 수집 / 재연결 / 저장 포맷 | 일치 |
-| worker/control 큐 분리, non-daemon worker | 일치 |
-| runtime archive + recovery | 일치 |
-| URL host 정책 | 일치 |
-| 짧은 발화 수집 (네/예) | 일치 (Observer·파이프라인 정렬됨) |
-| 버전 번호 v16.14.8 | 일치 (README / CLAUDE / Config) |
-| “미저장 시 종료 프롬프트” | 종료·로드에는 일치, **시작 시 미보호**는 문서에 명시되지 않음 (gap) |
-| CLAUDE 중간 절 회귀 pass 수 | 역사 기록 혼재 — 최신 기준은 README 변경 이력·본 문서 §1 |
+| 항목 | 상태 | 비고 |
+|------|------|------|
+| 미확정 필터 UI 토글 | **추정 갭** | `filter_unconfirmed_enabled` 파라미터는 있으나 워커 호출은 기본 `True` 고정, UI 설정 노출 없음 |
+| unconfirmed fallback streak (확장 P2) | 의도적 미이식 | `CHROME_EXTENSION_PARITY.md` — 정체 제보 시 검토 |
+| unconfirmed `backgroundImage` 샘플링 | 의도적 미이식 | 사이트 실측은 color 중심 |
+| multi-speaker 실 DOM E2E | **추정 갭** | H4 참고 |
+| SRT relative timeline 옵션 | **추정 갭** | H7 참고 |
+| 저장 중 동일 파일 재진입 방지 | **추정 갭** | H5 참고 |
+| HWP 대용량 진행률/취소 | **추정 갭** | H6 참고 |
+| AI 버튼 active 검사 | **기능 갭** | H2 참고 (추정 아님) |
+| 발언자 라벨 export (확장 v1.0.13) | 의도적 미이식 | 데스크톱 제품 범위 외 |
+| HWPX 스키마 전면 개편 | **불필요** 판정 | `docs/HWPX_EXPORT_ANALYSIS.md` |
+| probe 빈 결과 시 사용자 진단(selector/mode) | 부분 존재 | 확장 진단 패널 수준은 없음 — **추정 개선점** |
 
 ---
 
 ## 5. Recommended Fix Plan
 
-### 1단계 — 즉시 수정 (데이터 손실·기능 경계)
+### 1단계 — 즉시 (게이트·수집 회귀 위험)
 
-1. **`_start()` dirty/세션 보호** (§3.1)  
-   - 자막 존재 또는 dirty일 때 저장/버리기/취소  
-   - Cancel 시 시작 중단  
-   - 회귀 테스트 3종(취소 유지 / discard 후 시작 / save 후 시작)
-2. **(이미 완료 확인)** finished terminal envelope, stop 멱등, Observer 짧은 발화 — 회귀 스위트 유지
+1. **H1** pyright 5건 해소 (`insert_text` non-optional 바인딩) → `pytest tests/test_pyright_regression.py` 통과.  
+2. **H2** AI/일반 자막 컨트롤 **active 검사** 후 클릭 (확장 subtitle-layer 정책 정렬).  
+3. 회귀 테스트: “이미 ON인 버튼은 클릭하지 않음” 스크립트/소스 계약 또는 fake driver 시퀀스.
 
-### 2단계 — 안정성 개선
+### 2단계 — 안정성
 
-1. soft_resync window 정책 재검토 (§3.2·§3.3) — PIPELINE_LOCK 준수, fixture 선행  
-2. runtime segment mismatch 시 orphan 파일 정리 (§3.4)  
-3. overflow sustained burst + archive flush 동시 시나리오  
-4. CLAUDE.md “현재 기준선” 절을 단일 표로 정리(역사 수치는 변경 이력으로만)
+4. **H3** `layerSubtit` 성공 후에도 AI active 미확인 시 버튼 경로 계속.  
+5. **H5** FileSaveWorker path/형식 단위 중복 시작 가드.  
+6. **H6** HWP 실패 통지 단일화, Visible 정책 재검토, 대용량 시 HWPX 유도.  
+7. SRT/VTT **빈 큐만 남는 저장** 시 경고(성공 토스트 방지).
 
-### 3단계 — 구조·장기 개선
+### 3단계 — 구조·제품
 
-1. Capture DOM 읽기 Protocol을 테스트 더블로 고정해 Chrome 없는 E2E 시뮬  
-2. CI matrix: Python 3.10–3.12 + `pip install -r requirements-dev.txt`  
-3. `contracts.py` Host 시그니처 보강은 pyright abstract/override 회귀를 보며 점진 적용  
-4. suffix 알고리즘 근본 개선은 **사용자 요청·실방송 로그 근거** 있을 때만 (보류 권장)
+8. **H4** probe JS 추출 또는 DOM fixture 테스트.  
+9. **H7** relative SRT 옵션 또는 README 명시.  
+10. filter_unconfirmed UI/설정 노출 여부 결정.  
+11. **H9/H10** 지원 Python·optional DOCX 문서/빌드 정합.  
+12. suffix 파이프라인 구조 개선은 별도 연구(기존 보류 유지 가능).
 
 ---
 
 ## 6. Test Recommendations
 
-### 6.1 필수 추가 (1단계)
+| 우선 | 테스트 | 목적 |
+|------|--------|------|
+| P0 | `test_pyright_regression` 재통과 | 게이트 복구 |
+| P0 | `_activate_subtitle`: ON 상태 버튼 미클릭 | H2 회귀 |
+| P1 | `_activate_subtitle`: `layerSubtit` true여도 AI inactive면 버튼 시도 | H3 |
+| P1 | multi-speaker: 실 JS 또는 추출 함수로 이색 span → row 2개 | H4 |
+| P1 | SRT: `end<=start`, 빈 줄 본문, 제어문자 (이미 `test_export_hardening` 존재 — 유지) | 회귀 고정 |
+| P1 | HWPX: `\x00` strip (이미 존재 — 유지) | |
+| P2 | 동일 path에 FileSaveWorker 2회 연속 → 직렬/거부 | H5 |
+| P2 | HWP 실패 시 toast 1회 + dialog 1회만 | H6 |
+| P2 | 모든 엔트리가 sanitize 후 빈 문자열 → 사용자 경고 | export edge |
+| P3 | opt-in live smoke: AI 버튼 on, `stxt`+`segarr` 수집 | 사이트 계약 |
+| P3 | frozen EXE: import smoke에 `core.export_text` | 패키징 |
 
-| 테스트 | 내용 |
-|--------|------|
-| `test_start_blocks_when_session_dirty_cancel` | dirty + 자막 있는 상태에서 `_start` 시도 → Cancel → 자막/ dirty 유지, worker 미시작 |
-| `test_start_after_discard_resets_session` | Discard 후 start 본문 실행 → empty capture state |
-| `test_start_after_save_continues` | Save 완료 콜백 후 extraction worker 시작 경로 진입 |
-
-### 6.2 안정성 보강 (2단계)
-
-| 테스트 | 내용 |
-|--------|------|
-| soft_resync after runtime archive | tail만 남은 상태에서 desync → resync → 다음 preview 중복 없음 |
-| segment flush fingerprint mismatch orphan | mismatch 시 manifest 미등록 파일 삭제 또는 재시도 정책 |
-| reconnect + archive + suppress | 재연결 handshake와 segment flush 동시 |
-| stop 중 finished/error 멱등 | 기존 2026-07-22 테스트 유지 |
-
-### 6.3 기존 유지 게이트
-
-```bash
-pip install -r requirements-dev.txt
-python -m pytest -q
-python -m pyright --outputjson
-python "국회의사중계 자막.py" --smoke --smoke-storage-dir .pytest_tmp/smoke-storage
-python scripts/run_release_verification.py --offline --skip-build --instantiate-window
-```
-
-- live 계약: `RUN_LIVE_SMOKE=1 pytest tests/test_live_contract_smoke.py` (opt-in)  
-- 파이프라인 변경 시: `PIPELINE_LOCK.md` §2 이력 + `test_prepare_preview_raw.py` / `test_core_algorithm.py` 필수
-
-### 6.4 이번 감사에서 확인된 기준선
-
-| 명령 | 결과 |
-|------|------|
-| `pytest -q` | 306 passed, 2 skipped (≈48.6s) |
-| `pyright --outputjson` | 0 errors / 0 warnings |
+**기존 유지 권장**: `tests/test_capture_chrome_parity_p1.py`, `tests/test_export_hardening.py`, `tests/test_hwpx_export.py`, `tests/test_review_20260323_regressions.py`.
 
 ---
 
-## 7. Appendix — 이전 조치 이력 (요약)
+## 부록 A. 신규 기능 대비 문서 정합
 
-### 2026-06-25 (v16.14.7 감사 후속)
-
-preview coalescing 제거, overflow 우선순위 trim, stopping preview drain, control 큐 분리, `DatabaseOperationResult`, non-daemon worker, selector 검증, 재연결 soft_resync, 복구 UX 등.
-
-### 2026-06-30 (v16.14.8)
-
-in-process smoke/pyright fallback, `_prepare_preview_raw` 전용 테스트, reconnect handshake, runtime salvage 테스트, capture Protocol, release verifier deps/codegraph 옵션.
-
-### 2026-07-22 (감사 + 후속 구현)
-
-| 권고 | 상태 | 비고 |
-|------|------|------|
-| finished run_id envelope + terminal stash | ✅ | `capture_browser.py` finally |
-| stop 중 finished/error 멱등 | ✅ | `pipeline_messages.py` |
-| CLAUDE/GEMINI 버전 동기화 | ✅ | v16.14.8 |
-| Observer 짧은 발화 | ✅ | `length < 3` 제거 |
-| suffix 구조 한계 | 보류 | PIPELINE_LOCK |
-| DBWorker shutdown 테스트 | ✅ 일부 | 지속 보강 여지 |
-| Selenium E2E / CI matrix | 미착수 | 장기 |
-
-### 2026-07-29 (본 감사)
-
-- 초기 감사: 기능 코드 변경 없음. High로 `_start` dirty 미보호 식별.
-
-### 2026-07-29 (감사 후속 구현)
-
-| 권고 | 상태 | 비고 |
-|------|------|------|
-| §3.1 `_start` dirty/교체 보호 | ✅ | `_begin_extraction_run` 분리 |
-| §3.3 soft_resync 긴 히스토리 유지 | ✅ 부분 | 정합 시 previous 유지 |
-| §3.4 orphan segment 정리 | ✅ | best-effort unlink |
-| Capture probe 테스트 더블 | ✅ 초석 | `CaptureProbeProtocol` + Fake |
-| suffix 알고리즘 근본 재설계 | 보류 | PIPELINE_LOCK |
-| CI Python 매트릭스 | 보류 | 리포에 `.github` 없음 |
-
-**회귀 파일**: `tests/test_project_audit_20260729.py`  
-**기준선**: `pytest -q` **321 passed / 2 skipped**, `pyright` **0 errors**.
+| 문서 주장 | 구현 | 판정 |
+|-----------|------|------|
+| `CHROME_EXTENSION_PARITY` P1-A/B 반영 | `capture_dom` / `capture_observer` | 정합 |
+| HWPX 스키마 전면 개편 불필요 | `hwpx_export` 최소 패키지 유지 | 정합 |
+| export sanitize / cue time | `export_text` + exports | 정합 |
+| CLAUDE “pyright 0 errors” | 현재 5 errors | **불일치 (H1)** |
+| README SRT/VTT 저장 | 벽시계 타임코드 | 명시 부족 (H7) |
+| README Python 3.10–3.12 | 로컬 빌드 3.14 관측 | 편차 (H9) |
 
 ---
 
-*감사 리포트 + 후속 구현 현황. suffix 알고리즘 재설계는 별도 승인 작업.*
+## 부록 B. CodeGraph 관찰 요약
+
+- Export hot path: `_save_*` → `_save_in_background` → `FileSaveWorker` → 형식별 writer / `save_hwpx_document`.  
+- Capture hot path: `_extraction_worker` → `_activate_subtitle` + `_read_subtitle_probe_by_selectors` → preview queue → pipeline.  
+- multi-speaker·AI 버튼은 **수집 입력 품질**에, export_text는 **출력 무결성**에 영향. 파이프라인 suffix 코어는 이번 변경 비대상.
+
+---
+
+## 부록 C. 한 줄 요약
+
+**신규 수집·export 방향은 타당하나, (1) pyright 게이트 붕괴, (2) AI 자막 버튼 토글 위험, (3) 병렬 저장·HWP COM·실 DOM 테스트 공백을 우선 다뤄야 한다. HWPX 스키마 전면 개편은 불필요 판정을 유지한다.**

@@ -281,38 +281,103 @@ class MainWindowCaptureObserverMixin(CaptureObserverBase):
                 pass
 
     def _activate_subtitle(self, driver) -> bool:
-        """자막 레이어 활성화 - 다양한 방법 시도
+        """자막 레이어 활성화.
 
-        클릭 후보는 크롬 확장(subtitle-layer)과 같이 AI 버튼을 일반 자막보다 우선한다.
+        크롬 확장(subtitle-layer)과 같이:
+        - AI 버튼을 일반 자막보다 우선
+        - 이미 ON(active)인 컨트롤은 재클릭하지 않음 (토글 OFF 방지)
+        - layerSubtit() 만으로 끝내지 않고 AI active를 재확인
         """
-        activation_scripts = [
-            "if(typeof layerSubtit==='function'){layerSubtit(); return true;} return false;",
-            # AI / 기본 자막 토글 (assembly player smi 버튼 영역)
-            "var btn=document.querySelector('.btn_subtit_ai'); if(btn){btn.click(); return true;} return false;",
-            "var btn=document.querySelector('.btn_subtit_def'); if(btn){btn.click(); return true;} return false;",
-            "var btn=document.querySelector('.btn_subtit'); if(btn){btn.click(); return true;} return false;",
-            "var btn=document.querySelector('#smi_btn'); if(btn){btn.click(); return true;} return false;",
-            "var btn=document.querySelector('#btnSubtit'); if(btn){btn.click(); return true;} return false;",
-            "var btn=document.querySelector('[data-action=\\'subtitle\\']'); if(btn){btn.click(); return true;} return false;",
-            "var layer=document.querySelector('#viewSubtit'); if(layer){layer.style.display='block'; return true;} return false;",
-        ]
+        # 단일 스크립트로 active 검사 + 클릭 우선순위를 처리한다.
+        # (querySelector 성공 ≠ 활성화 성공 — ON 상태 재클릭 금지)
+        activation_script = """
+            return (function() {
+                function isActive(el) {
+                    if (!el) return false;
+                    var className = String(el.className || '');
+                    var title = String(el.getAttribute('title') || '');
+                    var aria = String(el.getAttribute('aria-pressed') || '');
+                    return /\\bon\\b/i.test(className)
+                        || /(끄기|닫기)/.test(title)
+                        || aria === 'true';
+                }
+                function query(sel) {
+                    try { return document.querySelector(sel); } catch (e) { return null; }
+                }
+                var aiSelectors = ['.btn_subtit_ai', '.btn_subtit_def'];
+                var genericSelectors = [
+                    '.btn_subtit', '#smi_btn', '#btnSubtit',
+                    "[data-action='subtitle']", '.Subtitle'
+                ];
+
+                // 1) 이미 AI/자막 컨트롤이 ON 이면 성공 (클릭 없음)
+                for (var i = 0; i < aiSelectors.length; i++) {
+                    var a = query(aiSelectors[i]);
+                    if (a && isActive(a)) {
+                        return { ok: true, method: 'already-active', selector: aiSelectors[i] };
+                    }
+                }
+
+                // 2) 페이지 함수 (레이어 오픈 시도) — 이후 AI active 재확인
+                if (typeof layerSubtit === 'function') {
+                    try { layerSubtit(); } catch (e) {}
+                }
+                for (var j = 0; j < aiSelectors.length; j++) {
+                    var a2 = query(aiSelectors[j]);
+                    if (a2 && isActive(a2)) {
+                        return { ok: true, method: 'layerSubtit', selector: aiSelectors[j] };
+                    }
+                }
+
+                // 3) AI 버튼: inactive 일 때만 클릭
+                for (var k = 0; k < aiSelectors.length; k++) {
+                    var btn = query(aiSelectors[k]);
+                    if (!btn) continue;
+                    if (isActive(btn)) {
+                        return { ok: true, method: 'already-active', selector: aiSelectors[k] };
+                    }
+                    try { btn.click(); } catch (e) { continue; }
+                    return { ok: true, method: 'click', selector: aiSelectors[k] };
+                }
+
+                // 4) 일반 자막 컨트롤
+                for (var g = 0; g < genericSelectors.length; g++) {
+                    var gbtn = query(genericSelectors[g]);
+                    if (!gbtn) continue;
+                    if (isActive(gbtn)) {
+                        return { ok: true, method: 'already-active', selector: genericSelectors[g] };
+                    }
+                    try { gbtn.click(); } catch (e) { continue; }
+                    return { ok: true, method: 'click', selector: genericSelectors[g] };
+                }
+
+                // 5) 최후: 레이어 display (토글 위험 없는 스타일 강제)
+                var layer = query('#viewSubtit');
+                if (layer) {
+                    try { layer.style.display = 'block'; } catch (e) {}
+                    return { ok: true, method: 'display-block', selector: '#viewSubtit' };
+                }
+                return { ok: false, method: 'none', selector: '' };
+            })();
+        """
 
         activated = False
-        for idx, script in enumerate(activation_scripts, start=1):
-            try:
-                result = driver.execute_script(script)
-                if result:
+        try:
+            result = driver.execute_script(activation_script)
+            if isinstance(result, dict):
+                activated = bool(result.get("ok"))
+                if activated:
                     logger.info(
-                        "자막 활성화 성공 (step=%s/%s): %s...",
-                        idx,
-                        len(activation_scripts),
-                        script[:50],
+                        "자막 활성화 성공 (method=%s, selector=%s)",
+                        result.get("method"),
+                        result.get("selector"),
                     )
-                    activated = True
-                    break
-                self.stop_event.wait(timeout=0.5)
-            except Exception as e:
-                logger.debug(f"자막 활성화 스크립트 실패: {e}")
+                else:
+                    logger.warning("자막 활성화 실패: 컨트롤/레이어 없음")
+            else:
+                activated = bool(result)
+        except Exception as e:
+            logger.debug(f"자막 활성화 스크립트 실패: {e}")
 
         self.stop_event.wait(timeout=2.0)
         return activated

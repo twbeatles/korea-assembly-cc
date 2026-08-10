@@ -39,29 +39,32 @@ class _RecordingDriver:
 
 def test_activate_subtitle_prefers_ai_button_before_generic():
     """P1-B: .btn_subtit_ai / .btn_subtit_def 가 일반 .btn_subtit 보다 앞선다."""
-    # MainWindow facade는 위임 래퍼이므로 실제 구현 mixin 소스를 본다.
     source = inspect.getsource(
         capture_observer_mod.MainWindowCaptureObserverMixin._activate_subtitle
     )
     ai_pos = source.find(".btn_subtit_ai")
     def_pos = source.find(".btn_subtit_def")
-    # 일반 선택자는 따옴표 안 정확 매칭 (ai/def 변형 제외)
-    generic_marker = "querySelector('.btn_subtit')"
-    generic_pos = source.find(generic_marker)
-    smi_btn_pos = source.find("querySelector('#smi_btn')")
+    generic_pos = source.find("'.btn_subtit'")
+    smi_btn_pos = source.find("'#smi_btn'")
 
     assert ai_pos >= 0, "AI 자막 버튼 선택자가 없습니다"
     assert def_pos >= 0, "기본 자막 버튼 선택자가 없습니다"
     assert generic_pos >= 0, "일반 .btn_subtit 선택자가 없습니다"
     assert smi_btn_pos >= 0, "#smi_btn 선택자가 없습니다"
     assert ai_pos < def_pos < generic_pos < smi_btn_pos
+    # active 재클릭 방지
+    assert "isActive" in source
+    assert "already-active" in source
+    assert "끄기" in source or "닫기" in source
 
 
-def test_activate_subtitle_succeeds_on_ai_button_after_layer_fails():
-    """P1-B: layerSubtit 실패 후 AI 버튼에서 성공하면 조기 종료한다."""
+def test_activate_subtitle_succeeds_when_script_reports_ok():
+    """통합 활성화 스크립트가 ok=true 를 반환하면 성공한다."""
 
-    def success_when(script: str, _args) -> bool:
-        return ".btn_subtit_ai" in script
+    def success_when(script: str, _args):
+        assert "btn_subtit_ai" in script
+        assert "isActive" in script
+        return {"ok": True, "method": "click", "selector": ".btn_subtit_ai"}
 
     driver = _RecordingDriver(success_when=success_when)
     win = MainWindow.__new__(MainWindow)
@@ -70,16 +73,7 @@ def test_activate_subtitle_succeeds_on_ai_button_after_layer_fails():
     activated = MainWindow._activate_subtitle(win, driver)
 
     assert activated is True
-    assert any(".btn_subtit_ai" in s for s in driver.scripts)
-    # AI 성공 이후 일반 버튼/display 강제까지 가지 않음
-    after_ai = False
-    for script in driver.scripts:
-        if ".btn_subtit_ai" in script:
-            after_ai = True
-            continue
-        if after_ai:
-            assert "querySelector('.btn_subtit')" not in script
-            assert "viewSubtit" not in script or "display" not in script
+    assert len(driver.scripts) == 1
 
 
 def test_probe_js_contains_multi_speaker_split():

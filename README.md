@@ -63,7 +63,8 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 
 ### 1. Python 설치
 
-Python 3.10–3.12를 권장합니다(3.10 이상 동작). 개발·CI에서는 `requirements-dev.txt` 핀을 그대로 설치하세요.  
+Python **3.10 이상**에서 동작합니다. CI는 **3.12**, 로컬 개발은 3.10–3.14 범위를 지원합니다.  
+개발·검증·빌드 시 `requirements-dev.txt` 핀을 그대로 설치하세요.  
 [Python 공식 사이트](https://www.python.org/downloads/)에서 다운로드하세요.
 
 ### 2. 의존성 설치
@@ -200,16 +201,18 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 
 | 형식 | 확장자 | 설명 | 추가 설치 |
 |------|--------|------|-----------|
-| TXT | .txt | 타임스탬프 포함 텍스트 | 없음 |
-| SRT | .srt | SubRip 자막 파일 | 없음 |
-| VTT | .vtt | WebVTT 자막 파일 | 없음 |
-| DOCX | .docx | Word 문서 | python-docx |
+| TXT | .txt | 수집 시각(벽시계) 타임스탬프 텍스트 | 없음 |
+| SRT | .srt | SubRip — **세션 첫 자막 기준 상대 타임코드** | 없음 |
+| VTT | .vtt | WebVTT — **세션 첫 자막 기준 상대 타임코드** | 없음 |
+| DOCX | .docx | Word 문서 | python-docx (소스·dev 빌드) |
 | HWPX | .hwpx | 한글 문서 (기본 포맷) | 없음 |
-| HWP | .hwp | 한글 문서 | pywin32 + 한컴오피스 |
+| HWP | .hwp | 한글 문서 (COM) | pywin32 + 한컴오피스 (Windows) |
 | RTF | .rtf | 서식 있는 텍스트 | 없음 |
 | JSON | .json | 전체 세션 저장 (복원 가능) | 없음 |
 
-> HWP 저장 시 한컴오피스가 없으면 자동으로 HWPX로 대체됩니다. RTF 파일도 한글에서 열 수 있습니다.
+> HWP 저장 시 한컴오피스가 없으면 자동으로 HWPX로 대체됩니다. RTF 파일도 한글에서 열 수 있습니다.  
+> TXT/DOCX/HWP/HWPX 본문의 `[HH:MM:SS]` 는 수집 시각(벽시계)이며, SRT/VTT 큐 시간은 재생 동기화용 상대 시간입니다.  
+> **배포 EXE**: DOCX는 빌드 환경에 `python-docx`가 포함되어야 합니다. 없으면 메뉴에서 설치 안내가 뜹니다.
 
 ---
 
@@ -256,9 +259,14 @@ pyinstaller subtitle_extractor.spec
 
 ```bash
 pip install -r requirements-dev.txt
+python scripts/install_git_hooks.py   # 푸시 전 pyright 훅 설치 (1회)
+python scripts/check_before_push.py --pyright-only   # 푸시 전 수동 검사
 pyright           # 정적 분석 (0 errors 기준)
 pytest -q         # 회귀 테스트 전체 통과 기준 (in-process smoke 포함)
 ```
+
+`git push` 시 pre-push 훅이 `pyright`를 실행하며 **errorCount > 0 이면 푸시가 거부**됩니다.  
+CI(`.github/workflows/ci.yml`)도 push/PR 에서 pytest + pyright를 실행합니다.
 
 에이전트/샌드박스 환경에서는 `*_subprocess` 회귀가 skip될 수 있습니다. 기본 `pytest -q`는 in-process smoke·pyright fallback으로 녹색을 유지합니다.
 

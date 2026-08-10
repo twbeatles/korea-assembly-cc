@@ -303,8 +303,9 @@ def test_save_srt_and_vtt_keep_fallback_when_end_time_is_missing(tmp_path, monke
     MainWindow._save_srt(win)
     MainWindow._save_vtt(win)
 
-    assert "09:00:00,000 --> 09:00:03,000" in srt_path.read_text(encoding="utf-8")
-    assert "09:00:00.000 --> 09:00:03.000" in vtt_path.read_text(encoding="utf-8")
+    # SRT/VTT 는 세션 첫 큐 기준 상대 타임코드
+    assert "00:00:00,000 --> 00:00:03,000" in srt_path.read_text(encoding="utf-8")
+    assert "00:00:00.000 --> 00:00:03.000" in vtt_path.read_text(encoding="utf-8")
 
 
 def test_save_txt_uses_frozen_snapshot_when_background_worker_runs_later(

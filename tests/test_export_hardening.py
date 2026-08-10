@@ -102,8 +102,9 @@ def test_save_srt_and_vtt_fix_invalid_end_and_blank_lines(tmp_path, monkeypatch)
     srt = srt_path.read_text(encoding="utf-8")
     vtt = vtt_path.read_text(encoding="utf-8")
 
-    assert "09:00:00,000 --> 09:00:03,000" in srt
-    assert "09:00:00.000 --> 09:00:03.000" in vtt
+    # 상대 타임코드 (첫 큐 = 00:00:00)
+    assert "00:00:00,000 --> 00:00:03,000" in srt
+    assert "00:00:00.000 --> 00:00:03.000" in vtt
     assert "첫 줄\n둘째 줄" in srt
     assert "\n\n\n" not in srt.split("-->", 1)[1]
     # 큐 본문에 빈 줄이 큐 경계를 만들지 않음 (번호 1개만)
@@ -231,9 +232,63 @@ def test_save_hwp_uses_smart_filename_and_multiline(tmp_path, monkeypatch):
 
 
 def test_format_srt_timestamp_padding() -> None:
+    from core.export_text import format_srt_relative, format_vtt_relative
+
     value = datetime(2026, 1, 1, 1, 2, 3, 45000)
     assert format_srt_timestamp(value) == "01:02:03,045"
+    assert format_srt_relative(0) == "00:00:00,000"
+    assert format_srt_relative(3.045) == "00:00:03,045"
+    assert format_vtt_relative(62.5) == "00:01:02.500"
 
 
 def test_sanitize_document_text_keeps_korean() -> None:
     assert sanitize_document_text("한글\x00 테스트") == "한글 테스트"
+
+
+def test_save_in_background_rejects_duplicate_path(tmp_path):
+    win = _build_window()
+    win._ensure_file_save_registry()
+    target = str(tmp_path / "dup.txt")
+    win._file_save_in_progress.add(str(Path(target).resolve()))
+    toasts: list[str] = []
+    win._show_toast = lambda message, *_a, **_k: toasts.append(str(message))
+    started = []
+    win._start_background_thread = lambda *_a, **_k: started.append(True) or True
+
+    MainWindow._save_in_background(
+        win,
+        lambda _p: None,
+        target,
+        "ok",
+        "fail",
+    )
+
+    assert started == []
+    assert any("이미 저장 중" in t for t in toasts)
+
+
+def test_export_failure_handled_skips_error_toast(tmp_path):
+    from ui.main_window_impl.persistence_exports import ExportFailureHandled
+
+    win = _build_window()
+    win._ensure_file_save_registry()
+    target = str(tmp_path / "h.txt")
+    messages: list[tuple[str, object]] = []
+    win._emit_control_message = lambda t, p: messages.append((str(t), p))
+    win._show_toast = lambda *_a, **_k: None
+
+    def run_bg(fn, name):
+        fn()
+        return True
+
+    win._start_background_thread = run_bg
+
+    def boom(_path):
+        raise ExportFailureHandled("already shown")
+
+    MainWindow._save_in_background(win, boom, target, "성공", "실패")
+
+    assert not any(
+        t == "toast" and isinstance(p, dict) and p.get("toast_type") == "error"
+        for t, p in messages
+    )

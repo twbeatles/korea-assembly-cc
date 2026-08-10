@@ -3,20 +3,25 @@
 import os
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from ui.main_window_common import *
 from ui.main_window_common import _import_optional_module as _common_import_optional_module
 from ui.main_window_types import MainWindowHost
 from core.export_text import (
-    format_srt_timestamp,
-    format_vtt_timestamp,
+    format_srt_relative,
+    format_vtt_relative,
     normalize_hwp_insert_text,
     resolve_cue_time_range,
     sanitize_document_text,
     sanitize_subtitle_cue_text,
 )
 from core.hwpx_export import save_hwpx_document
+
+
+class ExportFailureHandled(Exception):
+    """UI 다이얼로그 등으로 이미 처리됨 — 백그라운드 에러 토스트를 생략한다."""
 
 
 class MainWindowPersistenceExportsMixin(MainWindowHost):
@@ -27,6 +32,13 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
             if callable(helper):
                 return helper(module_name)
             return _common_import_optional_module(module_name)
+
+    def _ensure_file_save_registry(self) -> None:
+            state = self.__dict__
+            if state.get("_file_save_paths_lock") is None:
+                self._file_save_paths_lock = threading.Lock()
+            if state.get("_file_save_in_progress") is None:
+                self._file_save_in_progress = set()
 
     def _save_in_background(
             self,
@@ -43,6 +55,21 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                 success_msg: 성공 시 토스트 메시지
                 error_prefix: 실패 시 에러 메시지 접두어
             """
+            self._ensure_file_save_registry()
+            try:
+                path_key = str(Path(path).resolve())
+            except Exception:
+                path_key = str(path)
+
+            with self._file_save_paths_lock:
+                if path_key in self._file_save_in_progress:
+                    self._show_toast(
+                        f"이미 저장 중입니다: {Path(path).name}",
+                        "warning",
+                        2500,
+                    )
+                    return
+                self._file_save_in_progress.add(path_key)
 
             def background_save():
                 try:
@@ -52,6 +79,9 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                         "toast",
                         {"message": success_msg, "toast_type": "success"},
                     )
+                except ExportFailureHandled:
+                    # HWP 실패 다이얼로그 등 — 에러 토스트 중복 방지
+                    return
                 except Exception as e:
                     logger.error(f"{error_prefix}: {e}")
                     self._emit_control_message(
@@ -62,8 +92,17 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                             "duration": 5000,
                         },
                     )
+                finally:
+                    try:
+                        with self._file_save_paths_lock:
+                            self._file_save_in_progress.discard(path_key)
+                    except Exception:
+                        pass
+
             started = self._start_background_thread(background_save, "FileSaveWorker")
             if not started:
+                with self._file_save_paths_lock:
+                    self._file_save_in_progress.discard(path_key)
                 self._show_toast("종료 중이라 새 저장 작업을 시작할 수 없습니다.", "warning")
                 return
 
@@ -247,6 +286,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
             def do_save(filepath):
                 def writer(handle) -> None:
                     cue_index = 0
+                    base_time = None
                     for start_time, end_time, timestamp, text in self._iter_full_session_timed_rows(
                         prepared_entries,
                         runtime_root=runtime_root,
@@ -258,10 +298,18 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                         cue_start, cue_end = resolve_cue_time_range(
                             start_time, end_time, timestamp
                         )
+                        if base_time is None:
+                            base_time = cue_start
                         cue_index += 1
-                        start = format_srt_timestamp(cue_start)
-                        end = format_srt_timestamp(cue_end)
+                        start = format_srt_relative(
+                            (cue_start - base_time).total_seconds()
+                        )
+                        end = format_srt_relative(
+                            (cue_end - base_time).total_seconds()
+                        )
                         handle.write(f"{cue_index}\n{start} --> {end}\n{cue_text}\n\n")
+                    if cue_index <= 0:
+                        raise RuntimeError("저장할 유효 자막이 없습니다.")
 
                 utils.atomic_write_text_via_writer(filepath, writer, encoding="utf-8")
 
@@ -286,6 +334,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                 def writer(handle) -> None:
                     handle.write("WEBVTT\n\n")
                     cue_index = 0
+                    base_time = None
                     for start_time, end_time, timestamp, text in self._iter_full_session_timed_rows(
                         prepared_entries,
                         runtime_root=runtime_root,
@@ -297,10 +346,18 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                         cue_start, cue_end = resolve_cue_time_range(
                             start_time, end_time, timestamp
                         )
+                        if base_time is None:
+                            base_time = cue_start
                         cue_index += 1
-                        start = format_vtt_timestamp(cue_start)
-                        end = format_vtt_timestamp(cue_end)
+                        start = format_vtt_relative(
+                            (cue_start - base_time).total_seconds()
+                        )
+                        end = format_vtt_relative(
+                            (cue_end - base_time).total_seconds()
+                        )
                         handle.write(f"{cue_index}\n{start} --> {end}\n{cue_text}\n\n")
+                    if cue_index <= 0:
+                        raise RuntimeError("저장할 유효 자막이 없습니다.")
 
                 utils.atomic_write_text_via_writer(filepath, writer, encoding="utf-8")
 
@@ -468,20 +525,30 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
 
             generated_at = datetime.now().strftime("%Y년 %m월 %d일 %H:%M:%S")
 
+            # 대용량은 COM InsertText 가 매우 느려 HWPX 권장
+            approx_count = len(prepared_entries) + sum(
+                int(item.get("entry_count") or 0)
+                for item in (runtime_manifest or [])
+                if isinstance(item, dict)
+            )
+            if approx_count >= 2000:
+                reply = QMessageBox.question(
+                    self,
+                    "대용량 HWP 저장",
+                    f"자막 약 {approx_count:,}건입니다.\n"
+                    "HWP(COM) 저장은 수 분 이상 걸릴 수 있습니다.\n\n"
+                    "권장: HWPX로 저장할까요?\n"
+                    "(예=HWPX, 아니오=HWP 계속)",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self._save_hwpx()
+                    return
+
             def do_save(filepath):
-                hwp = None
+                hwp_obj: Any | None = None
                 pythoncom_module = None
-
-                def insert_text(value: str) -> None:
-                    """한컴 일부 버전은 InsertText 전 GetDefault 재호출이 필요하다."""
-                    hwp.HAction.GetDefault(
-                        "InsertText", hwp.HParameterSet.HInsertText.HSet
-                    )
-                    hwp.HParameterSet.HInsertText.Text = value
-                    hwp.HAction.Execute(
-                        "InsertText", hwp.HParameterSet.HInsertText.HSet
-                    )
-
                 try:
                     try:
                         pythoncom_module = self._import_optional_module("pythoncom")
@@ -491,10 +558,30 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
 
                     dynamic_dispatch = getattr(win32_client, "dynamic", None)
                     if dynamic_dispatch is not None:
-                        hwp = cast(Any, dynamic_dispatch).Dispatch("HWPFrame.HwpObject")
+                        hwp_obj = cast(Any, dynamic_dispatch).Dispatch("HWPFrame.HwpObject")
                     else:
-                        hwp = cast(Any, win32_client).Dispatch("HWPFrame.HwpObject")
-                    hwp.XHwpWindows.Item(0).Visible = True
+                        hwp_obj = cast(Any, win32_client).Dispatch("HWPFrame.HwpObject")
+                    # nested insert_text 가 non-optional 로 참조하도록 로컬 바인딩
+                    hwp: Any = hwp_obj
+
+                    def insert_text(value: str) -> None:
+                        """한컴 일부 버전은 InsertText 전 GetDefault 재호출이 필요하다."""
+                        hwp.HAction.GetDefault(
+                            "InsertText", hwp.HParameterSet.HInsertText.HSet
+                        )
+                        hwp.HParameterSet.HInsertText.Text = value
+                        hwp.HAction.Execute(
+                            "InsertText", hwp.HParameterSet.HInsertText.HSet
+                        )
+
+                    # 가능하면 숨김 창 — 실패 시 Visible=True 폴백
+                    try:
+                        hwp.XHwpWindows.Item(0).Visible = False
+                    except Exception:
+                        try:
+                            hwp.XHwpWindows.Item(0).Visible = True
+                        except Exception:
+                            pass
                     hwp.RegisterModule("FilePathCheckDLL", "SecurityModule")
                     hwp.HAction.Run("FileNew")
                     hwp.HAction.Run("CharShapeBold")
@@ -522,6 +609,9 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                         else:
                             insert_text(f"{safe_text}\r\n")
 
+                    if total_count <= 0:
+                        raise RuntimeError("저장할 유효 자막이 없습니다.")
+
                     insert_text(f"\r\n총 {total_count}문장, {total_chars:,}자\r\n")
                     hwp.HAction.GetDefault(
                         "FileSaveAs_S", hwp.HParameterSet.HFileOpenSave.HSet
@@ -532,9 +622,9 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                         "FileSaveAs_S", hwp.HParameterSet.HFileOpenSave.HSet
                     )
                 finally:
-                    if hwp:
+                    if hwp_obj is not None:
                         try:
-                            hwp.Quit()
+                            hwp_obj.Quit()
                         except Exception:
                             pass
                     if pythoncom_module:
@@ -556,7 +646,6 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                     except Exception as e:
                         last_error = e
                         logger.warning(f"HWP 저장 재시도 실패 ({attempt + 1}/2): {e}")
-                        # 종료 신호를 즉시 반영하기 위해 stop_event.wait 사용
                         if stop_event is not None and hasattr(stop_event, "wait"):
                             if stop_event.wait(timeout=1.0):
                                 break
@@ -564,11 +653,12 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                             time.sleep(1)
                 if last_error is None:
                     last_error = RuntimeError("HWP 저장이 완료되지 않았습니다.")
+                # UI 다이얼로그만 사용 — 백그라운드 에러 토스트와 이중 통지 방지
                 self._emit_control_message(
                     "hwp_save_failed",
                     {"error": str(last_error)},
                 )
-                raise last_error
+                raise ExportFailureHandled(str(last_error)) from last_error
 
             self._save_in_background(
                 do_save_with_error, path, "HWP 저장 완료!", "HWP 저장 실패"
