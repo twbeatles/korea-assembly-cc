@@ -71,6 +71,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="--smoke 실행 시 offscreen 가능한 MainWindow() 생성/정리까지 검증합니다.",
     )
+    parser.add_argument("--apply-update", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--update-target", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--update-staged", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--update-backup", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--update-parent-pid", default=0, type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--update-expected-sha256", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--update-expected-size", default=0, type=int, help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -342,6 +349,25 @@ def _run_storage_preflight_smoke(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     """메인 함수 - 예외 처리 강화"""
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+    if args.apply_update:
+        from scripts.apply_update import main as apply_update_main
+
+        return apply_update_main(
+            [
+                "--target",
+                args.update_target,
+                "--staged",
+                args.update_staged,
+                "--backup",
+                args.update_backup,
+                "--parent-pid",
+                str(args.update_parent_pid),
+                "--expected-sha256",
+                args.update_expected_sha256,
+                "--expected-size",
+                str(args.update_expected_size),
+            ]
+        )
     if args.smoke:
         return _run_smoke(args)
     if args.smoke_storage_preflight:

@@ -2,11 +2,189 @@
 
 from __future__ import annotations
 
+import os
+import sys
+from pathlib import Path
+from uuid import uuid4
+
+from core.update_installer import (
+    launch_update_helper,
+    prepare_staged_update,
+    resolve_update_staging_root,
+    stream_update_artifact,
+)
+from core.update_manifest import (
+    NoUpdateAvailableError,
+    ReleaseManifest,
+    download_release_manifest,
+    verify_release_manifest,
+)
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 
 
 class MainWindowUIHelpMixin(MainWindowHost):
+    def _check_for_updates(self) -> None:
+        if self._is_runtime_mutation_blocked("업데이트 확인"):
+            return
+        if bool(getattr(self, "_update_operation_in_progress", False)):
+            self._set_status("업데이트 작업이 이미 진행 중입니다.", "info")
+            return
+        manifest_url = str(Config.UPDATE_MANIFEST_URL or "").strip()
+        public_key = str(Config.UPDATE_PUBLIC_KEY_B64 or "").strip()
+        if not manifest_url or not public_key:
+            QMessageBox.information(
+                self,
+                "업데이트",
+                "서명된 업데이트 채널이 이 빌드에 설정되지 않았습니다.",
+            )
+            return
+        self._set_status("업데이트 확인 중...", "running")
+        self._update_operation_in_progress = True
+
+        def check_worker() -> None:
+            try:
+                document = download_release_manifest(manifest_url)
+                manifest = verify_release_manifest(
+                    document,
+                    public_key=public_key,
+                    current_version=Config.VERSION,
+                )
+                self._emit_control_message("update_manifest_ready", manifest)
+            except NoUpdateAvailableError:
+                self._emit_control_message("update_not_available", None)
+            except Exception as exc:
+                self._emit_control_message("update_check_failed", {"error": str(exc)})
+
+        if not self._start_background_thread(check_worker, "UpdateCheckWorker"):
+            self._update_operation_in_progress = False
+            self._set_status("업데이트 확인 시작 실패", "warning")
+
+    def _handle_update_manifest_ready(self, manifest: ReleaseManifest) -> None:
+        if not isinstance(manifest, ReleaseManifest):
+            self._update_operation_in_progress = False
+            self._set_status("업데이트 응답 형식이 올바르지 않습니다.", "error")
+            return
+        if not bool(getattr(sys, "frozen", False)):
+            self._update_operation_in_progress = False
+            QMessageBox.information(
+                self,
+                "업데이트",
+                "개발 실행에서는 자동 설치를 사용할 수 없습니다.",
+            )
+            return
+        reply = QMessageBox.question(
+            self,
+            "업데이트 발견",
+            f"새 버전 {manifest.version}을 검증하기 위해 다운로드하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self._update_operation_in_progress = False
+            self._set_status("업데이트 다운로드 취소", "info")
+            return
+
+        def start_download() -> None:
+            self._set_status(f"업데이트 {manifest.version} 다운로드 중...", "running")
+
+            def download_worker() -> None:
+                try:
+                    target = Path(sys.executable).resolve()
+                    staging_root = resolve_update_staging_root(
+                        storage_root=Config.STORAGE_DIR,
+                        install_dir=target.parent,
+                        storage_mode=Config.STORAGE_MODE,
+                    )
+                    staged = prepare_staged_update(
+                        manifest,
+                        chunks=stream_update_artifact(manifest),
+                        staging_root=staging_root,
+                        approve=lambda _manifest, _path: True,
+                    )
+                    if staged is None:
+                        return
+                    backup = target.with_name(
+                        f"{target.name}.v{Config.VERSION}.{uuid4().hex[:8]}.bak"
+                    )
+                    self._emit_control_message(
+                        "update_install_ready",
+                        {
+                            "target": str(target),
+                            "staged": str(staged),
+                            "backup": str(backup),
+                            "version": manifest.version,
+                            "sha256": manifest.artifact_sha256,
+                            "size": manifest.artifact_size,
+                        },
+                    )
+                except Exception as exc:
+                    self._emit_control_message(
+                        "update_install_failed", {"error": str(exc)}
+                    )
+
+            if not self._start_background_thread(
+                download_worker, "UpdateDownloadWorker"
+            ):
+                self._update_operation_in_progress = False
+                self._set_status("업데이트 다운로드 시작 실패", "warning")
+
+        if not self._run_after_dirty_session_action("업데이트 설치", start_download):
+            self._update_operation_in_progress = False
+
+    def _handle_update_install_ready(self, payload: dict[str, object]) -> None:
+        staged_value = payload.get("staged")
+        target_value = payload.get("target")
+        backup_value = payload.get("backup")
+        sha256_value = payload.get("sha256")
+        size_value = payload.get("size")
+        if (
+            not isinstance(staged_value, str)
+            or not staged_value
+            or not isinstance(target_value, str)
+            or not target_value
+            or not isinstance(backup_value, str)
+            or not backup_value
+            or not isinstance(sha256_value, str)
+            or len(sha256_value) != 64
+            or not isinstance(size_value, int)
+            or size_value <= 0
+        ):
+            self._update_operation_in_progress = False
+            self._set_status("업데이트 설치 정보가 올바르지 않습니다.", "error")
+            return
+        staged = Path(staged_value).resolve()
+        reply = QMessageBox.question(
+            self,
+            "업데이트 검증 완료",
+            f"업데이트 {payload.get('version', '')}의 서명과 파일 무결성을 "
+            "확인했습니다. 지금 설치하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            staged.unlink(missing_ok=True)
+            self._update_operation_in_progress = False
+            self._set_status("업데이트 설치 취소", "info")
+            return
+        try:
+            launch_update_helper(
+                target=target_value,
+                staged=staged,
+                backup=backup_value,
+                parent_pid=os.getpid(),
+                expected_sha256=sha256_value,
+                expected_size=size_value,
+            )
+        except Exception as exc:
+            staged.unlink(missing_ok=True)
+            self._update_operation_in_progress = False
+            self._set_status(f"업데이트 설치 시작 실패: {exc}", "error")
+            return
+        self._set_status(
+            f"업데이트 {payload.get('version', '')} 설치를 위해 종료합니다.",
+            "success",
+        )
+        QApplication.quit()
+
     def _show_guide(self):
             """사용법 가이드 표시"""
             guide = """

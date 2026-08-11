@@ -64,6 +64,11 @@ COALESCED_CONTROL_MESSAGE_TYPES = {
     "session_save_done",
     "session_save_failed",
     "toast",
+    "update_check_failed",
+    "update_install_failed",
+    "update_install_ready",
+    "update_manifest_ready",
+    "update_not_available",
 }
 DURABLE_CONTROL_MESSAGE_TYPES = set(COALESCED_CONTROL_MESSAGE_TYPES)
 

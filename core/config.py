@@ -354,6 +354,11 @@ class Config:
     URL_HISTORY_FILE = str(Path(STORAGE_DIR) / "url_history.json")
     RECOVERY_STATE_FILE = str(Path(STORAGE_DIR) / "session_recovery.json")
     RECOVERY_CANDIDATE_MAX = 50
+    UPDATE_MANIFEST_URL = ""
+    UPDATE_PUBLIC_KEY_B64 = ""
+    UPDATE_MANIFEST_MAX_BYTES = 256 * 1024
+    UPDATE_ARTIFACT_MAX_BYTES = 500 * 1024 * 1024
+    UPDATE_REQUEST_TIMEOUT_SECONDS = 20
     
     # 기본 CSS 선택자
     DEFAULT_SELECTORS = [

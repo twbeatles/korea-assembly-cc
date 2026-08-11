@@ -247,6 +247,10 @@ class MainWindowUIMenuMixin(MainWindowHost):
 
             help_menu.addSeparator()
 
+            update_action = QAction("업데이트 확인...", self)
+            update_action.triggered.connect(self._check_for_updates)
+            help_menu.addAction(update_action)
+
             about_action = QAction("정보", self)
             about_action.setToolTip("프로그램 정보 및 버전")
             about_action.triggered.connect(self._show_about)

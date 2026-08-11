@@ -402,6 +402,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     self._resume_pending_deferred_action()
                 else:
                     self._clear_pending_deferred_action()
+                    self._update_operation_in_progress = False
                     self._set_status(
                         "저장 후 새 변경 사항이 있어 세션을 다시 저장해야 합니다.",
                         "warning",
@@ -415,6 +416,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             elif msg_type == "session_save_failed":
                 self._session_save_in_progress = False
                 self._clear_pending_deferred_action()
+                self._update_operation_in_progress = False
                 err = data.get("error") if isinstance(data, dict) else str(data)
                 self._set_status(f"세션 저장 실패: {err}", "error")
                 pipeline_mod.QMessageBox.critical(self, "오류", f"세션 저장 실패: {err}")
@@ -564,6 +566,26 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     f"DB 세션 불러오는 중... {current:,}{suffix}",
                     "running",
                 )
+
+            elif msg_type == "update_manifest_ready":
+                self._handle_update_manifest_ready(data)
+
+            elif msg_type == "update_install_ready":
+                self._handle_update_install_ready(
+                    data if isinstance(data, dict) else {}
+                )
+
+            elif msg_type == "update_not_available":
+                self._update_operation_in_progress = False
+                self._set_status("현재 최신 버전을 사용 중입니다.", "success")
+                self._show_toast("현재 최신 버전을 사용 중입니다.", "success", 3000)
+
+            elif msg_type in ("update_check_failed", "update_install_failed"):
+                self._update_operation_in_progress = False
+                info = data if isinstance(data, dict) else {}
+                error = str(info.get("error", "unknown update error"))
+                self._set_status(f"업데이트 실패: {error}", "error")
+                self._show_toast(f"업데이트 실패: {error}", "error", 5000)
 
             elif msg_type == "db_task_error":
                 task_name = (
