@@ -48,12 +48,11 @@ def test_runtime_manifest_rejects_oversized_referenced_segment(tmp_path, monkeyp
     monkeypatch.setattr(Config, "SESSION_RESOURCE_PER_FILE_MAX_BYTES", 512)
     monkeypatch.setattr(Config, "SESSION_RESOURCE_TOTAL_MAX_BYTES", 4096)
 
-    with pytest.raises(ResourceLimitExceeded) as exc_info:
+    with pytest.raises(ResourceLimitExceeded, match="file_bytes"):
         MainWindow._load_runtime_manifest_payload(
             _window(), tmp_path / "manifest.json", allow_salvage=False
         )
 
-    assert exc_info.value.resource == "file_bytes"
 
 
 def test_runtime_manifest_rejects_cumulative_segment_bytes(tmp_path, monkeypatch) -> None:
@@ -70,12 +69,11 @@ def test_runtime_manifest_rejects_cumulative_segment_bytes(tmp_path, monkeypatch
         manifest_size + first_size + 1,
     )
 
-    with pytest.raises(ResourceLimitExceeded) as exc_info:
+    with pytest.raises(ResourceLimitExceeded, match="total_bytes"):
         MainWindow._load_runtime_manifest_payload(
             _window(), tmp_path / "manifest.json", allow_salvage=False
         )
 
-    assert exc_info.value.resource == "total_bytes"
 
 
 def test_runtime_salvage_does_not_swallow_segment_count_limit(tmp_path, monkeypatch) -> None:
@@ -85,12 +83,11 @@ def test_runtime_salvage_does_not_swallow_segment_count_limit(tmp_path, monkeypa
     _write_runtime_file(tmp_path / "tail_checkpoint.json", "tail")
     monkeypatch.setattr(Config, "SESSION_RESOURCE_MAX_SEGMENTS", 1)
 
-    with pytest.raises(ResourceLimitExceeded) as exc_info:
+    with pytest.raises(ResourceLimitExceeded, match="segments"):
         MainWindow._load_runtime_manifest_payload(
             _window(), tmp_path / "manifest.json", allow_salvage=True
         )
 
-    assert exc_info.value.resource == "segments"
 
 
 def test_runtime_load_reports_resource_summary(tmp_path, monkeypatch) -> None:

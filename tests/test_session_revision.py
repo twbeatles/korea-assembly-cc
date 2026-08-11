@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import ui.main_window as mw_mod
 
 
 MainWindow = mw_mod.MainWindow
 
 
-def _build_window() -> MainWindow:
-    win = MainWindow.__new__(MainWindow)
+def _build_window() -> Any:
+    win = cast(Any, MainWindow.__new__(MainWindow))
     win._is_stopping = False
     return win
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 from core.models import CaptureQualityState, SubtitleEntry
 from database import DatabaseManager
@@ -27,14 +28,14 @@ def test_capture_quality_mapping_round_trip_and_sanitizing() -> None:
 
 
 def test_capture_quality_is_persisted_in_json_snapshot(tmp_path) -> None:
-    win = MainWindow.__new__(MainWindow)
+    win = cast(Any, MainWindow.__new__(MainWindow))
     win._capture_quality = CaptureQualityState(queue_drops=2, preview_gaps=1)
     win._runtime_segment_manifest = []
     win._build_session_save_context = lambda: ("https://example.com", "test", 0)
     win._ensure_session_lineage_id = lambda: "lineage"
     win._record_recovery_snapshot = lambda *_args, **_kwargs: None
     win._iter_full_session_serialized_items = (
-        lambda entries, **_kwargs: (entry.to_dict() for entry in entries)
+        lambda entries, **_kwargs: (entry.to_dict() for entry in (entries or []))
     )
     output = tmp_path / "session.json"
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from typing import Any, cast
 
 from core.config import Config
 from core.models import SubtitleEntry
@@ -112,7 +113,7 @@ def test_db_dialog_load_builds_payload_from_streaming_api(monkeypatch) -> None:
         def load_session(self, _session_id: int):
             raise AssertionError("streaming-capable DB must not use load_session")
 
-    win = MainWindow.__new__(MainWindow)
+    win = cast(Any, MainWindow.__new__(MainWindow))
     win.db = StreamingDb()
     win._show_toast = lambda *_args, **_kwargs: None
     win._confirm_dirty_session_action = lambda _action: True
@@ -121,7 +122,7 @@ def test_db_dialog_load_builds_payload_from_streaming_api(monkeypatch) -> None:
         0,
     )
     win._emit_control_message = lambda *_args, **_kwargs: None
-    captured = {}
+    captured: dict[str, Any] = {}
     win._run_db_task = lambda _task, worker, **_kwargs: captured.update(
         payload=worker()
     ) or True
@@ -148,7 +149,7 @@ def test_db_dialog_load_rejects_declared_entry_over_limit(monkeypatch) -> None:
             yield {"text": "must not be reached"}
 
     monkeypatch.setattr(Config, "SESSION_RESOURCE_MAX_ENTRIES", 1)
-    win = MainWindow.__new__(MainWindow)
+    win = cast(Any, MainWindow.__new__(MainWindow))
     win.db = OversizedDb()
     win._show_toast = lambda *_args, **_kwargs: None
     win._confirm_dirty_session_action = lambda _action: True
@@ -174,7 +175,7 @@ def test_db_dialog_stream_load_can_be_cancelled_before_session_swap() -> None:
         def iter_session_subtitles(self, session_id: int, *, batch_size: int = 500):
             yield {"text": "one"}
 
-    win = MainWindow.__new__(MainWindow)
+    win = cast(Any, MainWindow.__new__(MainWindow))
     win.db = StreamingDb()
     win._show_toast = lambda *_args, **_kwargs: None
     win._confirm_dirty_session_action = lambda _action: True
@@ -185,7 +186,7 @@ def test_db_dialog_stream_load_can_be_cancelled_before_session_swap() -> None:
 
     win._run_db_task = cancel_then_run
 
-    with pytest.raises(ResourceLimitExceeded) as exc_info:
+    with pytest.raises(ResourceLimitExceeded, match="취소"):
         MainWindow._start_db_session_load(
             win,
             7,
@@ -195,5 +196,3 @@ def test_db_dialog_stream_load_can_be_cancelled_before_session_swap() -> None:
             busy_message="busy",
             source_tag="db",
         )
-
-    assert exc_info.value.resource == "cancelled"

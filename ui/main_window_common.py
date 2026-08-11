@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Callable, Protocol, cast
+from typing import Any, Callable, Iterable, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 

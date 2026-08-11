@@ -23,10 +23,8 @@ def test_check_file_size_rejects_oversized_file(tmp_path) -> None:
     path = tmp_path / "large.json"
     path.write_bytes(b"123456789")
 
-    with pytest.raises(ResourceLimitExceeded, match="segment") as exc_info:
+    with pytest.raises(ResourceLimitExceeded, match="file_bytes"):
         check_file_size(path, per_file_limit=8, label="segment")
-
-    assert exc_info.value.resource == "file_bytes"
 
 
 def test_budget_enforces_cumulative_bytes_entries_and_segments() -> None:
@@ -42,31 +40,25 @@ def test_budget_enforces_cumulative_bytes_entries_and_segments() -> None:
         "entries": 3,
         "segments": 2,
     }
-    with pytest.raises(ResourceLimitExceeded) as bytes_error:
+    with pytest.raises(ResourceLimitExceeded, match="total_bytes"):
         budget.consume_file(1, label="tail")
-    assert bytes_error.value.resource == "total_bytes"
-    with pytest.raises(ResourceLimitExceeded) as entries_error:
+    with pytest.raises(ResourceLimitExceeded, match="entries"):
         budget.consume_entries(1)
-    assert entries_error.value.resource == "entries"
-    with pytest.raises(ResourceLimitExceeded) as segments_error:
+    with pytest.raises(ResourceLimitExceeded, match="segments"):
         budget.consume_segment()
-    assert segments_error.value.resource == "segments"
 
 
 def test_budget_rejects_per_file_limit_before_mutating_total() -> None:
     budget = ResourceBudget(_limits())
 
-    with pytest.raises(ResourceLimitExceeded) as exc_info:
+    with pytest.raises(ResourceLimitExceeded, match="file_bytes"):
         budget.consume_file(9, label="segment")
 
-    assert exc_info.value.resource == "file_bytes"
     assert budget.summary()["total_bytes"] == 0
 
 
 def test_budget_cancel_check_raises_typed_error() -> None:
     budget = ResourceBudget(_limits(), cancel_check=lambda: True)
 
-    with pytest.raises(ResourceLimitExceeded) as exc_info:
+    with pytest.raises(ResourceLimitExceeded, match="취소"):
         budget.check_cancelled()
-
-    assert exc_info.value.resource == "cancelled"
