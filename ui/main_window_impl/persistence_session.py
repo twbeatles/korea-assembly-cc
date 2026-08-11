@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+import uuid
+
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 
@@ -78,6 +80,8 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 self._set_pending_deferred_action(action_name, on_success)
 
             snapshot_entries = [entry.clone() for entry in prepared_entries]
+            snapshot_revision = self._get_session_revision()
+            save_operation_id = uuid.uuid4().hex
             self._session_save_in_progress = True
             self._set_status("세션 저장 중...", "running")
 
@@ -90,12 +94,19 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
                     )
+                    info["snapshot_revision"] = snapshot_revision
+                    info["save_operation_id"] = save_operation_id
                     self._emit_control_message("session_save_done", info)
                 except Exception as e:
                     logger.error(f"세션 저장 오류: {e}")
                     self._emit_control_message(
                         "session_save_failed",
-                        {"path": path, "error": str(e)},
+                        {
+                            "path": path,
+                            "error": str(e),
+                            "snapshot_revision": snapshot_revision,
+                            "save_operation_id": save_operation_id,
+                        },
                     )
 
             started = self._start_background_thread(background_save, "SessionSaveWorker")
@@ -476,6 +487,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
         ) -> dict[str, Any] | None:
             """준비된 세션 스냅샷을 사용자 선택 경로에 동기 저장한다."""
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
+            snapshot_revision = self._get_session_revision()
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
                 return None
@@ -508,8 +520,17 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                         prepared_entries,
                         include_db=True,
                     )
-                self._clear_session_dirty()
-                self._clear_recovery_state()
+                try:
+                    save_is_current = (
+                        self._clear_session_dirty(saved_revision=snapshot_revision)
+                        is not False
+                    )
+                except TypeError as exc:
+                    if "saved_revision" not in str(exc):
+                        raise
+                    save_is_current = self._clear_session_dirty() is not False
+                if save_is_current:
+                    self._clear_recovery_state()
                 self._apply_saved_session_db_identity(info)
                 db_error = str(info.get("db_error", "") or "").strip()
                 if db_error:

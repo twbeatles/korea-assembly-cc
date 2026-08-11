@@ -234,6 +234,8 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._capture_source_headless = False
         self._capture_source_realtime = False
         self._session_dirty = False
+        self._session_revision = 0
+        self._session_saved_revision = 0
         self.current_session_lineage_id = ""
         self.current_db_session_id: int | None = None
 

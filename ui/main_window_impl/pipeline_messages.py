@@ -369,8 +369,21 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 saved_count = int(info.get("saved_count", 0) or 0)
                 db_saved = bool(info.get("db_saved", False))
                 db_error = str(info.get("db_error", "") or "").strip()
-                self._clear_session_dirty()
-                self._clear_recovery_state()
+                snapshot_revision_value = info.get("snapshot_revision")
+                if snapshot_revision_value is None:
+                    save_is_current = self._clear_session_dirty() is not False
+                else:
+                    try:
+                        snapshot_revision = int(snapshot_revision_value)
+                    except (TypeError, ValueError):
+                        save_is_current = False
+                    else:
+                        save_is_current = (
+                            self._clear_session_dirty(saved_revision=snapshot_revision)
+                            is not False
+                        )
+                if save_is_current:
+                    self._clear_recovery_state()
                 if db_saved:
                     self._set_status(
                         f"세션 저장 완료 ({saved_count}개, DB 저장 포함)", "success"
@@ -384,7 +397,19 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     else:
                         self._show_toast("세션 저장 완료!", "success")
                 self._apply_saved_session_db_identity(info)
-                self._resume_pending_deferred_action()
+                if save_is_current:
+                    self._resume_pending_deferred_action()
+                else:
+                    self._clear_pending_deferred_action()
+                    self._set_status(
+                        "저장 후 새 변경 사항이 있어 세션을 다시 저장해야 합니다.",
+                        "warning",
+                    )
+                    self._show_toast(
+                        "저장 도중 변경된 내용은 아직 저장되지 않았습니다.",
+                        "warning",
+                        3500,
+                    )
 
             elif msg_type == "session_save_failed":
                 self._session_save_in_progress = False

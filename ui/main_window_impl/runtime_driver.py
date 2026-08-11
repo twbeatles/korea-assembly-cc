@@ -435,13 +435,44 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
         source_url = self._get_capture_source_url(fallback_to_current=True)
         return self._autodetect_tag(source_url) or ""
 
-    def _mark_session_dirty(self) -> None:
-        self._session_dirty = True
+    def _ensure_session_revision_state(self) -> None:
+        if "_session_revision" in self.__dict__:
+            return
+        if bool(self.__dict__.get("_session_dirty", False)):
+            self._session_revision = 1
+            self._session_saved_revision = 0
+        else:
+            self._session_revision = 0
+            self._session_saved_revision = 0
 
-    def _clear_session_dirty(self) -> None:
+    def _get_session_revision(self) -> int:
+        self._ensure_session_revision_state()
+        return int(self.__dict__["_session_revision"])
+
+    def _mark_session_dirty(self) -> int:
+        self._ensure_session_revision_state()
+        self._session_revision = int(self.__dict__["_session_revision"]) + 1
+        self._session_dirty = True
+        return self._session_revision
+
+    def _clear_session_dirty(self, saved_revision: int | None = None) -> bool:
+        self._ensure_session_revision_state()
+        current_revision = int(self.__dict__["_session_revision"])
+        target_revision = current_revision if saved_revision is None else int(saved_revision)
+        if target_revision != current_revision:
+            self._session_dirty = True
+            return False
+        self._session_saved_revision = current_revision
         self._session_dirty = False
+        return True
+
+    def _reset_session_revision(self, *, dirty: bool = False) -> None:
+        self._session_revision = 1 if dirty else 0
+        self._session_saved_revision = 0
+        self._session_dirty = bool(dirty)
 
     def _has_dirty_session(self) -> bool:
+        self._ensure_session_revision_state()
         return bool(self.__dict__.get("_session_dirty", False))
 
     def _coerce_highlight_sequence(self, value: object) -> int:
