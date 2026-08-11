@@ -124,3 +124,7 @@ def test_pyright_and_pylance_configs_use_local_typings_and_ignore_temp_outputs()
         ]
         == "none"
     )
+
+
+def test_tests_is_a_regular_package_for_pyright_absolute_imports():
+    assert (PROJECT_ROOT / "tests" / "__init__.py").is_file()
