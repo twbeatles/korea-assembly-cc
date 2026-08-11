@@ -41,7 +41,8 @@ class DatabaseSchemaMixin(DatabaseMixinHost):
                         notes TEXT,
                         lineage_id TEXT,
                         parent_session_id INTEGER NULL,
-                        is_latest_in_lineage INTEGER DEFAULT 1
+                        is_latest_in_lineage INTEGER DEFAULT 1,
+                        save_operation_id TEXT NULL
                     )
                 """)
                 self._ensure_session_table_columns(cursor)
@@ -94,6 +95,11 @@ class DatabaseSchemaMixin(DatabaseMixinHost):
                     CREATE INDEX IF NOT EXISTS idx_sessions_lineage_latest
                     ON sessions(lineage_id, is_latest_in_lineage, created_at DESC, id DESC)
                 """)
+                cursor.execute("""
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_save_operation_id
+                    ON sessions(save_operation_id)
+                    WHERE save_operation_id IS NOT NULL AND save_operation_id <> ''
+                """)
 
                 conn.commit()
                 self.db_available = True
@@ -135,6 +141,7 @@ class DatabaseSchemaMixin(DatabaseMixinHost):
             "lineage_id": "TEXT",
             "parent_session_id": "INTEGER NULL",
             "is_latest_in_lineage": "INTEGER DEFAULT 1",
+            "save_operation_id": "TEXT NULL",
         }
         for column_name, sql_type in required_columns.items():
             if column_name in existing_columns:

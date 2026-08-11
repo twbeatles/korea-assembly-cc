@@ -59,6 +59,17 @@ class DatabaseSessionMixin(DatabaseMixinHost):
                 parent_session_id = self._sanitize_positive_id(
                     session_data.get("parent_session_id")
                 )
+                save_operation_id = str(
+                    session_data.get("save_operation_id", "") or ""
+                ).strip()
+                if save_operation_id:
+                    cursor.execute(
+                        "SELECT id FROM sessions WHERE save_operation_id = ? LIMIT 1",
+                        (save_operation_id,),
+                    )
+                    existing_row = cursor.fetchone()
+                    if existing_row is not None:
+                        return int(existing_row["id"])
                 cursor.execute(
                     """
                     UPDATE sessions
@@ -72,8 +83,9 @@ class DatabaseSessionMixin(DatabaseMixinHost):
                 cursor.execute("""
                     INSERT INTO sessions
                     (url, committee_name, total_subtitles, total_characters,
-                     duration_seconds, version, notes, lineage_id, parent_session_id, is_latest_in_lineage)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                     duration_seconds, version, notes, lineage_id, parent_session_id,
+                     is_latest_in_lineage, save_operation_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                 """, (
                     session_data.get("url", ""),
                     session_data.get("committee_name", ""),
@@ -84,6 +96,7 @@ class DatabaseSessionMixin(DatabaseMixinHost):
                     session_data.get("notes", ""),
                     lineage_id,
                     parent_session_id,
+                    save_operation_id or None,
                 ))
 
                 session_id = cursor.lastrowid
@@ -193,6 +206,7 @@ class DatabaseSessionMixin(DatabaseMixinHost):
                     "lineage_id": session_row["lineage_id"],
                     "parent_session_id": session_row["parent_session_id"],
                     "is_latest_in_lineage": int(session_row["is_latest_in_lineage"] or 0),
+                    "save_operation_id": str(session_row["save_operation_id"] or ""),
                     "subtitles": [
                         {
                             "text": row["text"],

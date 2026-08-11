@@ -93,6 +93,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                         include_db=True,
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
+                        save_operation_id=save_operation_id,
                     )
                     info["snapshot_revision"] = snapshot_revision
                     info["save_operation_id"] = save_operation_id
@@ -382,11 +383,13 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             include_db: bool = True,
             runtime_root: Path | None = None,
             runtime_manifest: list[dict[str, Any]] | None = None,
+            save_operation_id: str | None = None,
         ) -> dict[str, Any]:
             """현재 세션 스냅샷을 JSON(+선택적 DB)으로 동기 저장한다."""
             snapshot_entries = [entry.clone() for entry in prepared_entries]
             current_url, committee_name, duration = self._build_session_save_context()
             created_at = datetime.now().isoformat()
+            operation_id = str(save_operation_id or "").strip() or uuid.uuid4().hex
             lineage_id = self._ensure_session_lineage_id()
             manifest_items = (
                 runtime_manifest
@@ -442,6 +445,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                             "duration_seconds": duration,
                             "lineage_id": lineage_id,
                             "parent_session_id": self.__dict__.get("current_db_session_id"),
+                            "save_operation_id": operation_id,
                         }
                         db_session_id = self._run_db_task_sync(
                             "db_session_save",
@@ -458,10 +462,11 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                                     "duration_seconds": data["duration_seconds"],
                                     "lineage_id": data["lineage_id"],
                                     "parent_session_id": data["parent_session_id"],
+                                    "save_operation_id": data["save_operation_id"],
                                 }
                             ),
                             write_task=True,
-                            timeout=Config.DB_SYNC_TASK_TIMEOUT_SECONDS,
+                            timeout=None,
                         )
                         db_saved = True
                     except Exception as db_exc:
@@ -472,6 +477,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 "saved_count": saved_count,
                 "db_saved": db_saved,
                 "db_error": db_error,
+                "save_operation_id": operation_id,
                 "db_session_id": db_session_id,
                 "lineage_id": lineage_id,
                 "url": current_url,

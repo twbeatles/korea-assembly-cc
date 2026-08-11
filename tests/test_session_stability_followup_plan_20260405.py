@@ -486,7 +486,7 @@ def test_db_worker_sync_can_wait_without_timeout(monkeypatch):
     MainWindow._shutdown_db_worker(win, timeout=1.0)
 
 
-def test_write_session_snapshot_uses_configured_db_timeout(tmp_path):
+def test_write_session_snapshot_waits_for_db_completion_without_timeout(tmp_path):
     output_path = tmp_path / "session.json"
     win = MainWindow.__new__(MainWindow)
     win.db = object()
@@ -519,7 +519,7 @@ def test_write_session_snapshot_uses_configured_db_timeout(tmp_path):
     assert output_path.exists()
     assert info["db_saved"] is False
     assert info["db_error"] == "db wait timeout"
-    assert captured["timeout"] == mw_mod.Config.DB_SYNC_TASK_TIMEOUT_SECONDS
+    assert captured["timeout"] is None
 
 
 def test_start_session_load_rejects_oversized_json_before_background_worker(
