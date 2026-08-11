@@ -2,6 +2,12 @@
 
 import uuid
 
+from core.file_io import canonical_path_key
+from core.recovery_candidates import (
+    discover_recovery_candidates,
+    inspect_recovery_candidate,
+)
+from ui.dialogs import RecoveryCandidateDialog
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 
@@ -329,6 +335,54 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
 
             recovery_state = self._load_recovery_state()
             if not recovery_state:
+                return
+
+            candidates = []
+            if Path(Config.RECOVERY_STATE_FILE).is_file():
+                candidates = discover_recovery_candidates(
+                    recovery_state_file=Config.RECOVERY_STATE_FILE,
+                    backup_dir=Config.BACKUP_DIR,
+                    runtime_session_dir=Config.RUNTIME_SESSION_DIR,
+                )
+            pointer_path = str(recovery_state.get("path", "") or "").strip()
+            candidate_keys = {canonical_path_key(item.path) for item in candidates}
+            if pointer_path and canonical_path_key(pointer_path) not in candidate_keys:
+                candidates.append(
+                    inspect_recovery_candidate(
+                        pointer_path,
+                        snapshot_type=str(
+                            recovery_state.get("snapshot_type", "session") or "session"
+                        ),
+                    )
+                )
+            usable_candidates = [
+                candidate for candidate in candidates if candidate.integrity != "invalid"
+            ]
+            if len(usable_candidates) > 1:
+                dialog = RecoveryCandidateDialog(candidates, self)
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                selected = dialog.selected_candidate
+                if selected is None:
+                    return
+                recovery_state = {
+                    "path": str(selected.path),
+                    "snapshot_type": selected.snapshot_type,
+                    "created_at": selected.created_at,
+                }
+            elif len(usable_candidates) == 1:
+                selected = usable_candidates[0]
+                recovery_state = {
+                    **recovery_state,
+                    "path": str(selected.path),
+                    "snapshot_type": selected.snapshot_type,
+                    "created_at": selected.created_at,
+                }
+            elif candidates:
+                self._report_user_visible_warning(
+                    "사용 가능한 세션 복구본이 없습니다.",
+                    toast=False,
+                )
                 return
 
             snapshot_path = str(recovery_state.get("path", "") or "")

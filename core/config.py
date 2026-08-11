@@ -353,6 +353,7 @@ class Config:
     PRESET_FILE = str(Path(STORAGE_DIR) / "committee_presets.json")
     URL_HISTORY_FILE = str(Path(STORAGE_DIR) / "url_history.json")
     RECOVERY_STATE_FILE = str(Path(STORAGE_DIR) / "session_recovery.json")
+    RECOVERY_CANDIDATE_MAX = 50
     
     # 기본 CSS 선택자
     DEFAULT_SELECTORS = [

@@ -18,10 +18,78 @@ from PyQt6.QtWidgets import (
 
 from core.config import Config
 from core.live_list import build_live_list_url, parse_live_list_payload
+from core.recovery_candidates import RecoveryCandidate
 
 
 def _parse_live_list_payload(payload: bytes) -> dict[str, object]:
     return parse_live_list_payload(payload)
+
+
+class RecoveryCandidateDialog(QDialog):
+    def __init__(self, candidates: list[RecoveryCandidate], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("세션 복구본 선택")
+        self.resize(850, 420)
+        self.candidates = list(candidates)
+        self.selected_candidate: RecoveryCandidate | None = None
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("복구할 후보를 선택하세요. 손상 후보는 선택할 수 없습니다."))
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(
+            ["종류", "생성 시각", "자막 수", "무결성", "소스", "파일"]
+        )
+        self.tree.setColumnWidth(0, 120)
+        self.tree.setColumnWidth(1, 160)
+        self.tree.setColumnWidth(2, 90)
+        self.tree.setColumnWidth(3, 90)
+        self.tree.setColumnWidth(4, 220)
+        for index, candidate in enumerate(self.candidates):
+            item = QTreeWidgetItem(
+                [
+                    candidate.snapshot_type,
+                    candidate.created_at,
+                    f"{candidate.entry_count:,}",
+                    candidate.integrity,
+                    candidate.source_url,
+                    str(candidate.path),
+                ]
+            )
+            item.setData(0, Qt.ItemDataRole.UserRole, index)
+            if candidate.warnings:
+                item.setToolTip(3, "\n".join(candidate.warnings))
+            if candidate.integrity == "invalid":
+                item.setDisabled(True)
+            self.tree.addTopLevelItem(item)
+        self.tree.itemDoubleClicked.connect(self.accept_selection)
+        layout.addWidget(self.tree)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept_selection)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        for index, candidate in enumerate(self.candidates):
+            if candidate.integrity != "invalid":
+                self.tree.setCurrentItem(self.tree.topLevelItem(index))
+                break
+
+    def accept_selection(self, *_args: object) -> None:
+        item = self.tree.currentItem()
+        if item is None or item.isDisabled():
+            return
+        try:
+            index = int(item.data(0, Qt.ItemDataRole.UserRole))
+            candidate = self.candidates[index]
+        except (TypeError, ValueError, IndexError):
+            return
+        if candidate.integrity == "invalid":
+            return
+        self.selected_candidate = candidate
+        self.accept()
 
 
 class LiveBroadcastDialog(QDialog):
