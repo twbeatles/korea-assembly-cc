@@ -229,6 +229,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
 
             self._preview_desync_count += 1
             if self._preview_desync_count >= self._preview_resync_threshold:
+                self._increment_capture_quality("desync_resets")
                 logger.warning(
                     "preview suffix desync reset: count=%s", self._preview_desync_count
                 )
@@ -310,6 +311,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
 
     def _on_capture_reconnected(self, data: object) -> None:
         """재연결 직후 full probe 재유입으로 인한 중복 append를 줄이기 위해 history를 맞춘다."""
+        self._increment_capture_quality("reconnects")
         self._preview_desync_count = 0
         self._preview_ambiguous_skip_count = 0
         self._reconnect_preview_suppress_until_delta = True

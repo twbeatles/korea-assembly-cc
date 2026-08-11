@@ -26,7 +26,7 @@ def _build_queue_window() -> MainWindow:
     return win
 
 
-def test_preview_messages_use_overflow_instead_of_coalescing():
+def test_preview_messages_coalesce_to_latest_full_snapshot():
     win = _build_queue_window()
     win.message_queue.put_nowait("occupied")
 
@@ -38,12 +38,11 @@ def test_preview_messages_use_overflow_instead_of_coalescing():
             run_id=7,
         )
 
-    assert win._coalesced_worker_messages == {}
-    assert len(win._overflow_passthrough_messages) == 5
-    assert all(
-        isinstance(item, WorkerQueueMessage) and item.msg_type == "preview"
-        for item in win._overflow_passthrough_messages
-    )
+    latest = win._coalesced_worker_messages[(7, "preview")]
+    assert latest["raw"] == "line-4"
+    assert latest["full_snapshot"] is True
+    assert latest["worker_sequence"] == 5
+    assert win._overflow_passthrough_messages == []
 
 
 def test_overflow_trim_prefers_dropping_low_priority_messages():
@@ -132,7 +131,7 @@ def test_overflow_preview_burst_preserves_terminal_priority_messages():
     assert "subtitle_segments" in message_types
 
 
-def test_preview_overflow_items_remain_draggable_after_burst():
+def test_preview_burst_remains_draggable_as_one_full_snapshot():
     win = _build_queue_window()
     win.message_queue.put_nowait("occupied")
     for index in range(5):
@@ -142,4 +141,10 @@ def test_preview_overflow_items_remain_draggable_after_burst():
             {"raw": f"burst-{index}"},
             run_id=7,
         )
-    assert len(win._overflow_passthrough_messages) == 5
+    drained = win._pop_coalesced_worker_messages(max_items=1)
+    assert drained == [
+        (
+            "preview",
+            {"raw": "burst-4", "full_snapshot": True, "worker_sequence": 5},
+        )
+    ]

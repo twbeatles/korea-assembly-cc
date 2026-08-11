@@ -223,6 +223,7 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                         "url": session_data.get("url", ""),
                         "committee_name": session_data.get("committee_name", ""),
                         "lineage_id": session_data.get("lineage_id", ""),
+                        "capture_quality": session_data.get("capture_quality", {}),
                         "subtitles": new_subtitles,
                         "skipped": skipped,
                     }

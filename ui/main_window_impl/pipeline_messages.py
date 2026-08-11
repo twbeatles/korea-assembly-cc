@@ -113,6 +113,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
         self._replace_subtitles_and_refresh(
             loaded_subtitles, keep_history_from_subtitles=bool(loaded_subtitles)
         )
+        self._set_capture_quality_payload(payload.get("capture_quality", {}))
         self._cleanup_runtime_session_archive(remove_files=False)
         self._clear_destructive_undo_state()
         self._initial_recovery_snapshot_done = False

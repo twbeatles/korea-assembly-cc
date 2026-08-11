@@ -12,7 +12,7 @@ from PyQt6.QtGui import QColor, QFont, QIcon, QTextCharFormat
 from core.config import Config
 from core.live_capture import create_empty_live_capture_ledger
 from core.logging_utils import logger
-from core.models import CaptureSessionState, SubtitleEntry
+from core.models import CaptureQualityState, CaptureSessionState, SubtitleEntry
 from core.subtitle_pipeline import (
     PREVIEW_AMBIGUOUS_RESYNC_THRESHOLD,
     PREVIEW_RESYNC_THRESHOLD,
@@ -88,6 +88,7 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._trailing_suffix = ""
         self._suffix_length = SUFFIX_LENGTH
         self._preview_desync_count = 0
+        self._capture_quality = CaptureQualityState()
         self._preview_ambiguous_skip_count = 0
         self._last_good_raw_compact = ""
         self._preview_resync_threshold = PREVIEW_RESYNC_THRESHOLD

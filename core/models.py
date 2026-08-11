@@ -4,13 +4,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Literal, Optional, cast
+from typing import Dict, Literal, Mapping, Optional, cast
 from uuid import uuid4
 
 from core.text_utils import compact_subtitle_text
 
 
 SpeakerChannel = Literal["primary", "secondary", "unknown"]
+
+
+@dataclass(slots=True)
+class CaptureQualityState:
+    queue_drops: int = 0
+    preview_gaps: int = 0
+    reconnects: int = 0
+    desync_resets: int = 0
+    salvage_skipped_files: int = 0
+
+    _FIELDS = (
+        "queue_drops",
+        "preview_gaps",
+        "reconnects",
+        "desync_resets",
+        "salvage_skipped_files",
+    )
+
+    @classmethod
+    def from_mapping(cls, value: object) -> "CaptureQualityState":
+        mapping = value if isinstance(value, Mapping) else {}
+        values: dict[str, int] = {}
+        for name in cls._FIELDS:
+            try:
+                values[name] = max(0, int(mapping.get(name, 0)))
+            except (TypeError, ValueError):
+                values[name] = 0
+        return cls(**values)
+
+    def to_dict(self) -> dict[str, int]:
+        return {name: max(0, int(getattr(self, name))) for name in self._FIELDS}
+
+    def increment(self, name: str, count: int = 1) -> None:
+        if name not in self._FIELDS:
+            raise ValueError(f"Unknown capture quality counter: {name}")
+        setattr(self, name, max(0, int(getattr(self, name))) + max(0, int(count)))
 
 
 def _clone_frame_path(frame_path: Optional[list[int]]) -> Optional[list[int]]:

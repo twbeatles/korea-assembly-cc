@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
+from core.models import CaptureQualityState
 from core.resource_budget import ResourceBudget, ResourceBudgetLimits, ResourceLimitExceeded
 
 QProgressDialog = cast(Any, getattr(QtWidgets, "QProgressDialog"))
@@ -244,6 +245,11 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
             }
             if skipped_files > 0:
                 payload["skipped_files"] = skipped_files
+            quality = CaptureQualityState.from_mapping(
+                manifest.get("capture_quality", {})
+            )
+            quality.salvage_skipped_files += skipped_files
+            payload["capture_quality"] = quality.to_dict()
             if warnings:
                 payload["recovery_warnings"] = warnings
             return payload

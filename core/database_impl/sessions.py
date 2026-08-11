@@ -35,7 +35,20 @@ class DatabaseSessionMixin(DatabaseMixinHost):
             "parent_session_id": row["parent_session_id"],
             "is_latest_in_lineage": int(row["is_latest_in_lineage"] or 0),
             "save_operation_id": str(row["save_operation_id"] or ""),
+            "capture_quality": self._deserialize_capture_quality(
+                row["capture_quality_json"]
+            ),
         }
+
+    @staticmethod
+    def _deserialize_capture_quality(value: object) -> dict[str, int]:
+        try:
+            loaded = json.loads(str(value or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            loaded = {}
+        from core.models import CaptureQualityState
+
+        return CaptureQualityState.from_mapping(loaded).to_dict()
 
     def _subtitle_row_to_dict(self, row: Any) -> Dict[str, Any]:
         return {
@@ -133,6 +146,11 @@ class DatabaseSessionMixin(DatabaseMixinHost):
                 save_operation_id = str(
                     session_data.get("save_operation_id", "") or ""
                 ).strip()
+                capture_quality_json = json.dumps(
+                    session_data.get("capture_quality", {}),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
                 if save_operation_id:
                     cursor.execute(
                         "SELECT id FROM sessions WHERE save_operation_id = ? LIMIT 1",
@@ -155,8 +173,8 @@ class DatabaseSessionMixin(DatabaseMixinHost):
                     INSERT INTO sessions
                     (url, committee_name, total_subtitles, total_characters,
                      duration_seconds, version, notes, lineage_id, parent_session_id,
-                     is_latest_in_lineage, save_operation_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                     is_latest_in_lineage, save_operation_id, capture_quality_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """, (
                     session_data.get("url", ""),
                     session_data.get("committee_name", ""),
@@ -168,6 +186,7 @@ class DatabaseSessionMixin(DatabaseMixinHost):
                     lineage_id,
                     parent_session_id,
                     save_operation_id or None,
+                    capture_quality_json,
                 ))
 
                 session_id = cursor.lastrowid

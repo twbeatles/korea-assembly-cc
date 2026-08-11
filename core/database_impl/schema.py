@@ -42,7 +42,8 @@ class DatabaseSchemaMixin(DatabaseMixinHost):
                         lineage_id TEXT,
                         parent_session_id INTEGER NULL,
                         is_latest_in_lineage INTEGER DEFAULT 1,
-                        save_operation_id TEXT NULL
+                        save_operation_id TEXT NULL,
+                        capture_quality_json TEXT NULL
                     )
                 """)
                 self._ensure_session_table_columns(cursor)
@@ -142,6 +143,7 @@ class DatabaseSchemaMixin(DatabaseMixinHost):
             "parent_session_id": "INTEGER NULL",
             "is_latest_in_lineage": "INTEGER DEFAULT 1",
             "save_operation_id": "TEXT NULL",
+            "capture_quality_json": "TEXT NULL",
         }
         for column_name, sql_type in required_columns.items():
             if column_name in existing_columns:

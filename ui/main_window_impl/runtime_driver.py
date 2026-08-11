@@ -10,7 +10,7 @@ from uuid import uuid4
 from core import utils
 from core.config import Config
 from core.logging_utils import logger
-from core.models import SubtitleEntry
+from core.models import CaptureQualityState, SubtitleEntry
 from ui.main_window_impl.contracts import RuntimeHost
 
 
@@ -18,6 +18,22 @@ RuntimeBase = RuntimeHost if TYPE_CHECKING else object
 
 
 class MainWindowRuntimeDriverMixin(RuntimeBase):
+    def _ensure_capture_quality_state(self) -> CaptureQualityState:
+        current = self.__dict__.get("_capture_quality")
+        if isinstance(current, CaptureQualityState):
+            return current
+        state = CaptureQualityState.from_mapping(current)
+        self._capture_quality = state
+        return state
+
+    def _increment_capture_quality(self, name: str, count: int = 1) -> None:
+        self._ensure_capture_quality_state().increment(name, count)
+
+    def _get_capture_quality_payload(self) -> dict[str, int]:
+        return self._ensure_capture_quality_state().to_dict()
+
+    def _set_capture_quality_payload(self, value: object) -> None:
+        self._capture_quality = CaptureQualityState.from_mapping(value)
     @staticmethod
     def _is_settings_status_ok(status_value: object) -> bool:
         if status_value is None:
@@ -546,6 +562,20 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
             ]
             for key in stale_keys:
                 pending.pop(key, None)
+            for state_name in (
+                "_preview_sequence_by_run",
+                "_preview_last_received_sequence_by_run",
+            ):
+                mapping = dict(self.__dict__.get(state_name, {}))
+                mapping.pop(int(target_run_id), None)
+                setattr(self, state_name, mapping)
+            for state_name in (
+                "_preview_resync_requested_runs",
+                "_preview_awaiting_full_snapshot_runs",
+            ):
+                values = set(self.__dict__.get(state_name, set()))
+                values.discard(int(target_run_id))
+                setattr(self, state_name, values)
 
     def _is_active_capture_run(self, run_id: int | None) -> bool:
         return run_id is not None and self.__dict__.get("_active_capture_run_id") == int(run_id)

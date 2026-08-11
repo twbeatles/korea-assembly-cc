@@ -192,6 +192,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 "archived_words": int(archived_words),
                 "tail_checkpoint": str(tail_checkpoint_name or "tail_checkpoint.json"),
                 "segments": [dict(item) for item in manifest_items],
+                "capture_quality": self._get_capture_quality_payload(),
             }
             if archive_token:
                 payload["archive_token"] = archive_token
@@ -254,6 +255,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 ("url", current_url),
                 ("committee_name", committee_name),
                 ("lineage_id", str(lineage_id or "")),
+                ("capture_quality", self._get_capture_quality_payload()),
                 ("archived_count", int(archived_count)),
                 ("archived_chars", int(archived_chars)),
                 ("archived_words", int(archived_words)),

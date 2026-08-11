@@ -179,6 +179,7 @@ class WorkerQueueMessage:
     run_id: int
     msg_type: str
     payload: Any
+    sequence: int | None = None
 
 
 @dataclass(slots=True)

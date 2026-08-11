@@ -291,6 +291,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                             "url": data.get("url", ""),
                             "committee_name": data.get("committee_name", ""),
                             "lineage_id": data.get("lineage_id", ""),
+                            "capture_quality": data.get("capture_quality", {}),
                             "subtitles": new_subtitles,
                             "skipped": skipped,
                             "mark_dirty": mark_dirty,
@@ -390,6 +391,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
             current_url, committee_name, duration = self._build_session_save_context()
             created_at = datetime.now().isoformat()
             operation_id = str(save_operation_id or "").strip() or uuid.uuid4().hex
+            capture_quality = self._get_capture_quality_payload()
             lineage_id = self._ensure_session_lineage_id()
             manifest_items = (
                 runtime_manifest
@@ -408,6 +410,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                     ("url", current_url),
                     ("committee_name", committee_name),
                     ("lineage_id", lineage_id),
+                    ("capture_quality", capture_quality),
                 ],
                 sequence_key="subtitles",
                 sequence_items=self._iter_full_session_serialized_items(
@@ -446,6 +449,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                             "lineage_id": lineage_id,
                             "parent_session_id": self.__dict__.get("current_db_session_id"),
                             "save_operation_id": operation_id,
+                            "capture_quality": capture_quality,
                         }
                         db_session_id = self._run_db_task_sync(
                             "db_session_save",
@@ -463,6 +467,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                                     "lineage_id": data["lineage_id"],
                                     "parent_session_id": data["parent_session_id"],
                                     "save_operation_id": data["save_operation_id"],
+                                    "capture_quality": data["capture_quality"],
                                 }
                             ),
                             write_task=True,

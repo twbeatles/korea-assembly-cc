@@ -65,6 +65,7 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
                         ("url", current_url),
                         ("committee_name", committee_name),
                         ("lineage_id", self._ensure_session_lineage_id()),
+                        ("capture_quality", self._get_capture_quality_payload()),
                         ("segment_index", segment_index),
                         ("start_index", start_index),
                         ("entry_count", flush_count),

@@ -15,6 +15,7 @@ from ui.main_window_impl.contracts import PipelineQueueHost
 COALESCED_WORKER_MESSAGE_TYPES = {
     "connection_status",
     "keepalive",
+    "preview",
     "reconnected",
     "reconnecting",
     "resolved_url",
@@ -40,6 +41,7 @@ COALESCED_WORKER_MESSAGE_ORDER = (
     "connection_status",
     "reconnecting",
     "reconnected",
+    "preview",
     "keepalive",
 )
 COALESCED_CONTROL_MESSAGE_TYPES = {
@@ -70,6 +72,63 @@ PipelineQueueBase = PipelineQueueHost if TYPE_CHECKING else object
 
 
 class MainWindowPipelineQueueMixin(PipelineQueueBase):
+    def _next_preview_sequence(self, run_id: int) -> int:
+        lock = getattr(self, "_worker_message_lock", None)
+        if lock is None:
+            sequences = dict(self.__dict__.get("_preview_sequence_by_run", {}))
+            next_sequence = int(sequences.get(run_id, 0)) + 1
+            sequences[run_id] = next_sequence
+            self._preview_sequence_by_run = sequences
+            return next_sequence
+        with lock:
+            sequences = dict(self.__dict__.get("_preview_sequence_by_run", {}))
+            next_sequence = int(sequences.get(run_id, 0)) + 1
+            sequences[run_id] = next_sequence
+            self._preview_sequence_by_run = sequences
+            return next_sequence
+
+    def _mark_preview_resync_requested(self, run_id: int) -> None:
+        requested = set(self.__dict__.get("_preview_resync_requested_runs", set()))
+        requested.add(int(run_id))
+        self._preview_resync_requested_runs = requested
+        awaiting = set(
+            self.__dict__.get("_preview_awaiting_full_snapshot_runs", set())
+        )
+        awaiting.add(int(run_id))
+        self._preview_awaiting_full_snapshot_runs = awaiting
+
+    def _accept_preview_sequence(self, item: WorkerQueueMessage) -> bool:
+        sequence = item.sequence
+        if sequence is None:
+            return True
+        run_id = int(item.run_id)
+        payload = item.payload if isinstance(item.payload, dict) else {}
+        is_full_snapshot = bool(payload.get("full_snapshot", False))
+        received = dict(
+            self.__dict__.get("_preview_last_received_sequence_by_run", {})
+        )
+        previous = int(received.get(run_id, 0))
+        if is_full_snapshot:
+            received[run_id] = int(sequence)
+            self._preview_last_received_sequence_by_run = received
+            awaiting = set(
+                self.__dict__.get("_preview_awaiting_full_snapshot_runs", set())
+            )
+            awaiting.discard(run_id)
+            self._preview_awaiting_full_snapshot_runs = awaiting
+            return True
+        if int(sequence) <= previous:
+            return False
+        if previous and int(sequence) != previous + 1:
+            self._mark_preview_resync_requested(run_id)
+            increment = getattr(type(self), "_increment_capture_quality", None)
+            if callable(increment):
+                increment(self, "preview_gaps")
+            return False
+        received[run_id] = int(sequence)
+        self._preview_last_received_sequence_by_run = received
+        return True
+
     def _ensure_overflow_passthrough_state(self) -> None:
         state = getattr(self, "__dict__", {})
         if state.get("_overflow_passthrough_lock") is None:
@@ -129,6 +188,7 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             return
         self._ensure_queue_backpressure_state()
         self._overflow_drop_total = int(self._overflow_drop_total or 0) + int(dropped_count)
+        self._increment_capture_quality("queue_drops", dropped_count)
         logger.warning(
             "overflow passthrough 메시지 %s건 드롭 (%s, 누적=%s)",
             dropped_count,
@@ -196,7 +256,23 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         resolved_run_id = (
             run_id if run_id is not None else self._ensure_active_capture_run()
         )
-        message = WorkerQueueMessage(int(resolved_run_id), str(msg_type), data)
+        sequence: int | None = None
+        if str(msg_type) == "preview":
+            sequence = self._next_preview_sequence(int(resolved_run_id))
+            requested = set(
+                self.__dict__.get("_preview_resync_requested_runs", set())
+            )
+            if int(resolved_run_id) in requested and isinstance(data, dict):
+                data = dict(data)
+                data["full_snapshot"] = True
+                requested.discard(int(resolved_run_id))
+                self._preview_resync_requested_runs = requested
+        message = WorkerQueueMessage(
+            int(resolved_run_id),
+            str(msg_type),
+            data,
+            sequence=sequence,
+        )
         try:
             self.message_queue.put_nowait(message)
             return
@@ -223,6 +299,10 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         if lock is None:
             return
         with lock:
+            if msg_type == "preview" and isinstance(data, dict):
+                data = dict(data)
+                data["full_snapshot"] = True
+                data["worker_sequence"] = sequence
             self._coalesced_worker_messages[(int(resolved_run_id), str(msg_type))] = data
             self._ensure_queue_backpressure_state()
             self._worker_message_coalesce_total = int(
@@ -238,6 +318,8 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
     def _unwrap_message_item(self, item: object) -> tuple[str, Any] | None:
         if isinstance(item, WorkerQueueMessage):
             if not self._is_active_capture_run(item.run_id):
+                return None
+            if item.msg_type == "preview" and not self._accept_preview_sequence(item):
                 return None
             return item.msg_type, item.payload
         if isinstance(item, tuple) and len(item) == 2:
