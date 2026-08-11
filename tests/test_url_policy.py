@@ -30,6 +30,36 @@ def test_validate_assembly_url_allows_default_url_and_rejects_external_values():
     )
 
 
+def test_validate_assembly_url_rejects_port_path_and_invalid_tokens():
+    for value in (
+        "https://assembly.webcast.go.kr:444/main/player.asp?xcode=10",
+        "https://assembly.webcast.go.kr/main/admin.asp?xcode=10",
+        "https://assembly.webcast.go.kr/main/player.asp?xcode=bad%20token",
+        "https://assembly.webcast.go.kr/main/player.asp?xcgcd=" + "x" * 81,
+    ):
+        normalized, error = validate_assembly_url(value)
+        assert normalized is None
+        assert error
+
+
+def test_validate_assembly_url_normalizes_path_query_names_and_tokens():
+    normalized, error = validate_assembly_url(
+        "HTTPS://ASSEMBLY.WEBCAST.GO.KR/MAIN/PLAYER.ASP?XCODE=ab12&XCGCD=Live_1"
+    )
+
+    assert error is None
+    assert normalized == (
+        "https://assembly.webcast.go.kr/main/player.asp?xcode=ab12&xcgcd=Live_1"
+    )
+
+
+def test_validate_assembly_url_rejects_excessive_length(monkeypatch):
+    monkeypatch.setattr(Config, "MAX_URL_LENGTH", 80)
+    normalized, error = validate_assembly_url(Config.DEFAULT_URL + "&padding=" + "x" * 100)
+    assert normalized is None
+    assert error
+
+
 def test_sanitize_url_history_drops_invalid_non_string_and_overflow_entries():
     sanitized, dropped = sanitize_url_history(
         {

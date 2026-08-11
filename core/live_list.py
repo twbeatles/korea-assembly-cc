@@ -5,6 +5,8 @@ import re
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from core.config import Config
+
 
 LIVE_LIST_API_URL = "https://assembly.webcast.go.kr/main/service/live_list.asp"
 _LIVE_XCODE_PATTERN = re.compile(r"^[A-Za-z0-9]{1,10}$")
@@ -76,6 +78,18 @@ def normalize_live_list_row(item: object) -> dict[str, str] | None:
         return None
     xname = str(item.get("xname", "이름 없음") or "이름 없음").strip() or "이름 없음"
     xdesc = str(item.get("xdesc", "") or "").strip()
+    max_string_length = int(Config.LIVE_LIST_MAX_STRING_LENGTH)
+    if any(
+        len(value) > max_string_length
+        for value in (
+            raw_xcgcd,
+            raw_xcode,
+            xname,
+            xdesc,
+            str(item.get("time", "") or ""),
+        )
+    ):
+        return None
     if not any((xcgcd, xcode, xname and xname != "이름 없음", xdesc)):
         return None
     return {
@@ -105,6 +119,12 @@ def make_live_list_error_payload(
 
 
 def parse_live_list_payload(payload: bytes) -> dict[str, object]:
+    max_bytes = int(Config.LIVE_LIST_MAX_BYTES)
+    if len(payload) > max_bytes:
+        return make_live_list_error_payload(
+            "payload_too_large",
+            f"live-list payload exceeds {max_bytes} bytes",
+        )
     try:
         decoded = payload.decode("utf-8", errors="replace")
         data = json.loads(decoded)
@@ -126,6 +146,12 @@ def parse_live_list_payload(payload: bytes) -> dict[str, object]:
 
     valid_rows: list[dict[str, str]] = []
     dropped_rows = 0
+    max_rows = int(Config.LIVE_LIST_MAX_ROWS)
+    if len(rows) > max_rows:
+        return make_live_list_error_payload(
+            "too_many_rows",
+            f"live-list row count exceeds {max_rows}",
+        )
     for item in rows:
         normalized = normalize_live_list_row(item)
         if normalized is None:

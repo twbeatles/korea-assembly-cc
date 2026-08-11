@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from importlib import import_module
 
+from core.file_io import read_limited_json_file
 from core.url_policy import (
     is_allowed_assembly_host,
     sanitize_url_history,
@@ -22,8 +23,11 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
             """URL 히스토리 로드 - {url: tag} 형태"""
             try:
                 if _ui_public().Path(Config.URL_HISTORY_FILE).exists():
-                    with open(Config.URL_HISTORY_FILE, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+                    data = read_limited_json_file(
+                        Config.URL_HISTORY_FILE,
+                        max_bytes=int(Config.URL_HISTORY_MAX_BYTES),
+                        label="URL history",
+                    )
                     sanitized, dropped = sanitize_url_history(
                         data,
                         Config.MAX_URL_HISTORY,
@@ -181,6 +185,8 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
         url: object,
     ) -> tuple[tuple[str, str] | None, str | None]:
             normalized_name = str(name or "").strip()
+            if len(normalized_name) > int(Config.MAX_PRESET_NAME_LENGTH):
+                return None, "Preset name is too long."
             if not normalized_name:
                 return None, "프리셋 이름이 비어 있습니다."
 
@@ -224,8 +230,11 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
 
             try:
                 if _ui_public().Path(Config.PRESET_FILE).exists():
-                    with open(Config.PRESET_FILE, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+                    data = read_limited_json_file(
+                        Config.PRESET_FILE,
+                        max_bytes=int(Config.PRESET_FILE_MAX_BYTES),
+                        label="preset file",
+                    )
                     dropped = 0
                     if isinstance(data, dict) and isinstance(data.get("presets"), dict):
                         for name, url in data["presets"].items():
@@ -484,8 +493,11 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
 
             if path:
                 try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+                    data = read_limited_json_file(
+                        path,
+                        max_bytes=int(Config.PRESET_FILE_MAX_BYTES),
+                        label="imported preset",
+                    )
 
                     if not isinstance(data, dict):
                         _ui_public().QMessageBox.warning(self, "오류", "프리셋 JSON 루트는 객체여야 합니다.")

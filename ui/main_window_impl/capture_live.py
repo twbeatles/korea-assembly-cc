@@ -50,7 +50,7 @@ class MainWindowCaptureLiveMixin(CaptureLiveBase):
         try:
             req = Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
             with urlopen(req, timeout=Config.LIVE_LIST_REQUEST_TIMEOUT_MS / 1000.0) as response:
-                payload = response.read()
+                payload = response.read(int(Config.LIVE_LIST_MAX_BYTES) + 1)
             return parse_live_list_payload(payload)
         except HTTPError as exc:
             logger.debug(f"live_list API 오류: {exc}")
