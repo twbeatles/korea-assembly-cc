@@ -86,6 +86,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="가능한 경우 codegraph init을 실행합니다.",
     )
+    parser.add_argument(
+        "--sign-thumbprint",
+        default="",
+        help="빌드된 EXE를 서명할 Windows 인증서 지문입니다. 개인 키는 인증서 저장소에 유지됩니다.",
+    )
+    parser.add_argument(
+        "--timestamp-url",
+        default="https://timestamp.digicert.com",
+        help="Authenticode RFC3161 타임스탬프 서버 URL입니다.",
+    )
     args = parser.parse_args(argv)
     if args.with_live_smoke and args.offline:
         parser.error("--with-live-smoke cannot be combined with --offline")
@@ -131,6 +141,18 @@ def main(argv: list[str] | None = None) -> int:
         print("\n==> codegraph init")
         _maybe_init_codegraph()
 
+    _run(
+        "audit remediation fixtures",
+        [
+            python,
+            "-m",
+            "pytest",
+            "tests/test_resource_budget.py",
+            "tests/test_update_manifest.py",
+            "tests/test_update_installer.py",
+            "-q",
+        ],
+    )
     _run("pytest", [python, "-m", "pytest", "-q"])
     _run("pyright", [python, "-m", "pyright", "--outputjson"])
     source_smoke_args = [
@@ -187,6 +209,25 @@ def main(argv: list[str] | None = None) -> int:
     exe_path = REPO_ROOT / "dist" / f"국회의사중계자막추출기 v{Config.VERSION}.exe"
     if not exe_path.exists():
         raise FileNotFoundError(f"frozen executable not found: {exe_path}")
+
+    if args.sign_thumbprint:
+        _run(
+            "Authenticode sign",
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(REPO_ROOT / "scripts" / "sign_release.ps1"),
+                "-Path",
+                str(exe_path),
+                "-CertificateThumbprint",
+                args.sign_thumbprint,
+                "-TimestampUrl",
+                args.timestamp_url,
+            ],
+        )
 
     frozen_smoke_args = [
         str(exe_path),

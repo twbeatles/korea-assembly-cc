@@ -25,12 +25,17 @@ def test_release_verification_offline_skip_build_keeps_source_checks(
     labels = [label for label, _args, _env in calls]
     assert labels == [
         "pip install requirements-dev",
+        "audit remediation fixtures",
         "pytest",
         "pyright",
         "source smoke",
         "source storage preflight",
     ]
-    source_smoke_args = calls[3][1]
+    fixture_args = calls[1][1]
+    assert "tests/test_update_manifest.py" in fixture_args
+    assert "tests/test_update_installer.py" in fixture_args
+    assert "tests/test_resource_budget.py" in fixture_args
+    source_smoke_args = calls[4][1]
     assert "--smoke-instantiate-window" in source_smoke_args
     assert not any(label == "live contract smoke" for label in labels)
     assert not any(label == "PyInstaller clean build" for label in labels)
@@ -110,3 +115,37 @@ def test_release_verification_skip_live_still_runs_build_and_frozen_smoke(
             "portable",
         ),
     ]
+
+
+def test_release_verification_can_sign_built_executable(tmp_path, monkeypatch):
+    calls: list[tuple[str, list[str], dict[str, str] | None]] = []
+    exe_dir = tmp_path / "dist"
+    exe_dir.mkdir()
+    exe_path = exe_dir / f"국회의사중계자막추출기 v{release_mod.Config.VERSION}.exe"
+    exe_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(release_mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        release_mod,
+        "_run",
+        lambda label, args, env=None: calls.append((label, args, env)),
+    )
+    monkeypatch.setattr(release_mod, "_assert_smoke_payload", lambda *a, **k: None)
+
+    assert (
+        release_mod.main(
+            [
+                "--skip-live",
+                "--sign-thumbprint",
+                "A1B2C3",
+                "--timestamp-url",
+                "https://timestamp.example.com",
+            ]
+        )
+        == 0
+    )
+
+    sign_args = next(args for label, args, _env in calls if label == "Authenticode sign")
+    assert "A1B2C3" in sign_args
+    assert "https://timestamp.example.com" in sign_args
+    assert str(exe_path) in sign_args

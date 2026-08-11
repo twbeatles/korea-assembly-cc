@@ -45,6 +45,15 @@ jobs:
         # 로컬 pre-push 훅(scripts/check_before_push.py)과 동일 진입점.
         run: python scripts/check_before_push.py --pyright-only
 
+      - name: Audit remediation fixture gates
+        # 대용량 budget, Ed25519 manifest, 업데이트 rollback 계약을 명시적으로 고정한다.
+        run: >-
+          python -m pytest
+          tests/test_resource_budget.py
+          tests/test_update_manifest.py
+          tests/test_update_installer.py
+          -q --tb=line
+
       - name: Run pytest
         # test_pyright_regression 포함 — pyright 0 errors 를 테스트로 재검증
         run: python -m pytest -q --tb=line

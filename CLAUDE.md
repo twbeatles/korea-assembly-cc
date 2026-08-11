@@ -630,6 +630,20 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - **세션 내결함성 강화**: 세션 로드/DB 히스토리 로드/병합에서 손상 항목만 건너뛰고 유효 항목을 유지한다.
 - **로그 경로 일관화**: `core/logging_utils.py`가 `Config.LOG_DIR`를 사용하도록 통일했다.
 
+## 10-2. 2026-08-11 기능 감사 개선 계약
+
+- **revision 저장**: 모든 세션 mutation은 `_session_revision`을 증가시킨다. 비동기 저장 완료는 시작 revision과 현재 revision이 같을 때만 dirty를 해제하며, 다르면 후속 종료/로드 action을 자동 실행하지 않는다.
+- **DB 저장 멱등성**: JSON snapshot의 `save_operation_id`를 SQLite에도 전달한다. 동일 operation 재시도는 같은 DB 세션을 반환하며 persistence save는 임의 timeout으로 성공/실패를 오판하지 않는다.
+- **resource budget**: 일반 JSON, runtime manifest/segment/tail, salvage, DB hydrate는 `core/resource_budget.py`의 byte/entry 한도를 공유한다. DB row는 `fetchmany()` 기반으로 progress/cancel을 지원한다.
+- **입력·Windows 계약**: 저장 중복 가드는 Windows case-insensitive canonical path key를 사용한다. URL은 HTTPS 기본 포트, 허용 player path, token과 전체 길이를 검사하고 history/preset/live payload도 크기를 제한한다.
+- **preview 복구·진단**: worker sequence gap 발생 시 최신 full DOM snapshot을 적용한다. drop/gap/salvage/reconnect 진단은 `CaptureQualityState`로 JSON/runtime/DB에 보존한다.
+- **복구 UX**: 자동 복구는 단일 최신 파일을 강제하지 않고 유효 후보를 정렬해 사용자 선택을 받는다. 취소와 로드 실패는 현재 세션을 변경하지 않는다.
+- **업데이트 신뢰 경계**: 개발 빌드의 빈 채널 설정은 설치를 금지한다. 배포 빌드는 Ed25519 manifest 서명, HTTPS, 만료, version, artifact size/SHA-256을 검증하고 검증 후 사용자 승인을 다시 받은 다음 helper가 EXE를 교체한다. 새 EXE `--smoke` 실패 시 백업을 복원한다.
+- **배포 서명**: `scripts/sign_release.ps1`은 인증서 지문만 입력받고 개인 키는 Windows 인증서 저장소에 둔다. `run_release_verification.py --sign-thumbprint ...`로 빌드 후 서명·검증한다.
+- **명시적 제외 범위**: 자막/DB 암호화, 보존 기간 정책, 일괄 삭제 기능은 이번 구현 범위가 아니다.
+
+회귀 파일: `test_session_revision.py`, `test_database_save_idempotency.py`, `test_resource_budget.py`, `test_runtime_resource_limits.py`, `test_database_stream_load.py`, `test_url_policy.py`, `test_preview_gap_recovery.py`, `test_capture_quality.py`, `test_recovery_candidates.py`, `test_update_manifest.py`, `test_update_installer.py`.
+
 ## 11. 자막 수집 알고리즘
 
 > [!IMPORTANT]

@@ -1,7 +1,6 @@
 # 릴리스 체크리스트
 
-Windows 데스크톱 배포용 운영 체크리스트입니다.  
-(코드 서명 인증서·자동 업데이트 인프라는 별도 준비)
+Windows 데스크톱 배포용 운영 체크리스트입니다. 인증서와 업데이트 호스팅은 외부 릴리스 인프라에서 준비하며 개인 키는 저장소에 넣지 않습니다.
 
 참고 문서:
 
@@ -18,6 +17,8 @@ python -m pytest -q
 python -m pyright
 python scripts/run_release_verification.py --offline --skip-build --instantiate-window
 ```
+
+위 검증기는 resource budget, Ed25519 manifest, artifact hash, smoke rollback fixture를 전체 pytest 전에 명시적으로 다시 실행한다.
 
 푸시 전: `pre-push` 훅 또는 `check_before_push.py` 로 **pyright 0 errors** 확인.  
 GitHub CI는 **pyright(fail-fast) → pytest** 순으로 실행한다. 타입 오류는 전체 테스트 전에 실패한다.
@@ -73,7 +74,10 @@ pyinstaller --clean subtitle_extractor.spec
 
 ## 4. 코드 서명 (권장, 정책 따름)
 
-- [ ] Authenticode 서명 (기관 인증서)  
+- [ ] 배포 빌드에 `Config.UPDATE_MANIFEST_URL`, `Config.UPDATE_PUBLIC_KEY_B64` 설정
+- [ ] Ed25519로 manifest canonical payload 서명; artifact URL은 HTTPS, SHA-256·byte size·만료 포함
+- [ ] Authenticode 서명 (기관 인증서): `python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KACC_SIGN_CERT_THUMBPRINT`
+- [ ] `scripts/sign_release.ps1`의 서명 후 `Get-AuthenticodeSignature` 결과 `Valid` 확인
 - [ ] SmartScreen 평판 축적 계획  
 - [ ] 서명 후 해시(SHA-256)를 릴리스 노트에 게시
 
@@ -85,5 +89,7 @@ pyinstaller --clean subtitle_extractor.spec
 
 ## 6. 롤백
 
-- [ ] 직전 EXE + portable 데이터 백업 경로 안내  
+- [ ] 업데이트 승인 취소 시 staged EXE 삭제 확인
+- [ ] helper 교체 후 새 EXE `--smoke` 실패 fixture에서 기존 EXE 자동 복원 확인
+- [ ] 직전 EXE 백업은 설치 EXE와 같은 디렉터리에만 생성되는지 확인
 - [ ] DB(`subtitle_history.db`) 호환(additive migration) 확인

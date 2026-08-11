@@ -47,7 +47,9 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 ### 🗄️ 세션 및 이력 관리
 - 세션 저장/불러오기 — 언제든 중단 후 나중에 재개 가능
 - SQLite DB에 자동 저장 → 과거 자막 전체 검색 및 세션 불러오기
-- 5분마다 자동 백업(일반 세션: `backup_*.json`, 장시간 추출: runtime manifest/tail 복구 포인터), 비정상 종료 후 재시작 시 복구 제안(런타임 복구본 vs 5분 백업 우선순위 안내 포함)
+- 저장 도중 편집·수집이 계속되어도 revision 기준으로 미저장 변경을 정확히 유지하고, DB 재시도는 operation ID로 중복 저장 방지
+- 대용량 JSON/runtime/DB 세션은 공통 byte·entry budget과 점진 DB 로드(progress/cancel)를 적용
+- 5분마다 자동 백업(일반 세션: `backup_*.json`, 장시간 추출: runtime manifest/tail 복구 포인터), 비정상 종료 후 재시작 시 여러 복구 후보를 비교·선택
 - DB 히스토리에서 같은 세션의 저장 계보 (`[최신]`, `[이전 저장본 n/N]`) 확인
 
 ### ⚙️ 편의 기능
@@ -56,6 +58,8 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 - **자동 줄넘김 정리** — 수집 중 줄바꿈·빈 줄을 자동으로 한 줄로 정리 (기본 ON)
 - 다크/라이트 테마, 글자 크기 조절
 - 저장/백업/DB 파일은 실행 위치와 무관하게 앱 기준 경로에 저장
+- preview sequence gap을 감지해 최신 full DOM snapshot으로 복구하고, drop/gap/salvage 품질 진단을 세션에 기록
+- 배포 빌드는 도움말의 `업데이트 확인...`에서 Ed25519 서명 manifest와 EXE SHA-256을 검증한 뒤 사용자 승인 시에만 설치; smoke 실패 시 기존 EXE 자동 복원
 
 ---
 
@@ -76,7 +80,7 @@ pip install -r requirements-dev.txt
 최소 실행만 필요한 경우:
 
 ```bash
-pip install PyQt6 selenium
+pip install PyQt6 selenium cryptography
 ```
 
 ### 3. 선택 기능 참고
@@ -278,6 +282,14 @@ python scripts/run_release_verification.py --offline --skip-build --instantiate-
 python scripts/run_release_verification.py --with-live-smoke   # live contract smoke 명시 포함
 ```
 
+릴리스 EXE에 Authenticode를 적용할 때는 인증서 개인 키를 코드에 넣지 않고 Windows 인증서 저장소를 사용합니다.
+
+```powershell
+python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KACC_SIGN_CERT_THUMBPRINT
+```
+
+업데이트 채널은 `core/config.py`의 `UPDATE_MANIFEST_URL`과 `UPDATE_PUBLIC_KEY_B64`를 배포 빌드에 설정해야 활성화됩니다. 두 값이 비어 있는 개발 빌드는 자동 설치를 금지합니다.
+
 자세한 아키텍처·개발 가이드·파이프라인 고정 규칙은 아래 문서를 참고하세요.
 
 | 문서 | 내용 |
@@ -296,6 +308,7 @@ python scripts/run_release_verification.py --with-live-smoke   # live contract s
 ## 📝 변경 이력
 
 ### v16.14.8 (2026-06-30 ~ 2026-08-10)
+- **2026-08-11 기능 감사 전체 개선** — revision save, DB idempotency, 공통 resource budget/stream load, Windows 경로 정규화, URL·입력 상한, preview gap 복구·품질 metadata, 복구 후보 선택, 서명 업데이트·승인·rollback
 - **2026-08-10 수집 정합·export·CI** — Chrome 확장 AI 버튼/active 검사·multi-speaker, export sanitize·SRT/VTT 상대 타임코드, 푸시 전 pyright 훅, CI pyright fail-fast → pytest
 - **감사 후속 자동화/TDD 보강** — in-process smoke·pyright fallback, `_prepare_preview_raw`·salvage·reconnect handshake 테스트, capture Protocol, release verifier `pip install`/`--init-codegraph`
 - **재연결 중복 append 완화** — `_reconnect_preview_suppress_until_delta` handshake

@@ -85,3 +85,10 @@ def test_ci_forces_utf8_and_offscreen_for_windows_runner() -> None:
     assert re.search(r"(?m)^\s*PYTHONUTF8:\s*[\"']?1[\"']?\s*$", text)
     assert re.search(r"(?m)^\s*PYTHONIOENCODING:\s*utf-8\s*$", text)
     assert re.search(r"(?m)^\s*QT_QPA_PLATFORM:\s*offscreen\s*$", text)
+
+
+def test_ci_runs_update_signature_and_rollback_fixtures() -> None:
+    text = _workflow_text()
+    assert "tests/test_update_manifest.py" in text
+    assert "tests/test_update_installer.py" in text
+    assert "tests/test_resource_budget.py" in text

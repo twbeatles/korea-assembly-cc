@@ -6,6 +6,17 @@
 
 검증 결과: `pytest -q` **361 passed, 2 skipped**, pyright **0 errors / 0 warnings (138 files)**, 창 생성 smoke **성공**
 
+구현 후속 상태(2026-08-11): 3.1~3.7의 확인된 문제와 4장의 추정 기능 중 저장 이력, 대용량 사전 비용 안내, 복구 후보 선택, 수집 품질 리포트, 서명 업데이트 경로를 구현했다. 사용자가 제외한 데이터 보호 전체 범위(암호화·보존 정책·일괄 삭제)는 구현하지 않았다. 실제 사이트 DOM E2E는 외부 서비스 의존 검증으로 남겨 두고 기존 opt-in live smoke를 유지한다.
+
+근거 매핑:
+
+- 3.1: `_session_revision` snapshot 비교 및 deferred action 보호 — `tests/test_session_revision.py`
+- 3.2: `save_operation_id` DB unique migration과 timeout 없는 persistence save — `tests/test_database_save_idempotency.py`
+- 3.3~3.4: 공통 resource budget, runtime 개별/누적 한도, DB `fetchmany()` progress/cancel — `tests/test_resource_budget.py`, `tests/test_runtime_resource_limits.py`, `tests/test_database_stream_load.py`
+- 3.5~3.6: Windows canonical save key와 URL/path/query/payload 제한 — `tests/test_config_paths.py`, `tests/test_url_policy.py`, `tests/test_input_resource_limits.py`
+- 3.7: sequence gap 탐지, 최신 full snapshot 회복, 품질 metadata 저장 — `tests/test_preview_gap_recovery.py`, `tests/test_capture_quality.py`
+- 추정 기능: 복구 후보 선택과 서명 manifest·사용자 승인·smoke rollback 업데이트 — `tests/test_recovery_candidates.py`, `tests/test_update_manifest.py`, `tests/test_update_installer.py`
+
 ## 1. Executive Summary
 
 이 프로젝트는 국회 의사중계 웹사이트의 AI 자막을 Selenium으로 수집하고, PyQt6 UI에서 실시간 처리하며, JSON·SQLite·여러 문서 형식으로 저장하는 Windows 중심 데스크톱 애플리케이션이다. 최근 여러 차례의 안정화 작업으로 URL/selector 검증, run-scoped worker queue, 원자 저장, runtime archive 무결성 검사, DB 직렬 worker, 종료 대기 등이 잘 갖춰져 있다. 현재 전체 테스트와 pyright도 통과한다.
