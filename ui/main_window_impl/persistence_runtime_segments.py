@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
+from core.resource_budget import ResourceBudget, ResourceLimitExceeded
 
 QProgressDialog = cast(Any, getattr(QtWidgets, "QProgressDialog"))
 
@@ -324,12 +325,16 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
             path: str | Path,
             *,
             source: str = "",
+            budget: ResourceBudget | None = None,
         ) -> list[SubtitleEntry]:
             segment_path = Path(path)
             cache_key = str(segment_path.resolve())
             cache_map = self.__dict__.get("_runtime_segment_cache_entries_by_key", {})
             if isinstance(cache_map, dict) and cache_key in cache_map:
                 entries = cache_map[cache_key]
+                if budget is not None:
+                    budget.consume_file(segment_path.stat().st_size, label=source or segment_path.name)
+                    budget.consume_entries(len(entries))
                 cache_keys = list(self.__dict__.get("_runtime_segment_cache_keys", []))
                 if cache_key in cache_keys:
                     cache_keys = [key for key in cache_keys if key != cache_key]
@@ -342,6 +347,7 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
             _data, entries, _skipped = self._read_runtime_entries_file(
                 segment_path,
                 source=source or cache_key,
+                budget=budget,
             )
             self._cache_runtime_segment_entries(cache_key, entries)
             return entries
@@ -376,8 +382,11 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
             path: str | Path,
             *,
             source: str = "",
+            budget: ResourceBudget | None = None,
         ) -> tuple[dict[str, Any], list[SubtitleEntry], int]:
             file_path = Path(path)
+            if budget is not None:
+                budget.consume_file(file_path.stat().st_size, label=source or file_path.name)
             with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
@@ -386,6 +395,8 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
                 data.get("subtitles", []),
                 source=source or str(file_path),
             )
+            if budget is not None:
+                budget.consume_entries(len(entries))
             return data, entries, skipped
 
     def _try_load_runtime_entries_file(
@@ -394,13 +405,17 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
             *,
             source: str = "",
             cache_result: bool = False,
+            budget: ResourceBudget | None = None,
         ) -> tuple[dict[str, Any] | None, list[SubtitleEntry], int, str | None]:
             file_path = Path(path)
             try:
                 data, entries, skipped = self._read_runtime_entries_file(
                     file_path,
                     source=source or str(file_path),
+                    budget=budget,
                 )
+            except ResourceLimitExceeded:
+                raise
             except Exception as exc:
                 return None, [], 0, f"{file_path.name} 로드 실패: {exc}"
             if cache_result:
@@ -446,6 +461,7 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
             segment_info: dict[str, Any],
             *,
             runtime_root: Path | None = None,
+            budget: ResourceBudget | None = None,
         ) -> list[SubtitleEntry]:
             runtime_root = (
                 runtime_root
@@ -471,6 +487,7 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
             return self._load_segment_file_entries(
                 segment_path,
                 source=f"runtime_segment:{relative_path}",
+                budget=budget,
             )
 
     def _get_runtime_segment_search_texts(

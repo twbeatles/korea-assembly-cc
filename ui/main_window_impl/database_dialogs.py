@@ -1,10 +1,19 @@
 # -*- coding: utf-8 -*-
 
+from collections.abc import Iterable
+from typing import cast
+
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
+from core.resource_budget import ResourceBudget, ResourceBudgetLimits
 
 
 class MainWindowDatabaseDialogsMixin(MainWindowHost):
+
+    def _cancel_db_session_load(self) -> None:
+            cancel_event = self.__dict__.get("_db_session_load_cancel_event")
+            if cancel_event is not None:
+                cancel_event.set()
 
     def _set_db_history_dialog_busy(self, busy: bool, message: str = "") -> None:
             """DB 히스토리 다이얼로그의 버튼/목록 상태를 토글한다."""
@@ -123,16 +132,90 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                 return False
 
             started_holder: dict[str, bool | None] = {"value": None}
+            cancel_event = self.__dict__.get("_db_session_load_cancel_event")
+            if cancel_event is None:
+                cancel_event = threading.Event()
+                self._db_session_load_cancel_event = cancel_event
+            cancel_event.clear()
+            request_token = int(self.__dict__.get("_db_session_load_request_token", 0)) + 1
+            self._db_session_load_request_token = request_token
 
             def continue_load() -> None:
                 def worker(sid: int = normalized_session_id):
-                    session_data = db.load_session(sid)
+                    metadata_loader = getattr(db, "get_session_metadata", None)
+                    subtitle_iterator = getattr(db, "iter_session_subtitles", None)
+                    if callable(metadata_loader) and callable(subtitle_iterator):
+                        session_data = cast(
+                            dict[str, Any] | None,
+                            metadata_loader(sid),
+                        )
+                        if not session_data:
+                            return {}
+                        max_entries = int(Config.SESSION_RESOURCE_MAX_ENTRIES)
+                        budget = ResourceBudget(
+                            ResourceBudgetLimits(
+                                per_file_bytes=0,
+                                total_bytes=0,
+                                max_entries=max_entries,
+                                max_segments=0,
+                            ),
+                            cancel_check=cancel_event.is_set,
+                        )
+                        declared_count = int(
+                            session_data.get("total_subtitles", 0) or 0
+                        )
+                        if declared_count > 0:
+                            budget.consume_entries(declared_count)
+                            budget = ResourceBudget(
+                                budget.limits,
+                                cancel_check=cancel_event.is_set,
+                            )
+                        new_subtitles: list[SubtitleEntry] = []
+                        skipped = 0
+                        processed = 0
+                        raw_batch: list[dict[str, Any]] = []
+                        streamed_rows = cast(
+                            Iterable[dict[str, Any]],
+                            subtitle_iterator(sid, batch_size=500),
+                        )
+                        for raw_item in streamed_rows:
+                            budget.check_cancelled()
+                            raw_batch.append(raw_item)
+                            if len(raw_batch) < 500:
+                                continue
+                            parsed, batch_skipped = self._deserialize_subtitles(
+                                raw_batch,
+                                source=f"{source_tag}:{sid}",
+                            )
+                            budget.consume_entries(len(parsed))
+                            new_subtitles.extend(parsed)
+                            skipped += batch_skipped
+                            processed += len(raw_batch)
+                            raw_batch = []
+                            self._emit_control_message(
+                                "db_session_load_progress",
+                                {"current": processed, "total": declared_count},
+                            )
+                        if raw_batch:
+                            parsed, batch_skipped = self._deserialize_subtitles(
+                                raw_batch,
+                                source=f"{source_tag}:{sid}",
+                            )
+                            budget.consume_entries(len(parsed))
+                            new_subtitles.extend(parsed)
+                            skipped += batch_skipped
+                            processed += len(raw_batch)
+                        budget.check_cancelled()
+                    else:
+                        session_data = db.load_session(sid)
+                        if not session_data:
+                            return {}
+                        new_subtitles, skipped = self._deserialize_subtitles(
+                            session_data.get("subtitles", []),
+                            source=f"{source_tag}:{sid}",
+                        )
                     if not session_data:
                         return {}
-                    new_subtitles, skipped = self._deserialize_subtitles(
-                        session_data.get("subtitles", []),
-                        source=f"{source_tag}:{sid}",
-                    )
                     payload = {
                         "db_session_id": session_data.get("id"),
                         "version": session_data.get("version", "unknown"),
@@ -148,7 +231,10 @@ class MainWindowDatabaseDialogsMixin(MainWindowHost):
                         payload["highlight_query"] = highlight_query
                     return payload
 
-                context: dict[str, Any] = {"session_id": normalized_session_id}
+                context: dict[str, Any] = {
+                    "session_id": normalized_session_id,
+                    "request_token": request_token,
+                }
                 if dialog is not None:
                     context["dialog"] = dialog
                 if highlight_sequence >= 0:

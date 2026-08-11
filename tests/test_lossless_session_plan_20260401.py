@@ -809,6 +809,7 @@ def test_start_db_session_load_enqueues_highlight_payload_and_busy_state():
         "dialog": "dialog-ref",
         "highlight": True,
         "query": "예산",
+        "request_token": 1,
     }
     assert captured["payload"]["highlight_sequence"] == 3
     assert captured["payload"]["highlight_query"] == "예산"

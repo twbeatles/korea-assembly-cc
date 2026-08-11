@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
+from core.resource_budget import ResourceBudget, ResourceBudgetLimits
 
 QProgressDialog = cast(Any, getattr(QtWidgets, "QProgressDialog"))
 
@@ -175,9 +176,19 @@ class MainWindowRuntimeHydrationMixin(MainWindowHost):
 
             def hydrate_worker() -> None:
                 try:
+                    budget = ResourceBudget(
+                        ResourceBudgetLimits(
+                            per_file_bytes=int(Config.SESSION_RESOURCE_PER_FILE_MAX_BYTES),
+                            total_bytes=int(Config.SESSION_RESOURCE_TOTAL_MAX_BYTES),
+                            max_entries=hydrate_max,
+                            max_segments=int(Config.SESSION_RESOURCE_MAX_SEGMENTS),
+                        ),
+                        cancel_check=self._hydrate_cancel_event.is_set,
+                    )
                     full_entries: list[SubtitleEntry] = []
                     completed = 0
                     for segment_info in runtime_manifest:
+                        budget.consume_segment()
                         if self._hydrate_cancel_event.is_set():
                             self._hydrate_result_entries = None
                             self._emit_control_message("hydrate_cancelled", {"reason": reason})
@@ -185,6 +196,7 @@ class MainWindowRuntimeHydrationMixin(MainWindowHost):
                         segment_entries = self._load_runtime_segment_entries(
                             segment_info,
                             runtime_root=runtime_root,
+                            budget=budget,
                         )
                         for entry in segment_entries:
                             if self._hydrate_cancel_event.is_set():
@@ -210,6 +222,7 @@ class MainWindowRuntimeHydrationMixin(MainWindowHost):
                             self._emit_control_message("hydrate_cancelled", {"reason": reason})
                             return
                         full_entries.append(entry.clone())
+                        budget.consume_entries(1)
                         completed += 1
                         if completed == total_entries or completed % 50 == 0:
                             self._emit_control_message(

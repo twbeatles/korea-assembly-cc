@@ -243,6 +243,11 @@ class MainWindowDatabaseWorkerMixin(MainWindowHost):
                     return
                 result = result.value
             request_token = int(context.get("request_token", 0) or 0)
+            if task_name in ("db_history_load_selected", "db_search_load_selected"):
+                if request_token and request_token != int(
+                    self.__dict__.get("_db_session_load_request_token", 0)
+                ):
+                    return
             if task_name == "db_history_list":
                 sessions = result if isinstance(result, list) else []
                 if not sessions:

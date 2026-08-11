@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
+from core.resource_budget import ResourceBudget, ResourceBudgetLimits, ResourceLimitExceeded
 
 QProgressDialog = cast(Any, getattr(QtWidgets, "QProgressDialog"))
 
@@ -31,8 +32,17 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
             warnings: list[str] = []
             manifest: dict[str, Any] = {}
             manifest_loaded = False
+            budget = ResourceBudget(
+                ResourceBudgetLimits(
+                    per_file_bytes=int(Config.SESSION_RESOURCE_PER_FILE_MAX_BYTES),
+                    total_bytes=int(Config.SESSION_RESOURCE_TOTAL_MAX_BYTES),
+                    max_entries=int(Config.SESSION_RESOURCE_MAX_ENTRIES),
+                    max_segments=int(Config.SESSION_RESOURCE_MAX_SEGMENTS),
+                )
+            )
 
             try:
+                budget.consume_file(manifest_path.stat().st_size, label="runtime manifest")
                 with open(manifest_path, "r", encoding="utf-8") as f:
                     loaded_manifest = json.load(f)
                 if not isinstance(loaded_manifest, dict):
@@ -41,6 +51,8 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                     raise ValueError("지원하지 않는 runtime manifest 형식입니다.")
                 manifest = loaded_manifest
                 manifest_loaded = True
+            except ResourceLimitExceeded:
+                raise
             except Exception as exc:
                 if not allow_salvage:
                     raise
@@ -76,6 +88,7 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                 segments if isinstance(segments, list) else [],
                 start=1,
             ):
+                budget.consume_segment()
                 if not isinstance(segment, dict):
                     structure_error = (
                         f"runtime segment #{segment_index} 구조가 올바르지 않습니다."
@@ -113,6 +126,7 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                         segment_path,
                         source=f"runtime_manifest:{safe_relative_path}",
                         cache_result=False,
+                        budget=budget,
                     )
                 )
                 if segment_error:
@@ -181,6 +195,7 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                     self._try_load_runtime_entries_file(
                         checkpoint_path,
                         source=f"runtime_tail:{checkpoint_path}",
+                        budget=budget,
                     )
                 )
                 if checkpoint_error:
@@ -225,6 +240,7 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                 "skipped": skipped,
                 "runtime_manifest": True,
                 "path": str(manifest_path),
+                "resource_usage": budget.summary(),
             }
             if skipped_files > 0:
                 payload["skipped_files"] = skipped_files

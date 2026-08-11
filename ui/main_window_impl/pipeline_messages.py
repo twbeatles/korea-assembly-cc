@@ -554,6 +554,16 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     self._db_tasks_inflight.discard(task_name)
                     self._handle_db_task_result(task_name, result, context or {})
 
+            elif msg_type == "db_session_load_progress":
+                info = data if isinstance(data, dict) else {}
+                current = int(info.get("current", 0) or 0)
+                total = int(info.get("total", 0) or 0)
+                suffix = f" / {total:,}" if total > 0 else ""
+                self._set_status(
+                    f"DB 세션 불러오는 중... {current:,}{suffix}",
+                    "running",
+                )
+
             elif msg_type == "db_task_error":
                 task_name = (
                     str(data.get("task") or "db_unknown")

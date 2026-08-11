@@ -20,6 +20,77 @@ logger = logging.getLogger("SubtitleExtractor")
 
 class DatabaseSessionMixin(DatabaseMixinHost):
 
+    def _session_row_to_dict(self, row: Any) -> Dict[str, Any]:
+        return {
+            "id": row["id"],
+            "created_at": row["created_at"],
+            "url": row["url"],
+            "committee_name": row["committee_name"],
+            "total_subtitles": row["total_subtitles"],
+            "total_characters": row["total_characters"],
+            "duration_seconds": row["duration_seconds"],
+            "version": row["version"],
+            "notes": row["notes"],
+            "lineage_id": row["lineage_id"],
+            "parent_session_id": row["parent_session_id"],
+            "is_latest_in_lineage": int(row["is_latest_in_lineage"] or 0),
+            "save_operation_id": str(row["save_operation_id"] or ""),
+        }
+
+    def _subtitle_row_to_dict(self, row: Any) -> Dict[str, Any]:
+        return {
+            "text": row["text"],
+            "timestamp": row["timestamp"],
+            "start_time": row["start_time"],
+            "end_time": row["end_time"],
+            "entry_id": row["entry_id"],
+            "source_selector": row["source_selector"],
+            "source_frame_path": self._deserialize_frame_path(row["source_frame_path"]),
+            "source_node_key": row["source_node_key"],
+            "speaker_color": row["speaker_color"],
+            "speaker_channel": row["speaker_channel"],
+            "speaker_changed": bool(row["speaker_changed"]),
+        }
+
+    def get_session_metadata(self, session_id: int) -> Optional[Dict[str, Any]]:
+        safe_session_id = self._sanitize_positive_id(session_id)
+        if safe_session_id is None:
+            return None
+        with self.lock:
+            cursor = self._get_connection().cursor()
+            cursor.execute("SELECT * FROM sessions WHERE id = ?", (safe_session_id,))
+            row = cursor.fetchone()
+            return self._session_row_to_dict(row) if row is not None else None
+
+    def iter_session_subtitles(
+        self,
+        session_id: int,
+        *,
+        batch_size: int = 500,
+    ) -> Iterable[Dict[str, Any]]:
+        safe_session_id = self._sanitize_positive_id(session_id)
+        if safe_session_id is None:
+            return
+        safe_batch_size = int(batch_size)
+        if safe_batch_size <= 0:
+            raise ValueError("batch_size는 1 이상이어야 합니다.")
+        with self.lock:
+            cursor = self._get_connection().cursor()
+            cursor.execute(
+                """
+                SELECT * FROM subtitles
+                WHERE session_id = ?
+                ORDER BY sequence
+                """,
+                (safe_session_id,),
+            )
+            while True:
+                rows = cursor.fetchmany(safe_batch_size)
+                if not rows:
+                    return
+                for row in rows:
+                    yield self._subtitle_row_to_dict(row)
+
     def save_session(self, session_data: object) -> int:
         """세션 저장
 
@@ -170,66 +241,17 @@ class DatabaseSessionMixin(DatabaseMixinHost):
         if safe_session_id is None:
             return None
 
-        with self.lock:
-            conn = self._get_connection()
-            try:
-                cursor = conn.cursor()
-
-                # 세션 조회
-                cursor.execute("""
-                    SELECT * FROM sessions WHERE id = ?
-                """, (safe_session_id,))
-
-                session_row = cursor.fetchone()
-                if not session_row:
-                    return None
-
-                # 자막 조회
-                cursor.execute("""
-                    SELECT * FROM subtitles
-                    WHERE session_id = ?
-                    ORDER BY sequence
-                """, (safe_session_id,))
-
-                subtitle_rows = cursor.fetchall()
-
-                return {
-                    "id": session_row["id"],
-                    "created_at": session_row["created_at"],
-                    "url": session_row["url"],
-                    "committee_name": session_row["committee_name"],
-                    "total_subtitles": session_row["total_subtitles"],
-                    "total_characters": session_row["total_characters"],
-                    "duration_seconds": session_row["duration_seconds"],
-                    "version": session_row["version"],
-                    "notes": session_row["notes"],
-                    "lineage_id": session_row["lineage_id"],
-                    "parent_session_id": session_row["parent_session_id"],
-                    "is_latest_in_lineage": int(session_row["is_latest_in_lineage"] or 0),
-                    "save_operation_id": str(session_row["save_operation_id"] or ""),
-                    "subtitles": [
-                        {
-                            "text": row["text"],
-                            "timestamp": row["timestamp"],
-                            "start_time": row["start_time"],
-                            "end_time": row["end_time"],
-                            "entry_id": row["entry_id"],
-                            "source_selector": row["source_selector"],
-                            "source_frame_path": self._deserialize_frame_path(
-                                row["source_frame_path"]
-                            ),
-                            "source_node_key": row["source_node_key"],
-                            "speaker_color": row["speaker_color"],
-                            "speaker_channel": row["speaker_channel"],
-                            "speaker_changed": bool(row["speaker_changed"]),
-                        }
-                        for row in subtitle_rows
-                    ]
-                }
-
-            except Exception:
-                logger.exception("세션 로드 오류")
-                raise
+        try:
+            metadata = self.get_session_metadata(safe_session_id)
+            if metadata is None:
+                return None
+            metadata["subtitles"] = list(
+                self.iter_session_subtitles(safe_session_id, batch_size=500)
+            )
+            return metadata
+        except Exception:
+            logger.exception("세션 로드 오류")
+            raise
 
     def list_sessions(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         """세션 목록 조회
