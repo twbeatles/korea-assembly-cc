@@ -315,7 +315,7 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 - **2026-07-22 감사 후속** — worker `finished` terminal 전달 수정, stop 중 finished/error 멱등 흡수, Observer 짧은 발화 정책 정렬, CLAUDE/GEMINI v16.14.8 동기화
 - **2026-07-29 기능 감사 후속** — 추출 시작 시 dirty/세션 교체 보호, soft_resync 긴 compact 유지, orphan segment 정리
 - **2026-07-29 확장 감사 후속** — 로그 INFO 기본·`safe_log_text`, runtime archive 연령 GC, 종료 중 액션 가드, hydrate 상한·토큰 전달, 검색 `상위 N건+` 표시, GitHub Actions CI, 릴리스 체크리스트
-- 회귀 기준: `pytest` ~360 pass / 2 skipped, `pyright` 0 errors, CI green
+- 회귀 기준: `pytest` 424 pass / 2 skipped, `pyright` 154 files·0 errors/0 warnings, source/창 생성/offline release verification 통과
 
 ### v16.14.7 (2026-04-01 ~ 2026-06-25)
 - **감사 후속 안정화 (2026-06-25)** — preview coalescing 제거, overflow 우선순위 trim, stopping 시 preview 완전 drain, worker/control 큐 분리(`AppControlMessageQueue`), DB `DatabaseOperationResult`, extraction worker non-daemon, CSS selector 사전 검증, 복구 다이얼로그 우선순위 안내

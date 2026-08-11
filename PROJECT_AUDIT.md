@@ -4,7 +4,7 @@
 
 감사 방식: `README.md`, `CLAUDE.md` 선행 검토 → CodeGraph 호출 관계/영향 범위 분석 → 필요한 구간 직접 확인 → 회귀 테스트·정적 분석·smoke 검증
 
-검증 결과: `pytest -q` **361 passed, 2 skipped**, pyright **0 errors / 0 warnings (138 files)**, 창 생성 smoke **성공**
+최종 구현 검증 결과: `pytest -q` **424 passed, 2 skipped**, pyright **0 errors / 0 warnings (154 files)**, 창 생성 smoke 및 offline release verification **성공**
 
 구현 후속 상태(2026-08-11): 3.1~3.7의 확인된 문제와 4장의 추정 기능 중 저장 이력, 대용량 사전 비용 안내, 복구 후보 선택, 수집 품질 리포트, 서명 업데이트 경로를 구현했다. 사용자가 제외한 데이터 보호 전체 범위(암호화·보존 정책·일괄 삭제)는 구현하지 않았다. 실제 사이트 DOM E2E는 외부 서비스 의존 검증으로 남겨 두고 기존 opt-in live smoke를 유지한다.
 
