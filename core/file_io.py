@@ -9,6 +9,33 @@ from pathlib import Path
 from typing import BinaryIO, Callable, Iterable, Iterator, List, Mapping, Optional, TextIO, Union
 from core.config import Config
 from core.models import SubtitleEntry
+from core.resource_budget import ResourceLimitExceeded, check_file_size
+
+
+def canonical_path_key(path: str | Path) -> str:
+    """Return a stable key for path identity on the current OS."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(path))))
+
+
+def read_limited_json_file(
+    path: str | Path,
+    *,
+    max_bytes: int,
+    label: str = "JSON",
+) -> object:
+    target = Path(path)
+    check_file_size(target, per_file_limit=max_bytes, label=label)
+    with open(target, "rb") as handle:
+        raw = handle.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ResourceLimitExceeded(
+            "file_bytes",
+            limit=max_bytes,
+            observed=len(raw),
+            label=label,
+        )
+    return json.loads(raw.decode("utf-8-sig"))
+
 
 def atomic_write_json(
     path: Union[str, Path],

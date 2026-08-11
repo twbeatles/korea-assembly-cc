@@ -22,6 +22,7 @@ from core.export_text import (
     strip_illegal_xml_chars,
 )
 from core.models import SubtitleEntry
+from core.file_io import canonical_path_key
 from core.subtitle_pipeline import create_empty_capture_state
 
 mw_mod = pytest.importorskip("ui.main_window")
@@ -249,7 +250,7 @@ def test_save_in_background_rejects_duplicate_path(tmp_path):
     win = _build_window()
     win._ensure_file_save_registry()
     target = str(tmp_path / "dup.txt")
-    win._file_save_in_progress.add(str(Path(target).resolve()))
+    win._file_save_in_progress.add(canonical_path_key(target))
     toasts: list[str] = []
     win._show_toast = lambda message, *_a, **_k: toasts.append(str(message))
     started = []
@@ -265,6 +266,31 @@ def test_save_in_background_rejects_duplicate_path(tmp_path):
 
     assert started == []
     assert any("이미 저장 중" in t for t in toasts)
+
+
+def test_canonical_path_key_collapses_windows_case_aliases(tmp_path):
+    target = tmp_path / "MixedCase" / "Output.TXT"
+
+    assert canonical_path_key(target) == canonical_path_key(str(target).swapcase())
+
+
+def test_save_in_background_rejects_case_aliased_duplicate_path(tmp_path):
+    win = _build_window()
+    win._ensure_file_save_registry()
+    target = str(tmp_path / "Output.TXT")
+    win._file_save_in_progress.add(canonical_path_key(target))
+    started: list[bool] = []
+    win._start_background_thread = lambda *_args, **_kwargs: started.append(True) or True
+
+    MainWindow._save_in_background(
+        win,
+        lambda _path: None,
+        target.swapcase(),
+        "ok",
+        "fail",
+    )
+
+    assert started == []
 
 
 def test_export_failure_handled_skips_error_toast(tmp_path):

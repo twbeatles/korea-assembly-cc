@@ -18,6 +18,7 @@ from core.export_text import (
     sanitize_subtitle_cue_text,
 )
 from core.hwpx_export import save_hwpx_document
+from core.file_io import canonical_path_key
 
 
 class ExportFailureHandled(Exception):
@@ -56,10 +57,7 @@ class MainWindowPersistenceExportsMixin(MainWindowHost):
                 error_prefix: 실패 시 에러 메시지 접두어
             """
             self._ensure_file_save_registry()
-            try:
-                path_key = str(Path(path).resolve())
-            except Exception:
-                path_key = str(path)
+            path_key = canonical_path_key(path)
 
             with self._file_save_paths_lock:
                 if path_key in self._file_save_in_progress:
