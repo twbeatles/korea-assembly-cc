@@ -60,6 +60,16 @@ class MainWindowUIThemeStatusMixin(MainWindowHost):
                 self._show_toast("수동 중지 시 Chrome 창을 종료합니다.", "info")
 
 
+    def _toggle_check_updates_on_startup(self):
+            self.check_updates_on_startup = bool(
+                self.check_updates_on_startup_action.isChecked()
+            )
+            self._save_setting_value(
+                "check_updates_on_startup",
+                self.check_updates_on_startup,
+                context="시작 업데이트 확인 설정 저장",
+            )
+
     def _setup_shortcuts(self):
             QShortcut(QKeySequence("F5"), self, self._start)
             QShortcut(QKeySequence("Escape"), self, self._handle_escape_shortcut)

@@ -159,6 +159,18 @@ class MainWindowUIMenuMixin(MainWindowHost):
             )
             view_menu.addAction(self.keep_browser_action)
 
+            self.check_updates_on_startup_action = QAction(
+                "프로그램 시작 시 업데이트 확인", self
+            )
+            self.check_updates_on_startup_action.setCheckable(True)
+            self.check_updates_on_startup_action.setChecked(
+                bool(getattr(self, "check_updates_on_startup", True))
+            )
+            self.check_updates_on_startup_action.triggered.connect(
+                self._toggle_check_updates_on_startup
+            )
+            view_menu.addAction(self.check_updates_on_startup_action)
+
             view_menu.addSeparator()
 
             # 글자 크기 서브메뉴
@@ -248,8 +260,14 @@ class MainWindowUIMenuMixin(MainWindowHost):
             help_menu.addSeparator()
 
             update_action = QAction("업데이트 확인...", self)
-            update_action.triggered.connect(self._check_for_updates)
+            update_action.triggered.connect(
+                lambda: self._check_for_updates(interactive=True)
+            )
             help_menu.addAction(update_action)
+
+            release_action = QAction("최신 릴리스 페이지 열기", self)
+            release_action.triggered.connect(self._open_latest_release_page)
+            help_menu.addAction(release_action)
 
             about_action = QAction("정보", self)
             about_action.setToolTip("프로그램 정보 및 버전")

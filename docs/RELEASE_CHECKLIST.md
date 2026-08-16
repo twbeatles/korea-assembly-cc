@@ -93,3 +93,23 @@ pyinstaller --clean subtitle_extractor.spec
 - [ ] helper 교체 후 새 EXE `--smoke` 실패 fixture에서 기존 EXE 자동 복원 확인
 - [ ] 직전 EXE 백업은 설치 EXE와 같은 디렉터리에만 생성되는지 확인
 - [ ] DB(`subtitle_history.db`) 호환(additive migration) 확인
+
+## 7. GitHub Releases 업데이트 채널
+
+- [ ] 배포 빌드에 `KACC_UPDATE_PUBLIC_KEY_B64`를 주입하고, 해당 공개키가
+  `updates/latest.json`의 서명 키와 일치하는지 확인
+- [ ] `KACC_UPDATE_PRIVATE_KEY_B64`는 GitHub Actions Secret에만 보관
+- [ ] EXE를 GitHub Release에 먼저 업로드한 뒤 다음 명령으로 manifest 생성
+
+  ```bash
+  python scripts/build_update_manifest.py \
+    --version X.Y.Z \
+    --artifact dist/korea-assembly-cc-vX.Y.Z.exe \
+    --artifact-url https://github.com/twbeatles/korea-assembly-cc/releases/download/vX.Y.Z/korea-assembly-cc-vX.Y.Z.exe \
+    --output updates/latest.json
+  ```
+
+- [ ] 생성된 `updates/latest.json`의 signature, SHA-256, byte size, expiry를
+  확인하고 main에 반영
+- [ ] frozen EXE에서 시작 시 확인(무알림), 수동 확인, 다운로드 취소, 실패 시
+  릴리스 페이지 fallback을 확인

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
@@ -57,6 +58,9 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         )
         self.keep_browser_on_stop = self.settings.value(
             "keep_browser_on_stop", False, type=bool
+        )
+        self.check_updates_on_startup = self.settings.value(
+            "check_updates_on_startup", True, type=bool
         )
         self.auto_clean_newlines_enabled = self.settings.value(
             "auto_clean_newlines",
@@ -270,6 +274,8 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._active_background_threads: set[threading.Thread] = set()
         self._active_background_threads_lock = threading.Lock()
         self._background_shutdown_initiated = False
+        self._update_operation_in_progress = False
+        self._last_notified_update_version = ""
         self._detached_driver_cleanup_lock = threading.Lock()
         self._detached_driver_cleanup_in_progress = False
         self._startup_warnings: list[str] = []
@@ -324,6 +330,18 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._flush_startup_warnings()
         self._notify_initial_db_degraded_state()
         QTimer.singleShot(0, self._prompt_session_recovery_if_available)
+        QTimer.singleShot(1000, self._schedule_startup_update_check)
+
+    def _schedule_startup_update_check(self) -> None:
+        """Run the opt-in startup check after the window is fully available."""
+        if not bool(getattr(self, "check_updates_on_startup", True)):
+            return
+        if not bool(getattr(sys, "frozen", False)):
+            logger.debug("Skipping startup update check outside a frozen build")
+            return
+        check = getattr(self, "_check_for_updates", None)
+        if callable(check):
+            check(interactive=False)
 
     def _initialize_database_state(self) -> None:
         self.db = None
