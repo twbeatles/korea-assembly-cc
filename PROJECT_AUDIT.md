@@ -1,208 +1,134 @@
 # Project Audit
 
-감사 기준일: 2026-08-11
-
-감사 방식: `README.md`, `CLAUDE.md` 선행 검토 → CodeGraph 호출 관계/영향 범위 분석 → 필요한 구간 직접 확인 → 회귀 테스트·정적 분석·smoke 검증
-
-최종 구현 검증 결과: `pytest -q` **424 passed, 2 skipped**, pyright **0 errors / 0 warnings (154 files)**, 창 생성 smoke 및 offline release verification **성공**
-
-구현 후속 상태(2026-08-11): 3.1~3.7의 확인된 문제와 4장의 추정 기능 중 저장 이력, 대용량 사전 비용 안내, 복구 후보 선택, 수집 품질 리포트, 서명 업데이트 경로를 구현했다. 사용자가 제외한 데이터 보호 전체 범위(암호화·보존 정책·일괄 삭제)는 구현하지 않았다. 실제 사이트 DOM E2E는 외부 서비스 의존 검증으로 남겨 두고 기존 opt-in live smoke를 유지한다.
-
-근거 매핑:
-
-- 3.1: `_session_revision` snapshot 비교 및 deferred action 보호 — `tests/test_session_revision.py`
-- 3.2: `save_operation_id` DB unique migration과 timeout 없는 persistence save — `tests/test_database_save_idempotency.py`
-- 3.3~3.4: 공통 resource budget, runtime 개별/누적 한도, DB `fetchmany()` progress/cancel — `tests/test_resource_budget.py`, `tests/test_runtime_resource_limits.py`, `tests/test_database_stream_load.py`
-- 3.5~3.6: Windows canonical save key와 URL/path/query/payload 제한 — `tests/test_config_paths.py`, `tests/test_url_policy.py`, `tests/test_input_resource_limits.py`
-- 3.7: sequence gap 탐지, 최신 full snapshot 회복, 품질 metadata 저장 — `tests/test_preview_gap_recovery.py`, `tests/test_capture_quality.py`
-- 추정 기능: 복구 후보 선택과 서명 manifest·사용자 승인·smoke rollback 업데이트 — `tests/test_recovery_candidates.py`, `tests/test_update_manifest.py`, `tests/test_update_installer.py`
+감사 기준일: 2026-08-16. 이 보고서는 이번에 추가된 GitHub Releases 기반 업데이트 기능을 중심으로 한 기능 구현 감사다. 코드 수정은 수행하지 않았다.
 
 ## 1. Executive Summary
 
-이 프로젝트는 국회 의사중계 웹사이트의 AI 자막을 Selenium으로 수집하고, PyQt6 UI에서 실시간 처리하며, JSON·SQLite·여러 문서 형식으로 저장하는 Windows 중심 데스크톱 애플리케이션이다. 최근 여러 차례의 안정화 작업으로 URL/selector 검증, run-scoped worker queue, 원자 저장, runtime archive 무결성 검사, DB 직렬 worker, 종료 대기 등이 잘 갖춰져 있다. 현재 전체 테스트와 pyright도 통과한다.
+업데이트 기능은 서명된 manifest, HTTPS, 만료일, 버전·크기·SHA-256 검증, 별도 helper 프로세스, smoke 실패 시 롤백이라는 핵심 안전장치를 갖췄다. 관련 단위 테스트도 `20 passed`로 통과했다.
 
-그러나 기능 관점의 전체 위험도는 **High**로 평가한다. Critical 급 원격 코드 실행이나 즉시 재현되는 광범위 데이터 손상은 확인하지 못했지만, 아래 두 문제는 사용자가 저장되었다고 믿은 데이터와 실제 상태를 다르게 만들 수 있다.
-
-1. 비동기 세션 저장 완료 시 저장 시작 이후 발생한 자막/편집까지 포함해 dirty 상태를 무조건 해제한다. 저장 도중 들어온 변경이 저장되지 않았는데도 종료 경고가 사라질 수 있다.
-2. DB 저장을 15초 후 실패로 보고하면서 실제 DB worker 작업은 취소되지 않고 계속된다. UI는 “DB 저장 실패”를 표시하지만 DB에는 나중에 행이 추가될 수 있어 저장 계보와 재시도 결과가 어긋날 수 있다.
-
-그 밖에 runtime segment 및 DB 세션 전체 로드의 메모리 상한 부재, Windows 경로 대소문자 별칭을 구분하지 못하는 중복 저장 가드, 폭넓은 URL 허용 정책, 큐 포화 시 preview 유실 가능성이 있다. 자동화된 품질 게이트는 강하지만, 저장 도중 상태 변경·늦게 완료되는 DB 작업·대용량 복구 자료 같은 시간축 시나리오는 충분히 검증하지 않는다.
+최초 감사 당시 전체 위험도는 **High**였다. 아래 3.1~3.4의 구현 문제는 2026-08-16에 수정했고, 관련 회귀 테스트를 추가했다. 남은 운영 위험은 실제 frozen Windows helper 통합 검증과 release asset/main manifest의 완전한 트랜잭션 보장이다.
 
 ## 2. Project Understanding
 
-### 목적과 사용자 기능
+README와 CLAUDE에 따르면 이 프로젝트는 PyQt6 기반 Windows 데스크톱 앱으로, 국회 의사중계의 실시간 자막을 Selenium으로 수집하고 SQLite·세션 파일·내보내기 기능으로 보존한다. UI는 메인 스레드에서, 수집·저장·DB 작업은 worker와 queue를 통해 처리해야 하며, 종료와 dirty session 보호가 주요 개발 규칙이다.
 
-`README.md`와 `CLAUDE.md`에 따르면 주요 목적은 국회 의사중계의 AI 자막을 지연 없이 수집하고, 발언자 전환·중복 제거·재연결을 처리한 뒤 TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 및 SQLite로 보존하는 것이다. 세션 저장/복구, DB 검색, 장시간 세션 runtime archive, 실시간 저장, 생중계 목록, 사용자 프리셋도 제공한다.
+CodeGraph 분석 결과 업데이트 흐름은 다음과 같다.
 
-### 구조
+```text
+MainWindow 시작 1초 후 / 도움말의 수동 확인
+  -> MainWindowUIHelpMixin._check_for_updates()
+  -> background UpdateCheckWorker
+  -> download_release_manifest() + verify_release_manifest()
+  -> AppControlMessageQueue (update_manifest_ready)
+  -> _handle_update_manifest_ready()
+  -> background UpdateDownloadWorker
+  -> stream_update_artifact() + prepare_staged_update()
+  -> AppControlMessageQueue (update_install_ready)
+  -> _handle_update_install_ready() + launch_update_helper()
+  -> 복사된 EXE의 --apply-update
+  -> scripts.apply_update._wait_for_parent() + apply_staged_update()
+  -> EXE 교체, --smoke, 실패 시 backup 복원
+```
 
-- 엔트리포인트: `국회의사중계 자막.py`
-- UI 조립: `ui/main_window.py`의 `MainWindow`가 runtime, capture, pipeline, view, persistence, database, UI mixin을 조합한다.
-- 수집: `ui/main_window_impl/capture_*`가 Chrome WebDriver, live URL 해석, MutationObserver, structured probe, 재연결을 담당한다.
-- 자막 처리: `core/live_capture.py`, `core/subtitle_pipeline.py` 및 각각의 `*_impl` 모듈이 row reconciliation, suffix 기반 증분 추출, merge/reset/keepalive를 담당한다.
-- 메시지 전달: capture worker는 `MainWindowMessageQueue`, 저장/DB/hydrate 등 control-plane은 `AppControlMessageQueue`를 사용한다.
-- 저장/복구: `ui/main_window_impl/persistence_*`가 JSON 저장, 자동 백업, 여러 형식 export, runtime manifest/segment/tail을 관리한다.
-- DB: `core/database_manager.py` facade와 `core/database_impl/*`가 SQLite schema, FTS, 세션 저장/로드/검색을 담당하고, UI에서는 단일 `DBWorker`가 작업을 직렬화한다.
-- 설정/경로: `core/config.py`가 development, portable, frozen 모드별 storage root와 시간·크기 상한을 정의한다.
+주요 구현 위치는 `core/update_manifest.py`(신뢰 검증), `core/update_installer.py`(다운로드 staging·교체·rollback), `ui/main_window_impl/ui/help.py`(사용자 흐름), `ui/main_window_impl/pipeline_messages.py`(control message 수신), `scripts/apply_update.py`(helper), `.github/workflows/release.yml`(빌드·서명·manifest 게시)이다.
 
-### 주요 실행 흐름
-
-CodeGraph에서 확인한 대표 호출 흐름은 다음과 같다.
-
-1. 시작: `MainWindow._start()` → URL/selector 검증 → dirty/기존 세션 보호 → `_begin_extraction_run()` → non-daemon `ExtractionWorker` 시작.
-2. 수집: `_extraction_worker()` → live URL 해석 → Chrome/자막 레이어 활성화 → Observer/structured probe → `_emit_worker_message()`.
-3. 처리: `_process_message_queue()` → `_handle_message()` → structured payload는 `_apply_structured_preview_payload()` → `apply_preview()`/`commit_live_row()` → `CaptureSessionState.entries` 갱신.
-4. 중지: `_stop()` → `stop_event` 설정 → pending preview drain/finalize → driver/worker 종료 대기 → realtime 저장 및 UI 상태 정리.
-5. 세션 저장: `_save_session()` → snapshot clone → `_start_async_session_snapshot_save()` → `_write_session_snapshot()` → JSON 원자 저장 → `_run_db_task_sync()` → `DatabaseManager.save_session()`.
-6. 장시간 세션: active tail이 임계값을 넘으면 `_maybe_schedule_runtime_segment_flush()`가 segment를 기록하고, 완료 메시지 처리 후 메모리 prefix를 제거하고 manifest/tail을 갱신한다.
-7. DB 로드: `_start_db_session_load()` → `DBWorker` → `DatabaseManager.load_session()` → 전체 subtitle 목록 역직렬화 → `_complete_loaded_session()`에서 현재 세션 교체.
-
-### 문서와 구현의 주요 불일치
-
-- `CLAUDE.md:336`은 세션 저장의 DB sync save가 “timeout 없이 DB worker 완료를 기다린다”고 설명하지만, 실제 `ui/main_window_impl/persistence_session.py:435-454`는 `Config.DB_SYNC_TASK_TIMEOUT_SECONDS`를 전달하고 `core/config.py:514`의 값은 15초다.
-- `CLAUDE.md:317`에는 timeout 실패를 명시적으로 처리한다고도 적혀 있어 같은 문서 안에서도 계약이 충돌한다. 현재 구현은 timeout을 “실패로 표시”할 뿐 실행 중인 DB 작업을 취소하지 않으므로, 완료 의미론까지 처리한 것은 아니다.
-- README의 장시간 세션 메모리 절감 설명은 수집/runtime archive 경로에는 대체로 맞지만, DB 세션 로드는 여전히 전체 행을 `fetchall()`하고 전부 메모리에 materialize한다.
+확인한 테스트는 `tests/test_update_manifest.py`, `tests/test_update_installer.py`, `tests/test_apply_update_script.py`, `tests/test_update_startup.py`, `tests/test_build_update_manifest.py`이며, 실행 결과는 20 passed였다.
 
 ## 3. High-Risk Issues
 
-### 3.1 비동기 저장 완료가 저장 이후 변경까지 clean 처리
+### 3.1 릴리스 개인키와 앱 내장 공개키의 일치가 CI에서 검증되지 않음
 
-* 위치: `ui/main_window_impl/persistence_session.py:63-101`, `ui/main_window_impl/pipeline_messages.py:366-387`, `ui/main_window_impl/runtime_driver.py:438-445`, `ui/main_window_impl/pipeline_state.py:457-468`
-* 문제: 세션 저장은 시작 시 entry snapshot을 clone하지만, 저장 완료 메시지를 처리할 때 현재 상태의 revision을 비교하지 않고 `_clear_session_dirty()`를 무조건 호출한다. dirty 상태는 boolean 하나뿐이며 저장 시작 시점과 현재 시점을 구분하지 않는다.
-* 영향: 저장 worker가 실행되는 동안 새 자막이 들어오거나 사용자가 편집/삭제하면 그 변경은 저장 파일에 없을 수 있다. 그런데 저장 완료 후 세션은 clean으로 표시되어, 이후 종료 시 저장 확인 없이 변경이 유실될 수 있다.
-* 근거: `_start_async_session_snapshot_save()`는 `snapshot_entries`를 고정한 후 background worker를 시작한다. 자막 갱신 경로는 계속 `_mark_session_dirty()`를 호출하지만, `session_save_done` 분기는 순서와 무관하게 `_clear_session_dirty()`를 실행한다. `_is_runtime_mutation_blocked()`도 실행 중 캡처/종료만 검사하고 `_session_save_in_progress`는 검사하지 않는다. CodeGraph 영향 범위상 capture pipeline, 편집, 병합 등 여러 mutation 경로가 동일 boolean을 공유한다.
-* 권장 수정 방향: 세션에 단조 증가하는 `session_revision`을 두고 모든 mutation에서 증가시킨다. 저장 시작 시 revision을 payload에 캡처하고, 완료 시 현재 revision이 동일할 때만 clean 처리한다. 다르면 “스냅샷 저장 완료, 이후 변경은 미저장” 상태를 유지한다. 최소 수정으로는 저장 도중 모든 mutation을 차단할 수 있으나 실시간 캡처 저장 요구와 충돌하므로 revision 방식이 적합하다.
-* 우선순위: **High**
+상태: **해결됨** — `scripts/verify_update_release_key.py`와 release workflow 검증을 추가했다.
 
-### 3.2 DB 저장 timeout 뒤 작업이 계속되어 UI와 DB 상태가 분기
+* 위치: `.github/workflows/release.yml`의 `Build signed-update artifact`, `scripts/build_update_manifest.py`, `core/config.py:366-369`
+* 문제: 워크플로는 `KACC_UPDATE_PRIVATE_KEY_B64`로 manifest를 서명하지만, 배포 EXE가 신뢰하는 `Config.UPDATE_PUBLIC_KEY_B64`와 그 개인키가 한 쌍인지 검증하지 않는다. 워크플로의 `KACC_UPDATE_PUBLIC_KEY_B64`는 존재 여부만 확인되고 manifest 생성에는 사용되지 않는다.
+* 영향: Secret 회전·오입력 시 GitHub Release와 `updates/latest.json`은 성공적으로 게시될 수 있으나, 배포된 모든 앱이 서명 검증에서 실패한다. 사용자에게는 업데이트 실패만 보이고, 릴리스 파이프라인도 이를 잡지 못한다.
+* 근거: `build_update_manifest.py`는 private key만 로드해 서명한다. `release.yml`은 공개키의 non-empty 여부만 확인하며, `verify_release_manifest(..., public_key=Config.UPDATE_PUBLIC_KEY_B64)`를 생성 manifest에 실행하지 않는다.
+* 권장 수정 방향: 빌드 단계에서 private key로부터 raw public key를 도출해 `Config.UPDATE_PUBLIC_KEY_B64`의 기본값과 byte 단위 비교하고, 생성된 manifest를 그 기본값으로 검증하라. 환경변수 override가 아닌 실제 frozen source의 값을 검증 대상으로 고정해야 한다.
+* 우선순위: High
 
-* 위치: `ui/main_window_impl/database_worker.py:141-177`, `ui/main_window_impl/persistence_session.py:415-464`, `core/database_impl/sessions.py:23-145`, `ui/main_window_impl/pipeline_messages.py:366-387`
-* 문제: `_run_db_task_sync()`는 15초 동안 `done_event`를 기다린 뒤 `TimeoutError`를 발생시키지만, 큐에 들어간 작업을 취소하거나 결과를 후속 전달하지 않는다. `DatabaseManager.save_session()`은 계속 실행되어 나중에 commit할 수 있다.
-* 영향: UI는 “JSON 저장 완료, DB 저장 실패”라고 알리고 `db_session_id`를 적용하지 않지만, DB에는 뒤늦게 세션이 생성될 수 있다. 사용자가 재시도하면 중복 저장본이 생기고, `parent_session_id`가 직전 저장본을 가리키지 않는 등 계보가 부정확해질 수 있다. 종료/재시도 시점에 따라 결과가 비결정적이다.
-* 근거: `persistence_session.py:453`은 15초 상수를 넘기며, timeout 시 `db_saved=False`로 반환한다. 반면 `database_worker.py:170-174`는 대기자에게 예외만 반환하고 task 취소 상태를 기록하지 않는다. DB 저장은 하나의 transaction을 `commit()`할 때까지 계속된다. `tests/test_session_stability_followup_plan_20260405.py:506-522`도 현재 timeout 전달과 즉시 실패 보고만 고정하며 늦은 commit을 검증하지 않는다. `CLAUDE.md:336`의 timeout-free 설명과도 어긋난다.
-* 권장 수정 방향: 세션 저장의 DB 단계는 문서 계약대로 `timeout=None`으로 완료를 기다리거나, task ID와 명시적 취소/late-completion 상태를 도입한다. SQLite 작업은 안전하게 중단하기 어려우므로 “timeout=실패”로 단정하지 말고 “계속 처리 중” 상태와 최종 결과를 UI에 전달하는 방식이 안전하다. 재시도에는 idempotency key 또는 저장 operation ID를 적용한다.
-* 우선순위: **High**
+### 3.2 helper 적용/롤백 결과가 사용자와 앱에 전달되지 않음
 
-### 3.3 runtime manifest의 개별 segment 크기 제한 부재
+상태: **해결됨** — helper result JSON과 다음 시작 알림을 추가했다.
 
-* 위치: `ui/main_window_impl/persistence_session.py:177-224`, `ui/main_window_impl/persistence_runtime_manifest.py:99-145`, `ui/main_window_impl/persistence_runtime_segments.py:374-419`, `core/config.py:338`
-* 문제: 일반 세션 파일은 background load 전에 100MB 상한을 검사하지만, runtime manifest가 참조하는 `segment_*.json`은 크기를 검사하지 않고 `json.load()`로 전체 파일을 읽는다. salvage 모드는 디렉터리의 모든 `segment_*.json`을 열거한다.
-* 영향: 손상되었거나 조작된 작은 manifest가 매우 큰 sibling segment를 참조하면 일반 세션 크기 제한을 우회해 메모리 고갈, 긴 UI 대기, 프로세스 종료를 유발할 수 있다. 정상 장시간 세션도 segment 수/크기가 비정상적으로 커지면 같은 문제가 생긴다.
-* 근거: `_start_session_load_from_path()`는 선택한 manifest 파일 자체에만 `SESSION_LOAD_MAX_BYTES`를 적용한다. `_read_runtime_entries_file()`은 `Path.stat()`이나 누적 byte/entry budget 없이 바로 `json.load(f)`를 수행한다. 경로 탈출은 `_resolve_runtime_relative_path()`가 방어하지만 resource budget은 없다.
-* 권장 수정 방향: manifest, 각 segment, tail checkpoint에 개별 크기 상한과 전체 누적 byte/entry 상한을 적용한다. 가능하면 streaming parser를 사용하고, `HYDRATE_MAX_ENTRIES`와 동일한 정책을 load/salvage 단계에도 적용한다. 초과 시 손상 파일과 구분되는 명확한 오류를 사용자에게 표시한다.
-* 우선순위: **High**
+* 위치: `core/update_installer.py:156-191`의 `launch_update_helper`, `scripts/apply_update.py:16-49`, `ui/main_window_impl/ui/help.py:208-267`
+* 문제: 앱은 helper를 hidden process로 시작한 즉시 `QApplication.quit()`한다. helper의 예외, parent 종료 timeout, 파일 권한 오류, smoke 실패 및 rollback은 호출 앱에 전달될 수 없고 결과 파일·다음 실행 시 알림·로그 경로도 남기지 않는다.
+* 영향: 업데이트가 실패하거나 백업으로 복원돼도 사용자는 앱이 종료된 이유와 실제 결과를 알 수 없다. 특히 설치 경로 권한 또는 백신 잠금처럼 현장에서 빈번한 Windows 오류의 지원·재시도가 어렵다.
+* 근거: `Popen(..., creationflags=CREATE_NO_WINDOW)`은 stdout/stderr를 수집하지 않는다. `scripts/apply_update.main()`은 예외를 처리하거나 결과를 영속화하지 않으며, UI는 helper 시작 성공만 상태바에 표시한다.
+* 권장 수정 방향: helper가 target 옆 또는 storage에 원자적 result JSON(성공/rollback/오류/버전/시간)을 기록하고, 다음 시작 시 앱이 이를 읽어 사용자에게 결과와 릴리스 페이지 fallback을 제공하도록 하라. helper 자체 로그도 남기고 stale result를 정리하라.
+* 우선순위: High
 
-### 3.4 DB 세션 로드가 전체 자막을 중복 materialize
+### 3.3 자동 시작 업데이트 확인이 캡처 실행 상태와 경합할 수 있음
 
-* 위치: `core/database_impl/sessions.py:147-214`, `ui/main_window_impl/database_dialogs.py:83-174`, `ui/main_window_impl/pipeline_messages.py:65-169`
-* 문제: `DatabaseManager.load_session()`은 해당 세션의 모든 subtitle을 `fetchall()`한 뒤 dict list로 만들고, UI worker는 이를 다시 `SubtitleEntry` list로 역직렬화한다. runtime hydrate의 `HYDRATE_MAX_ENTRIES`와 같은 상한이나 cancel/pagination이 적용되지 않는다.
-* 영향: DB에 저장된 매우 긴 세션을 불러올 때 row list, dict list, model list가 겹쳐 메모리 사용량이 급증한다. DBWorker가 직렬이므로 이 시간 동안 다른 DB 작업도 모두 대기한다. 백그라운드 실행이라 UI event loop 자체는 살아 있어도 메모리 압박과 종료 지연이 발생할 수 있다.
-* 근거: SQL 결과는 `cursor.fetchall()`로 전량 로드되며, list comprehension으로 새 payload를 만든다. `_start_db_session_load()`는 다시 `_deserialize_subtitles()`를 호출한다. CodeGraph 호출 경로에는 streaming iterator나 entry limit가 없다. README의 장시간 세션 지원은 runtime archive에만 적용되고 DB reload에는 이어지지 않는다.
-* 권장 수정 방향: 세션 metadata와 subtitle page/iterator를 분리하고 `fetchmany()`로 점진 로드한다. UI에는 진행률·취소·최대 엔트리 확인을 제공하고, 큰 DB 세션은 runtime archive와 같은 segment-backed representation으로 직접 연결한다.
-* 우선순위: **Medium**
+상태: **해결됨** — manifest 수신·다운로드 시작·설치 확정 직전에 활성 수집 상태를 재검사한다.
 
-### 3.5 Windows에서 대소문자 별칭으로 동일 파일 동시 저장 가능
+* 위치: `ui/main_window_impl/runtime_state.py:333-344`, `ui/main_window_impl/ui/help.py:31-33, 83-176`, `ui/main_window_impl/persistence_session.py:130-144`
+* 문제: 수동 확인만 `_is_runtime_mutation_blocked()`로 막고, 시작 시 `interactive=False` 검사는 이를 우회한다. manifest 응답이 도착하기 전에 사용자가 캡처를 시작하면, 이후 설치 선택은 dirty session 여부만 확인하고 `is_running` 같은 활성 캡처 상태는 확인하지 않는다.
+* 영향: 활성 캡처 중에도 사용자 승인 후 앱 종료·업데이트가 진행될 수 있다. 저장되지 않은 자막이 없거나 dirty 상태가 정확히 반영되지 않은 초기에 특히 의도치 않은 수집 중단이 가능하다.
+* 근거: `_schedule_startup_update_check()`는 `_check_for_updates(interactive=False)`를 직접 호출한다. `_run_after_dirty_session_action()`의 구현은 dirty 세션 확인만 수행하며 실행 중 수집을 검사하지 않는다.
+* 권장 수정 방향: manifest 수신 시점과 설치 확정 직전에 모두 활성 수집/저장/종료 상태를 재검사하라. 실행 중이면 설치를 보류하고, 캡처 중지 및 세션 저장 후 다시 시도하는 명시적 흐름을 제공하라.
+* 우선순위: High
 
-* 위치: `ui/main_window_impl/persistence_exports.py:36-110`
-* 문제: 중복 저장 가드는 `str(Path(path).resolve())`를 set key로 사용한다. Windows 파일 시스템은 일반적으로 대소문자를 구분하지 않지만 문자열 set은 구분하므로, 경로 casing만 다른 두 입력이 같은 실제 파일을 서로 다른 key로 통과할 수 있다.
-* 영향: 동일 대상에 두 `FileSaveWorker`가 동시에 원자 교체를 수행해 마지막 완료 작업이 앞선 결과를 덮어쓴다. 확장자가 다른 export를 동일 파일명으로 강제 선택한 경우 사용자가 예상하지 못한 내용이 남을 수 있다.
-* 근거: 실제 Windows 환경에서 `Path(r'D:\AuditCase\Foo.txt').resolve()`와 `Path(r'd:\auditcase\foo.TXT').resolve()`는 casing이 다른 문자열로 유지됐다. 현재 회귀 테스트는 정확히 동일한 문자열 경로의 중복만 검사한다.
-* 권장 수정 방향: Windows에서는 `os.path.normcase(os.path.realpath(path))` 또는 동등한 canonical key를 사용한다. 가능하면 파일 ID 기반 확인도 고려하고, 대소문자/상대경로/심볼릭 링크 별칭 테스트를 추가한다.
-* 우선순위: **Medium**
+### 3.4 helper 시작 실패 경로는 수동 다운로드 fallback을 제공하지 않음
 
-### 3.6 URL 검증이 host/scheme만 확인해 기능적으로 무효한 URL을 시작 단계에서 허용
+상태: **해결됨** — 정리 오류를 흡수하고 기존 실패 dialog/fallback을 재사용한다.
 
-* 위치: `core/url_policy.py:23-47`, `ui/main_window_impl/runtime_lifecycle.py:85-116`, `ui/main_window_impl/ui/history_presets.py:178-191`
-* 문제: URL 정책은 `http/https`와 `assembly.webcast.go.kr` 계열 host만 확인한다. URL 길이, userinfo/port, player/pressplayer 경로, `xcode`/`xcgcd` 형식은 시작 시 검증하지 않는다.
-* 영향: 같은 host의 임의 경로, 비정상적으로 긴 query, 잘못된 방송 파라미터가 히스토리·프리셋에 저장되고 worker까지 시작된다. 사용자는 입력 시점이 아니라 Chrome 실행·selector 탐색 이후에 실패를 보게 되며, 불필요한 재연결과 오류 로그가 발생한다.
-* 근거: `validate_assembly_url()`은 scheme과 hostname 검사 후 원문 URL을 그대로 반환한다. 반면 `core/live_list.py`에는 `xcode`/`xcgcd` 형식 검증 함수가 이미 있으나 일반 시작 URL 검증과 연결되지 않았다.
-* 권장 수정 방향: 허용 path와 port를 명시하고, player URL에는 query key를 case-insensitive하게 정규화한 뒤 `normalize_live_xcode()`/`normalize_live_xcgcd()`를 적용한다. 전체 URL 및 프리셋 이름/태그 길이도 제한한다. 기자회견 URL은 별도 정책으로 유지한다.
-* 우선순위: **Medium**
+* 위치: `ui/main_window_impl/ui/help.py:208-262`
+* 문제: 다운로드·검증 후 `launch_update_helper()`가 실패하면 staged 파일을 삭제하고 상태바 오류만 표시한다. 일반 업데이트 확인 실패의 `_handle_update_failure()`는 릴리스 페이지 버튼을 제공하지만 이 경로에서는 호출되지 않는다.
+* 영향: 권한·파일 잠금·디스크 오류로 helper를 시작하지 못한 사용자가 즉시 안전한 대안인 GitHub Release로 이동할 수 없다. `staged.unlink()` 자체가 실패하면 UI handler에서 추가 예외가 발생할 가능성도 있다.
+* 근거: 해당 `except` 블록은 `_set_status(...)` 후 return만 수행하며, unlink는 별도 예외 처리 없이 실행된다.
+* 권장 수정 방향: 정리 실패를 별도로 기록하고, interactive 여부를 payload에 포함해 `_handle_update_failure()` 또는 동일한 릴리스 fallback dialog를 호출하라.
+* 우선순위: Medium
 
-### 3.7 큐 포화 시 preview가 의도적으로 유실될 수 있음
+### 3.5 release 이후 main manifest 게시가 원자적이지 않음
 
-* 위치: `ui/main_window_impl/pipeline_queue.py:104-175`, `ui/main_window_impl/pipeline_queue.py:189-236`, `core/config.py:290`, `ui/main_window_impl/pipeline_messages.py:171-220`
-* 문제: worker queue가 가득 차면 preview를 overflow passthrough에 보존하지만 이 목록도 128개로 제한되며, 한도를 넘으면 낮은 우선순위 메시지를 삭제한다. preview는 terminal/segment보다 낮은 우선순위다.
-* 영향: UI가 장시간 멈추거나 preview 생산량이 급증하면 중간 preview가 삭제된다. 이후 payload가 충분한 누적 문맥을 포함하면 복구될 수 있지만, 짧은 발화·reset 경계·DOM 교체와 겹치면 누락 가능성이 남는다. 사용자 경고가 있어 silent failure는 아니지만 데이터 완전성은 보장되지 않는다.
-* 근거: `_trim_overflow_passthrough_messages()`는 `OVERFLOW_PASSTHROUGH_MAX=128`을 넘을 때 가장 낮은 priority부터 제거한다. 테스트는 drop 카운터와 알림을 검증하지만, drop 이후 실제 자막 복원 여부를 end-to-end로 검증하지 않는다.
-* 권장 수정 방향: preview payload의 누적/증분 계약을 명확히 하고 sequence number와 gap detection을 추가한다. gap 발생 시 structured full snapshot을 즉시 요청하거나 disk-backed spool로 복구한다. 최소한 세션 결과에 drop 발생 사실과 구간을 남겨야 한다.
-* 우선순위: **Medium**
+상태: **부분 완화됨** — workflow를 직렬화하고 tag commit의 main 포함 여부 및 rebase를 검증한다. GitHub Release 생성과 main push는 서로 다른 원격 변경이므로 완전한 원자성은 여전히 제공되지 않는다.
+
+* 위치: `.github/workflows/release.yml`의 `Create GitHub Release`, `Publish latest manifest on main`
+* 문제: Release asset과 manifest asset을 먼저 공개한 뒤, 별도 `git checkout main`/commit/push로 raw `updates/latest.json`을 갱신한다. 마지막 push가 branch protection, 충돌, 네트워크 오류로 실패하면 공개 릴리스는 존재하지만 앱이 조회하는 main manifest는 이전 버전 그대로다.
+* 영향: 자동 업데이트 채널이 새 릴리스를 배포하지 못한다. 실패 알림·보상 처리·재게시 절차가 워크플로에 없다.
+* 근거: 앱 기본 endpoint는 `.../main/updates/latest.json`이고, workflow의 마지막 단계 실패는 이미 생성된 GitHub Release를 되돌리지 않는다.
+* 권장 수정 방향: manifest 게시 권한과 main 보호 규칙을 사전 검증하고, 실패 시 명확한 운영 알림을 남겨 재실행 가능하게 하라. 가능하면 immutable release asset을 기준으로 하거나 manifest publication을 release 전에 검증 가능한 단계로 분리하라.
+* 우선순위: Medium
 
 ## 4. Potential Functional Gaps
 
-아래 항목은 코드에서 완전한 제품 요구사항을 확인할 수 없어 **추정**으로 분류한다.
+다음은 실제 누락이 확정된 결함이라기보다, 운영 요구사항에 따라 보완 가능성이 높은 항목이다.
 
-1. **추정 — 저장 revision/operation history UI**: 현재 저장 성공/실패 토스트만 있고 “어느 revision까지 저장되었는지” 확인할 방법이 없다. 실시간 캡처 중 수동 저장을 공식 지원한다면 저장 시점과 이후 미저장 변경 수를 표시할 필요가 높다.
-2. **추정 — 대용량 세션 열기 전 예상 비용 안내**: runtime archive와 DB 세션 모두 entry 수·예상 메모리를 미리 보여주고 취소할 UI가 필요할 수 있다.
-3. **추정 — 복구 세트 관리**: recovery state는 최신 포인터 하나를 중심으로 동작한다. runtime manifest와 5분 backup이 함께 있을 때 사용자가 여러 후보를 비교·선택하는 전용 화면은 확인되지 않았다.
-4. **추정 — 수집 품질 리포트**: queue drop, suffix desync, reconnect, salvage 제외 수를 세션 metadata로 영속화하면 결과물의 신뢰도를 판단하기 쉽다. 현재는 주로 로그/토스트에 남는다.
-5. **추정 — 실제 Chrome DOM 계약 테스트**: opt-in live smoke는 live-list schema 중심이며, 실제 AI 자막 버튼 활성화, iframe, multi-speaker, Observer buffer를 지속적으로 검증하는 E2E는 부족하다.
-6. **추정 — 보관 데이터 보호**: 자막·URL·위원회 정보가 JSON/SQLite/log에 평문 저장된다. 사용자 환경에서 회의 자막을 민감 데이터로 취급해야 한다면 암호화, 보존 기간, 전체 삭제 기능이 필요하다.
-7. **추정 — 업데이트/서명 경로**: 배포 EXE의 코드 서명, 자동 업데이트, rollback 정책은 감사 범위에서 구현을 확인하지 못했다.
+* **추정 — 업데이트 완료 뒤 재실행 경험:** 성공 시 helper는 새 EXE를 smoke만 하고 앱을 다시 실행하지 않는다. 의도된 정책이라면 UI에 “업데이트가 완료되면 다시 실행하세요”를 명시해야 하며, 자동 재시작을 원한다면 별도 opt-in 설계가 필요하다.
+* **추정 — manifest 만료 운영:** manifest 기본 만료는 365일이다. 1년 동안 릴리스가 없으면 정상 앱도 만료 manifest를 거부한다. 만료 전 경고 또는 재서명만 하는 유지보수 작업이 없다.
+* **추정 — backup 보존 정책:** 성공한 업데이트마다 target 폴더에 새 `.bak` 파일을 보존하지만 정리·보존 개수·복원 UI가 없다. 장기적으로 디스크 사용량과 사용자의 혼동이 누적될 수 있다.
+* **추정 — 최초 updater 도입 버전의 전달:** updater가 없는 구버전은 manifest를 읽을 수 없으므로 최초 배포는 수동 설치가 필요하다. README의 설치/업데이트 안내에 이 전환 조건과 릴리스 페이지 fallback을 명시하는 편이 안전하다.
+* **추정 — manifest URL/public key 환경변수 override:** `KACC_UPDATE_MANIFEST_URL`, `KACC_UPDATE_PUBLIC_KEY_B64`는 실행 환경에서 값을 바꿀 수 있다. 로컬 실행자가 자신의 환경을 조작할 수 있는 범위이므로 원격 취약점으로 보기는 어렵지만, 배포판의 신뢰 경계를 고정하려면 release build에서는 override를 비활성화하거나 명시적 개발 모드로 제한할 수 있다.
+
+README/CLAUDE와 구현의 불일치도 확인됐다. README는 v16.14.9인데 빌드 산출물 예시는 v16.14.8이고, 업데이트 채널이 “배포 빌드에 설정해야 활성화”되며 개발 빌드는 두 값이 비어 있다고 설명한다. 실제 `Config`는 공개 endpoint와 공개키를 기본값으로 내장한다. CLAUDE의 프로젝트 버전과 최신 변경 기준도 v16.14.8로 남아 있다.
 
 ## 5. Recommended Fix Plan
 
-### 1단계 — 즉시 수정해야 할 문제
+### 1단계 — 즉시 수정
 
-1. 세션 dirty boolean을 revision 기반으로 전환하고, async save 완료 시 저장 revision과 현재 revision을 비교한다.
-2. DB save timeout 의미론을 수정한다. 완료를 기다리거나, late completion을 추적하는 operation ID/idempotency 계약을 도입한다.
-3. runtime manifest/segment/tail에 개별 및 누적 byte/entry 상한을 적용하고, load 전에 검증한다.
-4. 위 세 문제에 대해 실패 재현 테스트를 먼저 추가하고, 사용자에게 저장 범위를 오해시키는 성공/실패 문구를 수정한다.
+1. Release workflow에 private/public key pair 검증과 생성 manifest의 `Config` 기본 공개키 검증을 추가한다.
+2. helper가 성공·실패·rollback 결과를 영속화하고, 다음 앱 시작 시 결과를 사용자에게 표시한다.
+3. 자동 업데이트 흐름에서 캡처 실행, session save, shutdown 상태를 설치 직전 재검사해 업데이트를 보류한다.
 
 ### 2단계 — 안정성 개선
 
-1. DB 세션 로드를 `fetchmany()` 기반 점진 처리로 바꾸고 progress/cancel/entry cap을 추가한다.
-2. Windows save-path key를 case-insensitive canonical form으로 정규화한다.
-3. 시작 URL의 path/query/길이/port 정책을 강화하고 live token 정규화 함수를 재사용한다.
-4. preview에 sequence/gap detection 및 full snapshot 재요청 경로를 추가한다.
-5. URL history, preset, live-list 응답에도 파일/응답 크기 상한과 문자열 길이 상한을 둔다.
+1. helper 시작 실패와 staged 정리 실패를 예외 안전하게 처리하고 릴리스 페이지 fallback을 일관되게 제공한다.
+2. manifest 게시 실패를 배포 운영 장애로 명확히 알리고, 재실행 가능한 절차를 workflow/문서에 추가한다.
+3. manifest 만료 사전 경고, backup 보존 개수/정리, 업데이트 결과 로그를 도입한다.
 
 ### 3단계 — 구조 개선
 
-1. `_session_dirty`, `_session_save_in_progress`, `_session_load_in_progress`, `_exit_in_progress` boolean 조합을 명시적 lifecycle state와 operation token으로 통합한다.
-2. 세션 파일, runtime segment, DB load가 공통 streaming entry reader와 공통 resource budget을 사용하도록 추상화한다.
-3. CodeGraph상 테스트 연결이 약한 mixin orchestration(`MainWindowDatabaseWorkerMixin`, runtime manifest writer, close continuation)에 좁은 계약 테스트를 추가한다.
-4. 실제 사이트 DOM E2E와 frozen EXE 검증을 릴리스 게이트의 명시적 단계로 운영한다.
+1. update state를 단순 boolean 대신 `checking/downloading/awaiting-confirmation/applying/deferred/failed` 상태 모델로 분리해 queue message와 UI를 명시적으로 연결한다.
+2. release manifest publication을 tag/main 관계와 branch protection까지 검증하는 재현 가능한 release pipeline으로 정리한다.
+3. README와 CLAUDE의 버전·기본 설정·업데이트 UX를 현재 구현과 동기화하고, 최초 수동 전환 및 실패 복구 운영 절차를 추가한다.
 
 ## 6. Test Recommendations
 
-### 저장/상태 관리
-
-1. async save 시작 후 새 자막을 append하고, 이전 snapshot 저장 완료 메시지를 처리해도 dirty가 유지되는지 검증한다.
-2. async save 시작 후 편집·삭제·병합을 수행하는 각각의 시나리오에서 revision이 증가하는지 검증한다.
-3. 저장 중 연속 두 번의 mutation과 저장 완료 순서를 무작위화하는 state-machine/property test를 추가한다.
-4. dirty-save deferred action이 저장한 revision까지만 clean 처리하고, 이후 변경이 있으면 원래 action을 자동 재개하지 않는 정책을 검증한다.
-
-### DB 동시성/계보
-
-1. DB save가 timeout 직후 실제로 commit되는 fake worker 테스트를 만들고, UI 최종 상태와 `current_db_session_id`가 일치하는지 검증한다.
-2. timeout 후 사용자가 재시도했을 때 idempotency key로 중복 row가 생기지 않는지 검증한다.
-3. 150,000개 이상 세션을 `fetchmany()`로 로드하면서 cancel, progress, 메모리 상한, DBWorker 후속 작업 진행을 검증한다.
-4. 종료 중 진행 중인 DB save를 기다리기/진단 저장/강제 종료 각 경로에서 commit 및 계보 상태를 확인한다.
-
-### 세션/복구 입력
-
-1. 작은 manifest가 상한을 넘는 큰 segment를 참조하는 테스트를 추가하고 `json.load()` 전에 거부되는지 확인한다.
-2. segment 여러 개의 합계가 누적 budget을 넘는 경우, salvage 모드에서도 중단·경고되는지 검증한다.
-3. path traversal, absolute path, symlink/junction 별칭, 손상 fingerprint, 중복 segment index를 함께 조합한 복구 테스트를 추가한다.
-4. 일반 JSON 세션과 runtime manifest에 같은 entry-count/byte 정책이 적용되는지 계약 테스트를 추가한다.
-
-### 파일/OS 호환성
-
-1. Windows에서 drive/path/extension casing만 다른 두 경로가 동일 save key가 되는지 검증한다.
-2. UNC 경로, 장경로, 읽기 전용 폴더, 네트워크 드라이브에서 원자 교체 실패와 임시 파일 정리를 검증한다.
-3. UTF-8 without BOM 정책과 사용자 TXT의 `utf-8-sig` 예외를 실제 Windows 메모장/한글 round-trip fixture로 유지한다.
-
-### 수집 파이프라인/큐
-
-1. queue 500 + overflow 128을 모두 포화시킨 뒤 sequence gap을 감지하고 full snapshot으로 최종 자막이 복구되는지 검증한다.
-2. 반복 문구가 suffix에 여러 번 나타나고 그 사이에 짧은 발화/reset/reconnect가 끼는 fuzz test를 추가한다.
-3. 실제 또는 고정 DOM fixture에서 AI 버튼 active 상태, iframe, multi-speaker row, Observer clear/reset, poll fallback을 브라우저 E2E로 검증한다.
-4. live-list smoke와 별도로 실제 player DOM drift를 탐지하되 외부 서비스 장애와 코드 회귀를 구분해 보고한다.
-
-### 현재 검증 기준 유지
-
-- `pytest -q`: 이번 감사에서 **361 passed, 2 skipped**.
-- `python scripts/check_before_push.py --pyright-only`: **0 errors, 0 warnings, 138 files**.
-- `python "국회의사중계 자막.py" --smoke --smoke-instantiate-window --smoke-storage-dir .pytest_tmp/audit-smoke`: storage preflight, HWPX, import, `MainWindow()` 생성 모두 성공.
-- 위 결과는 강한 회귀 기준이지만, 본 감사의 주요 문제는 단일 함수 정상 동작이 아니라 작업 순서와 늦은 완료에서 발생하므로 별도의 concurrency/state 테스트가 필요하다.
+* CI에서 임시 Ed25519 private key와 `Config.UPDATE_PUBLIC_KEY_B64`의 일치/불일치 각각을 검증하고, 불일치 시 release 단계가 실패하는 테스트를 추가한다.
+* frozen Windows 통합 테스트에서 helper EXE가 parent 종료를 기다린 뒤 target을 교체하고, 새 EXE smoke 성공·실패·rollback 결과 파일을 정확히 남기는지 검증한다.
+* helper의 parent PID timeout, target 잠금/권한 거부, `Popen` 실패, staged 삭제 실패의 각 경우에 기존 EXE와 세션 데이터가 보존되고 UI fallback이 노출되는지 테스트한다.
+* 자동 시작 검사 도중 캡처가 시작되는 순서를 재현해, 설치가 보류되고 수집이 종료되지 않는지 테스트한다. dirty session이 비어 있는 활성 캡처도 포함한다.
+* `update_manifest_ready`, `update_install_ready`, 실패 message의 중복·역순 도착을 포함한 control queue 상태 전이 테스트를 추가한다.
+* release workflow를 로컬 또는 reusable workflow 수준에서 검증해, main manifest 게시 실패가 명확히 감지되고 재게시 절차가 가능한지 확인한다.
+* 문서 회귀 테스트 또는 release checklist 검사로 README, CLAUDE, `Config.VERSION`, spec 버전, 실제 artifact 명명 규칙의 일관성을 확인한다.

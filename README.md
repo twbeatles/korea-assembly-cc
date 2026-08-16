@@ -251,7 +251,7 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 ```bash
 pip install pyinstaller
 pyinstaller subtitle_extractor.spec
-# dist/국회의사중계자막추출기 v16.14.8.exe
+# dist/국회의사중계자막추출기 v16.14.9.exe
 ```
 
 **Portable 모드**: EXE 파일 옆에 `portable.flag` 파일을 만들어두면 로그·세션·DB·설정을 EXE 폴더에 저장합니다.  
@@ -288,7 +288,7 @@ python scripts/run_release_verification.py --with-live-smoke   # live contract s
 python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KACC_SIGN_CERT_THUMBPRINT
 ```
 
-업데이트 채널은 `core/config.py`의 `UPDATE_MANIFEST_URL`과 `UPDATE_PUBLIC_KEY_B64`를 배포 빌드에 설정해야 활성화됩니다. 두 값이 비어 있는 개발 빌드는 자동 설치를 금지합니다.
+업데이트 채널의 기본 manifest URL과 공개키는 배포 빌드에 내장됩니다. 개발 실행에서는 자동 설치를 하지 않으며, 업데이트 helper는 다음 시작 시 성공·rollback·실패 결과를 알려줍니다. 첫 updater 도입 이전 버전은 GitHub Releases에서 수동 설치가 필요합니다.
 
 자세한 아키텍처·개발 가이드·파이프라인 고정 규칙은 아래 문서를 참고하세요.
 
@@ -306,6 +306,10 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 ---
 
 ## 📝 변경 이력
+
+### v16.14.9 (2026-08-16)
+- **업데이트 운영 보강** — 릴리스 개인키·내장 공개키 일치 검증, helper 결과 영속화/다음 시작 알림, 실행 중 수집과의 설치 경합 차단, backup 보존 수 제한, manifest 게시의 main ancestry·직렬화 검증
+- **문서·회귀** — 업데이트 채널 기본값과 첫 수동 전환 조건을 문서화하고 key/result/backup 회귀 테스트 보강
 
 ### v16.14.8 (2026-06-30 ~ 2026-08-10)
 - **2026-08-11 기능 감사 전체 개선** — revision save, DB idempotency, 공통 resource budget/stream load, Windows 경로 정규화, URL·입력 상한, preview gap 복구·품질 metadata, 복구 후보 선택, 서명 업데이트·승인·rollback

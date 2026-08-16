@@ -8,9 +8,12 @@ import pytest
 from core.update_installer import (
     UpdateApplyError,
     apply_staged_update,
+    consume_update_result,
     prepare_staged_update,
     resolve_update_staging_root,
     stream_update_artifact,
+    update_result_path,
+    write_update_result,
 )
 from core.update_manifest import ReleaseManifest
 from datetime import datetime, timezone
@@ -177,3 +180,37 @@ def test_apply_rechecks_staged_hash_before_replacement(tmp_path) -> None:
 
     assert target.read_bytes() == b"old"
     assert not (tmp_path / "app.bak").exists()
+
+
+def test_update_result_is_consumed_once(tmp_path) -> None:
+    path = update_result_path(tmp_path)
+    write_update_result(path, {"status": "applied", "target": "app.exe"})
+
+    assert consume_update_result(path) == {"status": "applied", "target": "app.exe"}
+    assert consume_update_result(path) is None
+
+
+def test_invalid_update_result_is_discarded(tmp_path) -> None:
+    path = update_result_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("not json", encoding="utf-8")
+
+    assert consume_update_result(path) is None
+    assert not path.exists()
+
+
+def test_successful_apply_keeps_only_requested_backups(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "app.exe"
+    target.write_bytes(b"old")
+    monkeypatch.setattr("core.update_installer.Config.UPDATE_BACKUP_KEEP_COUNT", 1)
+    for version in ("1.0.0", "2.0.0"):
+        staged = tmp_path / f"staged-{version}.exe"
+        staged.write_bytes(version.encode())
+        apply_staged_update(
+            target=target,
+            staged=staged,
+            backup=tmp_path / f"app.exe.v{version}.bak",
+            smoke_runner=lambda _path: True,
+        )
+
+    assert len(list(tmp_path.glob("app.exe.v*.bak"))) == 1

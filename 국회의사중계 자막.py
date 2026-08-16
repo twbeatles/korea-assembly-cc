@@ -78,6 +78,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--update-parent-pid", default=0, type=int, help=argparse.SUPPRESS)
     parser.add_argument("--update-expected-sha256", default="", help=argparse.SUPPRESS)
     parser.add_argument("--update-expected-size", default=0, type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--update-result-file", default="", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -366,6 +367,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.update_expected_sha256,
                 "--expected-size",
                 str(args.update_expected_size),
+                "--result-file",
+                args.update_result_file,
             ]
         )
     if args.smoke:
