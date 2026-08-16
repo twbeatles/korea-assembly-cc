@@ -354,8 +354,22 @@ class Config:
     URL_HISTORY_FILE = str(Path(STORAGE_DIR) / "url_history.json")
     RECOVERY_STATE_FILE = str(Path(STORAGE_DIR) / "session_recovery.json")
     RECOVERY_CANDIDATE_MAX = 50
-    UPDATE_MANIFEST_URL = ""
-    UPDATE_PUBLIC_KEY_B64 = ""
+    # Public update-channel metadata is configurable at build time. The signing
+    # private key must never be present in this repository or an executable.
+    UPDATE_MANIFEST_URL = os.environ.get(
+        "KACC_UPDATE_MANIFEST_URL",
+        (
+            "https://raw.githubusercontent.com/"
+            "twbeatles/korea-assembly-cc/main/updates/latest.json"
+        ),
+    )
+    UPDATE_PUBLIC_KEY_B64 = os.environ.get(
+        "KACC_UPDATE_PUBLIC_KEY_B64",
+        "sn3XzoeY1T6FwqMn0kQiaZWWZE72rBRFNWEjr43AE0M=",
+    )
+    UPDATE_RELEASES_URL = (
+        "https://github.com/twbeatles/korea-assembly-cc/releases/latest"
+    )
     UPDATE_MANIFEST_MAX_BYTES = 256 * 1024
     UPDATE_ARTIFACT_MAX_BYTES = 500 * 1024 * 1024
     UPDATE_REQUEST_TIMEOUT_SECONDS = 20

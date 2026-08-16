@@ -568,7 +568,11 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 )
 
             elif msg_type == "update_manifest_ready":
-                self._handle_update_manifest_ready(data)
+                info = data if isinstance(data, dict) else {}
+                self._handle_update_manifest_ready(
+                    info.get("manifest"),
+                    interactive=bool(info.get("interactive", True)),
+                )
 
             elif msg_type == "update_install_ready":
                 self._handle_update_install_ready(
@@ -576,16 +580,19 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 )
 
             elif msg_type == "update_not_available":
-                self._update_operation_in_progress = False
-                self._set_status("현재 최신 버전을 사용 중입니다.", "success")
-                self._show_toast("현재 최신 버전을 사용 중입니다.", "success", 3000)
+                info = data if isinstance(data, dict) else {}
+                self._handle_update_not_available(
+                    interactive=bool(info.get("interactive", True))
+                )
+                return
 
             elif msg_type in ("update_check_failed", "update_install_failed"):
-                self._update_operation_in_progress = False
                 info = data if isinstance(data, dict) else {}
-                error = str(info.get("error", "unknown update error"))
-                self._set_status(f"업데이트 실패: {error}", "error")
-                self._show_toast(f"업데이트 실패: {error}", "error", 5000)
+                self._handle_update_failure(
+                    str(info.get("error", "unknown update error")),
+                    interactive=bool(info.get("interactive", True)),
+                )
+                return
 
             elif msg_type == "db_task_error":
                 task_name = (

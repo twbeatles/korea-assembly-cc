@@ -15,6 +15,7 @@ from core.update_manifest import (
     verify_release_manifest,
     download_release_manifest,
 )
+from core.config import Config
 
 
 def _signed_document(private_key: Ed25519PrivateKey, **overrides):
@@ -140,3 +141,9 @@ def test_manifest_download_rejects_redirect_to_http(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="HTTPS"):
         download_release_manifest("https://updates.example.com/manifest.json")
+
+
+def test_release_update_channel_has_embedded_public_key() -> None:
+    assert Config.UPDATE_MANIFEST_URL.startswith("https://")
+    assert Config.UPDATE_RELEASES_URL.startswith("https://github.com/")
+    assert len(base64.b64decode(Config.UPDATE_PUBLIC_KEY_B64, validate=True)) == 32

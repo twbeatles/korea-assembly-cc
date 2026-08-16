@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import webbrowser
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,22 +25,30 @@ from ui.main_window_types import MainWindowHost
 
 
 class MainWindowUIHelpMixin(MainWindowHost):
-    def _check_for_updates(self) -> None:
-        if self._is_runtime_mutation_blocked("업데이트 확인"):
+    def _open_latest_release_page(self) -> None:
+        webbrowser.open(Config.UPDATE_RELEASES_URL)
+
+    def _check_for_updates(self, interactive: bool = True) -> None:
+        if interactive and self._is_runtime_mutation_blocked("업데이트 확인"):
             return
         if bool(getattr(self, "_update_operation_in_progress", False)):
-            self._set_status("업데이트 작업이 이미 진행 중입니다.", "info")
+            if interactive:
+                self._set_status("업데이트 작업이 이미 진행 중입니다.", "info")
             return
         manifest_url = str(Config.UPDATE_MANIFEST_URL or "").strip()
         public_key = str(Config.UPDATE_PUBLIC_KEY_B64 or "").strip()
         if not manifest_url or not public_key:
-            QMessageBox.information(
-                self,
-                "업데이트",
-                "서명된 업데이트 채널이 이 빌드에 설정되지 않았습니다.",
-            )
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "업데이트",
+                    "서명된 업데이트 채널이 이 빌드에 설정되지 않았습니다.",
+                )
+            else:
+                logger.info("Startup update check skipped: update channel is not configured")
             return
-        self._set_status("업데이트 확인 중...", "running")
+        if interactive:
+            self._set_status("업데이트 확인 중...", "running")
         self._update_operation_in_progress = True
 
         def check_worker() -> None:
@@ -50,38 +59,73 @@ class MainWindowUIHelpMixin(MainWindowHost):
                     public_key=public_key,
                     current_version=Config.VERSION,
                 )
-                self._emit_control_message("update_manifest_ready", manifest)
+                self._emit_control_message(
+                    "update_manifest_ready",
+                    {"manifest": manifest, "interactive": interactive},
+                )
             except NoUpdateAvailableError:
-                self._emit_control_message("update_not_available", None)
+                self._emit_control_message(
+                    "update_not_available", {"interactive": interactive}
+                )
             except Exception as exc:
-                self._emit_control_message("update_check_failed", {"error": str(exc)})
+                self._emit_control_message(
+                    "update_check_failed",
+                    {"error": str(exc), "interactive": interactive},
+                )
 
         if not self._start_background_thread(check_worker, "UpdateCheckWorker"):
             self._update_operation_in_progress = False
-            self._set_status("업데이트 확인 시작 실패", "warning")
+            if interactive:
+                self._set_status("업데이트 확인 시작 실패", "warning")
+            else:
+                logger.warning("Startup update check could not start")
 
-    def _handle_update_manifest_ready(self, manifest: ReleaseManifest) -> None:
+    def _handle_update_manifest_ready(
+        self, manifest: ReleaseManifest, *, interactive: bool = True
+    ) -> None:
         if not isinstance(manifest, ReleaseManifest):
             self._update_operation_in_progress = False
-            self._set_status("업데이트 응답 형식이 올바르지 않습니다.", "error")
+            self._handle_update_failure("업데이트 응답 형식이 올바르지 않습니다.", interactive)
             return
         if not bool(getattr(sys, "frozen", False)):
             self._update_operation_in_progress = False
-            QMessageBox.information(
-                self,
-                "업데이트",
-                "개발 실행에서는 자동 설치를 사용할 수 없습니다.",
-            )
+            if interactive:
+                QMessageBox.information(
+                    self,
+                    "업데이트",
+                    "개발 실행에서는 자동 설치를 사용할 수 없습니다.",
+                )
             return
-        reply = QMessageBox.question(
-            self,
-            "업데이트 발견",
-            f"새 버전 {manifest.version}을 검증하기 위해 다운로드하시겠습니까?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        if not interactive and (
+            str(getattr(self, "_last_notified_update_version", "")) == manifest.version
+        ):
             self._update_operation_in_progress = False
-            self._set_status("업데이트 다운로드 취소", "info")
+            return
+        self._last_notified_update_version = manifest.version
+
+        message = (
+            f"새 버전 {manifest.version}이 있습니다.\n\n"
+            f"현재 버전: {Config.VERSION}\n"
+            f"최신 버전: {manifest.version}"
+        )
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("업데이트 발견")
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setText(message)
+        update_button = dialog.addButton("업데이트", QMessageBox.ButtonRole.AcceptRole)
+        release_button = dialog.addButton(
+            "릴리스 페이지 보기", QMessageBox.ButtonRole.ActionRole
+        )
+        dialog.addButton("나중에", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton() is release_button:
+            self._open_latest_release_page()
+            self._update_operation_in_progress = False
+            self._set_status("릴리스 페이지를 열었습니다.", "info")
+            return
+        if dialog.clickedButton() is not update_button:
+            self._update_operation_in_progress = False
+            self._set_status("업데이트 다운로드를 나중에 진행합니다.", "info")
             return
 
         def start_download() -> None:
@@ -130,6 +174,36 @@ class MainWindowUIHelpMixin(MainWindowHost):
 
         if not self._run_after_dirty_session_action("업데이트 설치", start_download):
             self._update_operation_in_progress = False
+
+    def _handle_update_not_available(self, interactive: bool) -> None:
+        self._update_operation_in_progress = False
+        if not interactive:
+            logger.info("Update check completed: current version is latest")
+            return
+        self._set_status("현재 최신 버전을 사용 중입니다.", "success")
+        QMessageBox.information(self, "업데이트", "현재 최신 버전을 사용 중입니다.")
+
+    def _handle_update_failure(self, error: str, interactive: bool) -> None:
+        self._update_operation_in_progress = False
+        if not interactive:
+            logger.info("Startup update check failed: %s", error)
+            return
+        self._set_status(f"업데이트 실패: {error}", "error")
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("업데이트 실패")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText(
+            "자동 업데이트를 완료하지 못했습니다.\n\n"
+            f"오류: {error}\n\n"
+            "최신 버전은 GitHub 릴리스 페이지에서 직접 받을 수 있습니다."
+        )
+        release_button = dialog.addButton(
+            "릴리스 페이지 열기", QMessageBox.ButtonRole.ActionRole
+        )
+        dialog.addButton("닫기", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton() is release_button:
+            self._open_latest_release_page()
 
     def _handle_update_install_ready(self, payload: dict[str, object]) -> None:
         staged_value = payload.get("staged")
