@@ -275,6 +275,7 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._active_background_threads_lock = threading.Lock()
         self._background_shutdown_initiated = False
         self._update_operation_in_progress = False
+        self._update_state = "idle"
         self._last_notified_update_version = ""
         self._detached_driver_cleanup_lock = threading.Lock()
         self._detached_driver_cleanup_in_progress = False
@@ -329,6 +330,7 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._setup_tray()
         self._flush_startup_warnings()
         self._notify_initial_db_degraded_state()
+        QTimer.singleShot(0, self._notify_pending_update_result)
         QTimer.singleShot(0, self._prompt_session_recovery_if_available)
         QTimer.singleShot(1000, self._schedule_startup_update_check)
 

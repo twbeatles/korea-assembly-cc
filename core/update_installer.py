@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -10,11 +11,51 @@ from pathlib import Path
 from uuid import uuid4
 
 from core.config import Config
+from core.file_io import atomic_write_json
 from core.update_manifest import ReleaseManifest
 
 
 class UpdateApplyError(RuntimeError):
     pass
+
+
+def update_result_path(staging_root: str | Path) -> Path:
+    return (Path(staging_root).resolve() / "last-update-result.json").resolve()
+
+
+def write_update_result(path: str | Path, payload: dict[str, object]) -> None:
+    data = dict(payload)
+    data["status"] = str(data.get("status", "failed") or "failed")
+    atomic_write_json(Path(path).resolve(), data, ensure_ascii=False)
+
+
+def consume_update_result(path: str | Path) -> dict[str, object] | None:
+    result_path = Path(path).resolve()
+    try:
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception:
+        try:
+            result_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    if not isinstance(data, dict) or str(data.get("status", "")) not in {
+        "applied",
+        "rolled_back",
+        "failed",
+    }:
+        try:
+            result_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    try:
+        result_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return data
 
 
 def resolve_update_staging_root(
@@ -105,6 +146,23 @@ def _validate_apply_paths(target: Path, staged: Path, backup: Path) -> None:
     backup.parent.mkdir(parents=True, exist_ok=True)
 
 
+def cleanup_update_backups(target: str | Path, *, keep_count: int | None = None) -> None:
+    target_path = Path(target).resolve()
+    keep = max(0, int(Config.UPDATE_BACKUP_KEEP_COUNT if keep_count is None else keep_count))
+    candidates: list[tuple[float, Path]] = []
+    for backup in target_path.parent.glob(f"{target_path.name}.v*.bak"):
+        try:
+            candidates.append((backup.stat().st_mtime, backup))
+        except OSError:
+            continue
+    backups = [item for _mtime, item in sorted(candidates, reverse=True)]
+    for backup in backups[keep:]:
+        try:
+            backup.unlink()
+        except OSError:
+            continue
+
+
 def apply_staged_update(
     *,
     target: str | Path,
@@ -142,6 +200,11 @@ def apply_staged_update(
             smoke_ok = bool(smoke_runner(target_path))
         if not smoke_ok:
             raise RuntimeError("updated executable smoke check failed")
+        try:
+            cleanup_update_backups(target_path)
+        except Exception:
+            # Backup retention must not turn a successful replacement into a rollback.
+            pass
     except Exception as exc:
         try:
             if backup_path.is_file():
@@ -161,6 +224,7 @@ def launch_update_helper(
     parent_pid: int,
     expected_sha256: str,
     expected_size: int,
+    result_file: str | Path,
 ) -> subprocess.Popen[bytes]:
     staged_path = Path(staged).resolve()
     helper_path = staged_path.parent / f"update-helper-{uuid4().hex}.exe"
@@ -181,6 +245,8 @@ def launch_update_helper(
             str(expected_sha256),
             "--update-expected-size",
             str(int(expected_size)),
+            "--update-result-file",
+            str(Path(result_file).resolve()),
         ],
         close_fds=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

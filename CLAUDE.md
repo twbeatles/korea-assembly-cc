@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.8
+- **버전**: v16.14.9
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -238,7 +238,13 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.8 기준)
+## 6. 최신 변경 요약 (v16.14.9 기준)
+
+### v16.14.9 업데이트 운영 안정화 (2026-08-16)
+- **업데이트 신뢰 경계**: release workflow가 GitHub Secret 공개키와 frozen 기본 공개키, 개인키의 Ed25519 짝을 모두 검증한다.
+- **적용 결과**: helper는 성공·rollback·실패 결과를 원자적 JSON으로 남기며, 다음 시작에서 사용자에게 결과와 수동 릴리스 fallback을 알린다.
+- **동시성**: 자동 검사도 설치 전 활성 수집을 재검사하며, 수집 중에는 다운로드/설치를 보류한다.
+- **회귀**: key pair, helper 실패 result, result consume, backup 보존 상한을 테스트한다.
 
 ### v16.14.8 수집 정합·export·CI 게이트 (2026-08-10)
 - **Chrome 확장 수집 P1**: AI 자막 버튼 우선 + **active(ON) 재클릭 방지**, multi-speaker span 분할 (`capture_dom` probe / `capture_observer`)
@@ -638,7 +644,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - **입력·Windows 계약**: 저장 중복 가드는 Windows case-insensitive canonical path key를 사용한다. URL은 HTTPS 기본 포트, 허용 player path, token과 전체 길이를 검사하고 history/preset/live payload도 크기를 제한한다.
 - **preview 복구·진단**: worker sequence gap 발생 시 최신 full DOM snapshot을 적용한다. drop/gap/salvage/reconnect 진단은 `CaptureQualityState`로 JSON/runtime/DB에 보존한다.
 - **복구 UX**: 자동 복구는 단일 최신 파일을 강제하지 않고 유효 후보를 정렬해 사용자 선택을 받는다. 취소와 로드 실패는 현재 세션을 변경하지 않는다.
-- **업데이트 신뢰 경계**: 개발 빌드의 빈 채널 설정은 설치를 금지한다. 배포 빌드는 Ed25519 manifest 서명, HTTPS, 만료, version, artifact size/SHA-256을 검증하고 검증 후 사용자 승인을 다시 받은 다음 helper가 EXE를 교체한다. 새 EXE `--smoke` 실패 시 백업을 복원한다.
+- **업데이트 신뢰 경계**: 개발 실행은 자동 설치를 금지한다. 배포 빌드는 내장 공개키로 Ed25519 manifest 서명, HTTPS, 만료, version, artifact size/SHA-256을 검증하고 검증 후 사용자 승인을 다시 받은 다음 helper가 EXE를 교체한다. 새 EXE `--smoke` 실패 시 백업을 복원하고 다음 시작에서 결과를 알린다.
 - **배포 서명**: `scripts/sign_release.ps1`은 인증서 지문만 입력받고 개인 키는 Windows 인증서 저장소에 둔다. `run_release_verification.py --sign-thumbprint ...`로 빌드 후 서명·검증한다.
 - **명시적 제외 범위**: 자막/DB 암호화, 보존 기간 정책, 일괄 삭제 기능은 이번 구현 범위가 아니다.
 

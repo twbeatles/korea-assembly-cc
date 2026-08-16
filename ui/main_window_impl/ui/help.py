@@ -9,10 +9,12 @@ from pathlib import Path
 from uuid import uuid4
 
 from core.update_installer import (
+    consume_update_result,
     launch_update_helper,
     prepare_staged_update,
     resolve_update_staging_root,
     stream_update_artifact,
+    update_result_path,
 )
 from core.update_manifest import (
     NoUpdateAvailableError,
@@ -27,6 +29,51 @@ from ui.main_window_types import MainWindowHost
 class MainWindowUIHelpMixin(MainWindowHost):
     def _open_latest_release_page(self) -> None:
         webbrowser.open(Config.UPDATE_RELEASES_URL)
+
+    def _set_update_state(self, state: str) -> None:
+        self._update_state = str(state or "idle")
+        self._update_operation_in_progress = self._update_state in {
+            "checking",
+            "downloading",
+            "awaiting_confirmation",
+            "applying",
+        }
+
+    def _discard_staged_update(self, staged: Path) -> None:
+        try:
+            staged.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning("Could not remove staged update %s: %s", staged, exc)
+
+    def _notify_pending_update_result(self) -> None:
+        target = Path(sys.executable).resolve()
+        staging_root = resolve_update_staging_root(
+            storage_root=Config.STORAGE_DIR,
+            install_dir=target.parent,
+            storage_mode=Config.STORAGE_MODE,
+        )
+        result = consume_update_result(update_result_path(staging_root))
+        if not result:
+            return
+        status = str(result.get("status", "failed"))
+        error = str(result.get("error", "") or "")
+        if status == "applied":
+            self._set_status("이전 실행에서 업데이트를 완료했습니다.", "success")
+            self._show_toast("업데이트가 완료되었습니다.", "success", 3500)
+            return
+        message = "업데이트 후 원래 버전으로 복원했습니다." if status == "rolled_back" else "업데이트를 적용하지 못했습니다."
+        if error:
+            message = f"{message}\n\n오류: {error}"
+        self._set_status("업데이트 적용 실패", "warning")
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("업데이트 결과")
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText(f"{message}\n\n최신 버전은 릴리스 페이지에서 직접 받을 수 있습니다.")
+        release_button = dialog.addButton("릴리스 페이지 열기", QMessageBox.ButtonRole.ActionRole)
+        dialog.addButton("닫기", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton() is release_button:
+            self._open_latest_release_page()
 
     def _check_for_updates(self, interactive: bool = True) -> None:
         if interactive and self._is_runtime_mutation_blocked("업데이트 확인"):
@@ -49,7 +96,7 @@ class MainWindowUIHelpMixin(MainWindowHost):
             return
         if interactive:
             self._set_status("업데이트 확인 중...", "running")
-        self._update_operation_in_progress = True
+        self._set_update_state("checking")
 
         def check_worker() -> None:
             try:
@@ -74,7 +121,7 @@ class MainWindowUIHelpMixin(MainWindowHost):
                 )
 
         if not self._start_background_thread(check_worker, "UpdateCheckWorker"):
-            self._update_operation_in_progress = False
+            self._set_update_state("idle")
             if interactive:
                 self._set_status("업데이트 확인 시작 실패", "warning")
             else:
@@ -84,11 +131,11 @@ class MainWindowUIHelpMixin(MainWindowHost):
         self, manifest: ReleaseManifest, *, interactive: bool = True
     ) -> None:
         if not isinstance(manifest, ReleaseManifest):
-            self._update_operation_in_progress = False
+            self._set_update_state("idle")
             self._handle_update_failure("업데이트 응답 형식이 올바르지 않습니다.", interactive)
             return
         if not bool(getattr(sys, "frozen", False)):
-            self._update_operation_in_progress = False
+            self._set_update_state("idle")
             if interactive:
                 QMessageBox.information(
                     self,
@@ -99,7 +146,11 @@ class MainWindowUIHelpMixin(MainWindowHost):
         if not interactive and (
             str(getattr(self, "_last_notified_update_version", "")) == manifest.version
         ):
-            self._update_operation_in_progress = False
+            self._set_update_state("idle")
+            return
+        if self._is_runtime_mutation_blocked("업데이트 설치"):
+            self._set_update_state("deferred")
+            self._set_status("추출 중인 동안 업데이트 설치를 보류합니다.", "info")
             return
         self._last_notified_update_version = manifest.version
 
@@ -120,15 +171,20 @@ class MainWindowUIHelpMixin(MainWindowHost):
         dialog.exec()
         if dialog.clickedButton() is release_button:
             self._open_latest_release_page()
-            self._update_operation_in_progress = False
+            self._set_update_state("idle")
             self._set_status("릴리스 페이지를 열었습니다.", "info")
             return
         if dialog.clickedButton() is not update_button:
-            self._update_operation_in_progress = False
+            self._set_update_state("idle")
             self._set_status("업데이트 다운로드를 나중에 진행합니다.", "info")
             return
 
         def start_download() -> None:
+            if self._is_runtime_mutation_blocked("업데이트 설치"):
+                self._set_update_state("deferred")
+                self._set_status("추출 중인 동안 업데이트 설치를 보류합니다.", "info")
+                return
+            self._set_update_state("downloading")
             self._set_status(f"업데이트 {manifest.version} 다운로드 중...", "running")
 
             def download_worker() -> None:
@@ -150,6 +206,7 @@ class MainWindowUIHelpMixin(MainWindowHost):
                     backup = target.with_name(
                         f"{target.name}.v{Config.VERSION}.{uuid4().hex[:8]}.bak"
                     )
+                    result_file = update_result_path(staging_root)
                     self._emit_control_message(
                         "update_install_ready",
                         {
@@ -159,24 +216,26 @@ class MainWindowUIHelpMixin(MainWindowHost):
                             "version": manifest.version,
                             "sha256": manifest.artifact_sha256,
                             "size": manifest.artifact_size,
+                            "interactive": interactive,
+                            "result_file": str(result_file),
                         },
                     )
                 except Exception as exc:
                     self._emit_control_message(
-                        "update_install_failed", {"error": str(exc)}
+                        "update_install_failed", {"error": str(exc), "interactive": interactive}
                     )
 
             if not self._start_background_thread(
                 download_worker, "UpdateDownloadWorker"
             ):
-                self._update_operation_in_progress = False
+                self._set_update_state("idle")
                 self._set_status("업데이트 다운로드 시작 실패", "warning")
 
         if not self._run_after_dirty_session_action("업데이트 설치", start_download):
-            self._update_operation_in_progress = False
+            self._set_update_state("idle")
 
     def _handle_update_not_available(self, interactive: bool) -> None:
-        self._update_operation_in_progress = False
+        self._set_update_state("idle")
         if not interactive:
             logger.info("Update check completed: current version is latest")
             return
@@ -184,7 +243,7 @@ class MainWindowUIHelpMixin(MainWindowHost):
         QMessageBox.information(self, "업데이트", "현재 최신 버전을 사용 중입니다.")
 
     def _handle_update_failure(self, error: str, interactive: bool) -> None:
-        self._update_operation_in_progress = False
+        self._set_update_state("idle")
         if not interactive:
             logger.info("Startup update check failed: %s", error)
             return
@@ -211,6 +270,8 @@ class MainWindowUIHelpMixin(MainWindowHost):
         backup_value = payload.get("backup")
         sha256_value = payload.get("sha256")
         size_value = payload.get("size")
+        result_file_value = payload.get("result_file")
+        interactive = bool(payload.get("interactive", True))
         if (
             not isinstance(staged_value, str)
             or not staged_value
@@ -222,11 +283,18 @@ class MainWindowUIHelpMixin(MainWindowHost):
             or len(sha256_value) != 64
             or not isinstance(size_value, int)
             or size_value <= 0
+            or not isinstance(result_file_value, str)
+            or not result_file_value
         ):
-            self._update_operation_in_progress = False
-            self._set_status("업데이트 설치 정보가 올바르지 않습니다.", "error")
+            self._handle_update_failure("업데이트 설치 정보가 올바르지 않습니다.", interactive)
             return
         staged = Path(staged_value).resolve()
+        if self._is_runtime_mutation_blocked("업데이트 설치"):
+            self._discard_staged_update(staged)
+            self._set_update_state("deferred")
+            self._set_status("추출 중이라 다운로드한 업데이트 설치를 보류했습니다. 중지 후 다시 확인하세요.", "info")
+            return
+        self._set_update_state("awaiting_confirmation")
         reply = QMessageBox.question(
             self,
             "업데이트 검증 완료",
@@ -235,8 +303,8 @@ class MainWindowUIHelpMixin(MainWindowHost):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply != QMessageBox.StandardButton.Yes:
-            staged.unlink(missing_ok=True)
-            self._update_operation_in_progress = False
+            self._discard_staged_update(staged)
+            self._set_update_state("idle")
             self._set_status("업데이트 설치 취소", "info")
             return
         try:
@@ -247,12 +315,13 @@ class MainWindowUIHelpMixin(MainWindowHost):
                 parent_pid=os.getpid(),
                 expected_sha256=sha256_value,
                 expected_size=size_value,
+                result_file=result_file_value,
             )
         except Exception as exc:
-            staged.unlink(missing_ok=True)
-            self._update_operation_in_progress = False
-            self._set_status(f"업데이트 설치 시작 실패: {exc}", "error")
+            self._discard_staged_update(staged)
+            self._handle_update_failure(f"업데이트 설치 시작 실패: {exc}", interactive)
             return
+        self._set_update_state("applying")
         self._set_status(
             f"업데이트 {payload.get('version', '')} 설치를 위해 종료합니다.",
             "success",

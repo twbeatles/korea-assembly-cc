@@ -363,9 +363,10 @@ class Config:
             "twbeatles/korea-assembly-cc/main/updates/latest.json"
         ),
     )
+    UPDATE_PUBLIC_KEY_B64_DEFAULT = "sn3XzoeY1T6FwqMn0kQiaZWWZE72rBRFNWEjr43AE0M="
     UPDATE_PUBLIC_KEY_B64 = os.environ.get(
         "KACC_UPDATE_PUBLIC_KEY_B64",
-        "sn3XzoeY1T6FwqMn0kQiaZWWZE72rBRFNWEjr43AE0M=",
+        UPDATE_PUBLIC_KEY_B64_DEFAULT,
     )
     UPDATE_RELEASES_URL = (
         "https://github.com/twbeatles/korea-assembly-cc/releases/latest"
@@ -373,6 +374,7 @@ class Config:
     UPDATE_MANIFEST_MAX_BYTES = 256 * 1024
     UPDATE_ARTIFACT_MAX_BYTES = 500 * 1024 * 1024
     UPDATE_REQUEST_TIMEOUT_SECONDS = 20
+    UPDATE_BACKUP_KEEP_COUNT = 2
     
     # 기본 CSS 선택자
     DEFAULT_SELECTORS = [
