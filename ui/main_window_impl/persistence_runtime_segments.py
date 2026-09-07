@@ -195,10 +195,13 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
                 int(self._runtime_next_segment_index),
                 segment_index + 1,
             )
-            self._write_runtime_manifest()
+            self._runtime_checkpoint_generation = (
+                self._runtime_checkpoint_generation_value() + 1
+            )
             self._write_runtime_tail_checkpoint(
                 self._clone_runtime_tail_entries_under_lock()
             )
+            self._write_runtime_manifest()
             self._schedule_ui_refresh(count=True, render=True, force_full=True)
             self._maybe_schedule_runtime_segment_flush()
 

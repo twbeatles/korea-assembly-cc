@@ -90,6 +90,7 @@ if TYPE_CHECKING:
         _capture_source_headless: bool
         _capture_source_realtime: bool
         _session_dirty: bool
+        _force_quit_for_update: bool
         current_session_lineage_id: str
         current_db_session_id: int | None
         is_dark_theme: bool

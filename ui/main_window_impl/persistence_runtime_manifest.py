@@ -19,6 +19,59 @@ QProgressDialog = cast(Any, getattr(QtWidgets, "QProgressDialog"))
 
 class MainWindowRuntimeManifestMixin(MainWindowHost):
 
+    def _adopt_runtime_tail_entries(
+            self,
+            loaded_entries: list[SubtitleEntry],
+            tail_entries: list[SubtitleEntry],
+            *,
+            manifest: dict[str, Any],
+            checkpoint_data: dict[str, Any],
+            allow_salvage: bool,
+        ) -> tuple[list[SubtitleEntry], str | None]:
+            def _optional_int(payload: dict[str, Any], key: str) -> int | None:
+                if key not in payload or payload.get(key) is None:
+                    return None
+                try:
+                    return int(payload.get(key, 0) or 0)
+                except Exception:
+                    return None
+
+            manifest_generation = _optional_int(manifest, "checkpoint_generation")
+            tail_generation = _optional_int(checkpoint_data, "checkpoint_generation")
+            manifest_archived = _optional_int(manifest, "archived_count")
+            tail_archived = _optional_int(checkpoint_data, "archived_count")
+            generation_mismatch = (
+                manifest_generation is not None
+                and tail_generation is not None
+                and manifest_generation != tail_generation
+            )
+            archived_mismatch = (
+                manifest_archived is not None
+                and tail_archived is not None
+                and manifest_archived != tail_archived
+            )
+            if not generation_mismatch and not archived_mismatch:
+                return list(tail_entries), None
+
+            mismatch = "checkpoint generation mismatch"
+            loaded_ids = {
+                str(entry.entry_id)
+                for entry in loaded_entries
+                if str(entry.entry_id or "")
+            }
+            skip = 0
+            for entry in tail_entries:
+                entry_id = str(entry.entry_id or "")
+                if entry_id and entry_id in loaded_ids:
+                    skip += 1
+                    continue
+                break
+            if skip <= 0:
+                if not allow_salvage:
+                    raise ValueError(mismatch)
+                return [], mismatch
+            return list(tail_entries[skip:]), mismatch
+
     def _load_runtime_manifest_payload(
             self,
             path: str | Path,
@@ -218,7 +271,18 @@ class MainWindowRuntimeManifestMixin(MainWindowHost):
                     else:
                         adopt_meta(checkpoint_data)
                         skipped += tail_skipped
-                        all_entries.extend(tail_entries)
+                        adopted_tail, tail_warning = self._adopt_runtime_tail_entries(
+                            all_entries,
+                            tail_entries,
+                            manifest=manifest,
+                            checkpoint_data=checkpoint_data if isinstance(checkpoint_data, dict) else {},
+                            allow_salvage=allow_salvage,
+                        )
+                        if tail_warning:
+                            if not allow_salvage:
+                                raise ValueError(tail_warning)
+                            warnings.append(tail_warning)
+                        all_entries.extend(adopted_tail)
             elif checkpoint_path is not None and allow_salvage:
                 skipped_files += 1
                 warnings.append(f"{safe_checkpoint_relative} 이(가) 없어 tail 복구를 건너뜁니다.")

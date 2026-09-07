@@ -1,25 +1,20 @@
 from __future__ import annotations
 
 import argparse
-import os
-import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.process_wait import wait_for_process_exit
 from core.update_installer import apply_staged_update, write_update_result
 
 
-def _wait_for_parent(parent_pid: int, timeout: float = 30.0) -> None:
-    if parent_pid <= 0:
-        raise ValueError("Parent process ID must be positive")
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            os.kill(parent_pid, 0)
-        except OSError:
-            return
-        time.sleep(0.2)
-    raise TimeoutError("Parent process did not exit before update")
+def _wait_for_parent(
+    parent_pid: int,
+    timeout: float = 120.0,
+    wait_impl: Callable[[int, float], bool] | None = None,
+) -> None:
+    wait_for_process_exit(parent_pid, timeout=timeout, wait_impl=wait_impl)
 
 
 def main(argv: list[str] | None = None) -> int:

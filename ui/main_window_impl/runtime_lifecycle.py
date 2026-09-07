@@ -828,6 +828,8 @@ class MainWindowRuntimeLifecycleMixin(RuntimeLifecycleBase):
         if a0 is None:
             return
         event = a0
+        if bool(self.__dict__.get("_force_quit_for_update", False)):
+            self.minimize_to_tray = False
         if self.minimize_to_tray and self.tray_icon.isVisible():
             if self.is_running:
                 # 추출 중에는 사용자 의도를 한 번 더 확인 (백그라운드 캡처 지속 vs 실제 종료)

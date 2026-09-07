@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 v16.14.9
+# 🏛️ 국회 의사중계 자막 추출기 v16.14.10
 
 국회 의사중계 웹사이트에서 **실시간 AI 자막**을 자동으로 추출하고 저장하는 PyQt6 기반 데스크톱 프로그램입니다.
 
@@ -29,7 +29,7 @@
 - 국회 의사중계 AI 자막을 **딜레이 없이** 즉시 캡처
 - 발언자 전환을 자동 감지해 자막을 구분 저장
 - 중복 자막 자동 제거 및 스마트 이어붙이기
-- 연결 끊김 시 자동 재연결 — 상태바에 🟢 연결됨 / 🔴 끊김 / 🟡 재연결 중 표시
+- 수집 중 연결 끊김 시 자동 재연결 — 상태바에 🟢 연결됨 / 🔴 끊김 / 🟡 재연결 중 표시. 최초 Chrome/네트워크 오류도 같은 횟수로 재시도하며, 비중계·자막 요소 없음은 즉시 안내하고 재시도하지 않습니다.
 
 ### 🏛️ 상임위원회 프리셋
 - 본회의·상임위·특별위·청문회 URL을 원클릭으로 선택
@@ -46,7 +46,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 
 ### 🗄️ 세션 및 이력 관리
 - 세션 저장/불러오기 — 언제든 중단 후 나중에 재개 가능
-- SQLite DB에 자동 저장 → 과거 자막 전체 검색 및 세션 불러오기
+- 세션 저장 시 JSON과 함께 SQLite DB에 저장 → 과거 자막 전체 검색 및 세션 불러오기. 무저장 장기 수집의 복구 근거는 runtime archive입니다.
 - 저장 도중 편집·수집이 계속되어도 revision 기준으로 미저장 변경을 정확히 유지하고, DB 재시도는 operation ID로 중복 저장 방지
 - 대용량 JSON/runtime/DB 세션은 공통 byte·entry budget과 점진 DB 로드(progress/cancel)를 적용
 - 5분마다 자동 백업(일반 세션: `backup_*.json`, 장시간 추출: runtime manifest/tail 복구 포인터), 비정상 종료 후 재시작 시 여러 복구 후보를 비교·선택
@@ -251,7 +251,7 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 ```bash
 pip install pyinstaller
 pyinstaller subtitle_extractor.spec
-# dist/국회의사중계자막추출기 v16.14.9.exe
+# dist/국회의사중계자막추출기 v16.14.10.exe
 ```
 
 **Portable 모드**: EXE 파일 옆에 `portable.flag` 파일을 만들어두면 로그·세션·DB·설정을 EXE 폴더에 저장합니다.  
@@ -306,6 +306,10 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 ---
 
 ## 📝 변경 이력
+
+### v16.14.10 (2026-09-07)
+- **PROJECT_AUDIT 후속** — Windows 업데이트 helper가 부모를 강제 종료하지 않음, runtime checkpoint 세대 commit, 다중 인스턴스 archive 소유권, cross-volume EXE 교체, 비중계 안내, 위원회 정식명 동기화
+- 회귀: `tests/test_project_audit_20260907.py`
 
 ### v16.14.9 (2026-08-16)
 - **업데이트 운영 보강** — 릴리스 개인키·내장 공개키 일치 검증, helper 결과 영속화/다음 시작 알림, 실행 중 수집과의 설치 경합 차단, backup 보존 수 제한, manifest 게시의 main ancestry·직렬화 검증

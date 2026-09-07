@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -146,6 +147,68 @@ def _validate_apply_paths(target: Path, staged: Path, backup: Path) -> None:
     backup.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _is_cross_device_error(exc: BaseException) -> bool:
+    if not isinstance(exc, OSError):
+        return False
+    if getattr(exc, "errno", None) == errno.EXDEV:
+        return True
+    return getattr(exc, "winerror", None) == 17
+
+
+def _hash_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().lower()
+
+
+def _stage_on_target_volume(
+    staged: Path,
+    target: Path,
+    *,
+    expected_sha256: str | None,
+    expected_size: int | None,
+) -> Path:
+    local = (target.parent / f".update-apply-{uuid4().hex}.exe").resolve()
+    try:
+        shutil.copy2(staged, local)
+        with open(local, "rb+") as handle:
+            handle.flush()
+            os.fsync(handle.fileno())
+        if expected_size is not None and local.stat().st_size != int(expected_size):
+            raise ValueError("Update artifact size mismatch after copy")
+        if (
+            expected_sha256 is not None
+            and _hash_file(local) != str(expected_sha256).strip().lower()
+        ):
+            raise ValueError("Update artifact hash mismatch after copy")
+        return local
+    except Exception:
+        local.unlink(missing_ok=True)
+        raise
+
+
+def _replace_into_target(source: Path, target: Path) -> None:
+    try:
+        os.replace(source, target)
+        return
+    except OSError as exc:
+        if not _is_cross_device_error(exc):
+            raise
+    local = _stage_on_target_volume(
+        source,
+        target,
+        expected_sha256=None,
+        expected_size=None,
+    )
+    try:
+        os.replace(local, target)
+    except Exception:
+        local.unlink(missing_ok=True)
+        raise
+
+
 def cleanup_update_backups(target: str | Path, *, keep_count: int | None = None) -> None:
     target_path = Path(target).resolve()
     keep = max(0, int(Config.UPDATE_BACKUP_KEEP_COUNT if keep_count is None else keep_count))
@@ -187,7 +250,8 @@ def apply_staged_update(
             raise ValueError("Update artifact hash mismatch before replacement")
     shutil.copy2(target_path, backup_path)
     try:
-        os.replace(staged_path, target_path)
+        _replace_into_target(staged_path, target_path)
+        staged_path.unlink(missing_ok=True)
         if smoke_runner is None:
             completed = subprocess.run(
                 [str(target_path), "--smoke"],

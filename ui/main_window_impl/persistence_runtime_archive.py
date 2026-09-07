@@ -2,10 +2,17 @@
 
 import hashlib
 import bisect
+import os
 import shutil
 import time
 from typing import Any, Iterable, cast
 from uuid import uuid4
+
+from core.runtime_archive_owner import (
+    is_archive_owner_alive,
+    release_owner_file,
+    write_owner_file,
+)
 
 from PyQt6 import QtWidgets
 from PyQt6.QtCore import Qt, QTimer
@@ -150,7 +157,8 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             return {
                 "runtime_root": Path(runtime_root),
                 "manifest_path": Path(manifest_path),
-                "tail_checkpoint_name": "tail_checkpoint.json",
+                "tail_checkpoint_name": self._runtime_tail_checkpoint_name(),
+                "checkpoint_generation": self._runtime_checkpoint_generation_value(),
                 "manifest_items": [
                     dict(item)
                     for item in list(self.__dict__.get("_runtime_segment_manifest", []))
@@ -179,6 +187,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             archive_token: str = "",
             run_id: int | None = None,
             lineage_id: str = "",
+            checkpoint_generation: int = 0,
         ) -> dict[str, Any]:
             payload = {
                 "format": "runtime_session_manifest_v1",
@@ -190,6 +199,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 "archived_count": int(archived_count),
                 "archived_chars": int(archived_chars),
                 "archived_words": int(archived_words),
+                "checkpoint_generation": int(checkpoint_generation),
                 "tail_checkpoint": str(tail_checkpoint_name or "tail_checkpoint.json"),
                 "segments": [dict(item) for item in manifest_items],
                 "capture_quality": self._get_capture_quality_payload(),
@@ -214,6 +224,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             archive_token: str = "",
             run_id: int | None = None,
             lineage_id: str = "",
+            checkpoint_generation: int = 0,
         ) -> None:
             utils.atomic_write_json(
                 manifest_path,
@@ -228,6 +239,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                     archive_token=archive_token,
                     run_id=run_id,
                     lineage_id=lineage_id,
+                    checkpoint_generation=checkpoint_generation,
                 ),
                 ensure_ascii=False,
             )
@@ -246,6 +258,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             run_id: int | None = None,
             lineage_id: str = "",
             tail_revision: int = 0,
+            checkpoint_generation: int = 0,
         ) -> None:
             fingerprint = self._build_runtime_entries_fingerprint(entries)
             head_items: list[tuple[str, object]] = [
@@ -259,6 +272,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 ("archived_count", int(archived_count)),
                 ("archived_chars", int(archived_chars)),
                 ("archived_words", int(archived_words)),
+                ("checkpoint_generation", int(checkpoint_generation)),
                 ("entry_count", fingerprint["entry_count"]),
                 ("first_entry_id", fingerprint["first_entry_id"]),
                 ("last_entry_id", fingerprint["last_entry_id"]),
@@ -368,12 +382,18 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             self._runtime_search_in_progress = False
             self._runtime_tail_revision = 0
             self._runtime_tail_checkpoint_revision = -1
+            self._runtime_checkpoint_generation = 0
             if not keep_root:
                 self._runtime_session_root = None
                 self._runtime_manifest_path = None
 
     def _cleanup_runtime_session_archive(self, *, remove_files: bool = True) -> None:
             runtime_root = self.__dict__.get("_runtime_session_root")
+            if runtime_root is not None:
+                try:
+                    release_owner_file(runtime_root)
+                except Exception:
+                    logger.debug("runtime archive owner 해제 실패: %s", runtime_root, exc_info=True)
             self._reset_runtime_session_archive_state(keep_root=False)
             if remove_files and runtime_root is not None:
                 try:
@@ -449,6 +469,11 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 if resolved in preserved_resolved:
                     continue
                 try:
+                    if is_archive_owner_alive(resolved):
+                        continue
+                except Exception:
+                    pass
+                try:
                     mtime = float(child.stat().st_mtime)
                 except Exception:
                     mtime = now_ts
@@ -478,14 +503,35 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             previous_root = self.__dict__.get("_runtime_session_root")
             self._cleanup_runtime_session_archive(remove_files=False)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            suffix = f"{int(run_id)}" if run_id is not None else "manual"
-            runtime_root = Path(Config.RUNTIME_SESSION_DIR) / f"run_{timestamp}_{suffix}"
-            runtime_root.mkdir(parents=True, exist_ok=True)
+            runtime_root: Path | None = None
+            archive_token = ""
+            pid = os.getpid()
+            Path(Config.RUNTIME_SESSION_DIR).mkdir(parents=True, exist_ok=True)
+            for _attempt in range(8):
+                archive_token = uuid4().hex
+                runtime_root = (
+                    Path(Config.RUNTIME_SESSION_DIR)
+                    / f"run_{timestamp}_{pid}_{archive_token[:8]}"
+                )
+                try:
+                    runtime_root.mkdir(parents=True, exist_ok=False)
+                    break
+                except FileExistsError:
+                    runtime_root = None
+                    continue
+            if runtime_root is None:
+                raise RuntimeError("runtime archive 디렉터리를 만들지 못했습니다.")
             self._runtime_session_root = runtime_root
             self._runtime_manifest_path = runtime_root / "manifest.json"
             self._reset_runtime_session_archive_state(keep_root=True)
             self._runtime_archive_run_id = int(run_id) if run_id is not None else None
-            self._runtime_archive_token = uuid4().hex
+            self._runtime_archive_token = archive_token
+            write_owner_file(
+                runtime_root,
+                pid=pid,
+                token=archive_token,
+                run_id=self._runtime_archive_run_id,
+            )
             self._write_runtime_manifest()
             preserved_dirs: set[Path] = set()
             if previous_root is not None:
@@ -495,11 +541,24 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                     pass
             self._cleanup_orphan_runtime_archives(extra_preserved_dirs=preserved_dirs)
 
+    def _runtime_checkpoint_generation_value(self) -> int:
+            return max(0, int(self.__dict__.get("_runtime_checkpoint_generation", 0) or 0))
+
+    def _runtime_tail_checkpoint_name(self, generation: int | None = None) -> str:
+            gen = (
+                self._runtime_checkpoint_generation_value()
+                if generation is None
+                else max(0, int(generation))
+            )
+            if gen <= 0:
+                return "tail_checkpoint.json"
+            return f"tail_checkpoint_{gen:06d}.json"
+
     def _runtime_tail_checkpoint_path(self) -> Path | None:
             runtime_root = self.__dict__.get("_runtime_session_root")
             if runtime_root is None:
                 return None
-            return runtime_root / "tail_checkpoint.json"
+            return runtime_root / self._runtime_tail_checkpoint_name()
 
     def _is_runtime_tail_checkpoint_current(self) -> bool:
             checkpoint_path = self._runtime_tail_checkpoint_path()
@@ -519,9 +578,10 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 archived_chars=int(self._runtime_archived_chars),
                 archived_words=int(self._runtime_archived_words),
                 manifest_items=[dict(item) for item in self._runtime_segment_manifest],
-                tail_checkpoint_name="tail_checkpoint.json",
+                tail_checkpoint_name=self._runtime_tail_checkpoint_name(),
                 archive_token=str(self.__dict__.get("_runtime_archive_token", "") or ""),
                 run_id=self.__dict__.get("_runtime_archive_run_id"),
+                checkpoint_generation=self._runtime_checkpoint_generation_value(),
             )
 
     def _write_runtime_manifest(self) -> None:
@@ -537,10 +597,11 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 archived_chars=int(self._runtime_archived_chars),
                 archived_words=int(self._runtime_archived_words),
                 manifest_items=[dict(item) for item in self._runtime_segment_manifest],
-                tail_checkpoint_name="tail_checkpoint.json",
+                tail_checkpoint_name=self._runtime_tail_checkpoint_name(),
                 archive_token=str(self.__dict__.get("_runtime_archive_token", "") or ""),
                 run_id=self.__dict__.get("_runtime_archive_run_id"),
                 lineage_id=self._ensure_session_lineage_id(),
+                checkpoint_generation=self._runtime_checkpoint_generation_value(),
             )
 
     def _write_runtime_tail_checkpoint(
@@ -569,6 +630,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 run_id=self.__dict__.get("_runtime_archive_run_id"),
                 lineage_id=self._ensure_session_lineage_id(),
                 tail_revision=tail_revision,
+                checkpoint_generation=self._runtime_checkpoint_generation_value(),
             )
             self._runtime_tail_checkpoint_revision = tail_revision
             return checkpoint_path
@@ -616,6 +678,9 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             current_url = str(context.get("url", "") or "")
             committee_name = str(context.get("committee_name", "") or "")
             lineage_id = str(context.get("lineage_id", "") or "").strip()
+            captured_generation = max(
+                0, int(context.get("checkpoint_generation", 0) or 0)
+            )
             self._write_runtime_tail_checkpoint_to_path(
                 checkpoint_path,
                 list(prepared_entries),
@@ -628,6 +693,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 run_id=(int(run_id) if run_id is not None else None),
                 lineage_id=lineage_id,
                 tail_revision=captured_tail_revision,
+                checkpoint_generation=captured_generation,
             )
             self._write_runtime_manifest_to_path(
                 manifest_file_path,
@@ -644,6 +710,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
                 archive_token=archive_token,
                 run_id=(int(run_id) if run_id is not None else None),
                 lineage_id=lineage_id,
+                checkpoint_generation=captured_generation,
             )
 
             if archive_token and not self._is_runtime_archive_identity_current(run_id, archive_token):

@@ -307,26 +307,36 @@ class MainWindowUIHelpMixin(MainWindowHost):
             self._set_update_state("idle")
             self._set_status("업데이트 설치 취소", "info")
             return
-        try:
-            launch_update_helper(
-                target=target_value,
-                staged=staged,
-                backup=backup_value,
-                parent_pid=os.getpid(),
-                expected_sha256=sha256_value,
-                expected_size=size_value,
-                result_file=result_file_value,
+
+        def launch_and_quit() -> None:
+            self._force_quit_for_update = True
+            try:
+                launch_update_helper(
+                    target=target_value,
+                    staged=staged,
+                    backup=backup_value,
+                    parent_pid=os.getpid(),
+                    expected_sha256=sha256_value,
+                    expected_size=size_value,
+                    result_file=result_file_value,
+                )
+            except Exception as exc:
+                self._force_quit_for_update = False
+                self._discard_staged_update(staged)
+                self._handle_update_failure(f"업데이트 설치 시작 실패: {exc}", interactive)
+                return
+            self._set_update_state("applying")
+            self._set_status(
+                f"업데이트 {payload.get('version', '')} 설치를 위해 종료합니다.",
+                "success",
             )
-        except Exception as exc:
+            QApplication.quit()
+
+        if not self._run_after_dirty_session_action("업데이트 설치", launch_and_quit):
             self._discard_staged_update(staged)
-            self._handle_update_failure(f"업데이트 설치 시작 실패: {exc}", interactive)
+            self._set_update_state("idle")
+            self._set_status("업데이트 설치 취소", "info")
             return
-        self._set_update_state("applying")
-        self._set_status(
-            f"업데이트 {payload.get('version', '')} 설치를 위해 종료합니다.",
-            "success",
-        )
-        QApplication.quit()
 
     def _show_guide(self):
             """사용법 가이드 표시"""

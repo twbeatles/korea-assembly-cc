@@ -406,7 +406,7 @@ class Config:
         "농림축산식품해양수산위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=53",
         "산업통상자원중소벤처기업위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=55",
         "보건복지위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=33",
-        "기후환경노동위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=62",
+        "기후에너지환경노동위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=62",
         "국토교통위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=54",
         "성평등가족위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=63",
         "예산결산특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=21",
@@ -431,7 +431,7 @@ class Config:
         "농림축산식품해양수산위원회": 53,
         "산업통상자원중소벤처기업위원회": 55,
         "보건복지위원회": 33,
-        "기후환경노동위원회": 62,
+        "기후에너지환경노동위원회": 62,
         "국토교통위원회": 54,
         "성평등가족위원회": 63,
         "예산결산특별위원회": 21,
@@ -465,8 +465,9 @@ class Config:
         "산자위": "산업통상자원중소벤처기업위원회",
         "산자중기위": "산업통상자원중소벤처기업위원회",
         "복지위": "보건복지위원회",
-        "환노위": "기후환경노동위원회",  # 구 환경노동위원회 → 기후환경노동위원회
-        "기후노동위": "기후환경노동위원회",  # 사이트 내 타이틀 표기
+        "환노위": "기후에너지환경노동위원회",  # 구 환경노동위원회
+        "기후노동위": "기후에너지환경노동위원회",  # 사이트 내 타이틀 표기
+        "기후환경노동위원회": "기후에너지환경노동위원회",  # 구 정식 명칭
         "국토위": "국토교통위원회",
         "여가위": "성평등가족위원회",  # 구 여성가족위원회 → 성평등가족위원회
         "성평등가족위": "성평등가족위원회",  # 사이트 내 타이틀 표기

@@ -172,6 +172,10 @@ class RecoverableWebDriverError(RuntimeError):
     """웹드라이버 재연결로 복구 가능한 오류"""
 
 
+class NoBroadcastError(RuntimeError):
+    """현재 중계가 없거나 플레이어가 메인 페이지로 복귀한 상태."""
+
+
 @dataclass(slots=True)
 class WorkerQueueMessage:
     """Run-scoped worker message envelope used to drop stale capture runs."""

@@ -10,7 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from core import utils
 from core.config import Config
 from core.logging_utils import logger
-from ui.main_window_common import RecoverableWebDriverError
+from ui.main_window_common import NoBroadcastError, RecoverableWebDriverError
 from ui.main_window_impl.contracts import CaptureBrowserHost
 
 
@@ -22,12 +22,93 @@ CaptureBrowserBase = CaptureBrowserHost if TYPE_CHECKING else object
 
 
 class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
+    NO_BROADCAST_MESSAGE = (
+        "현재 중계가 없습니다. 생중계 목록에서 진행 중인 방송을 선택하세요."
+    )
+
     def _get_reconnect_delay(self, attempt: int) -> float:
         """지수 백오프 기반 재연결 대기 시간(초) 계산"""
         if attempt <= 0:
             return 0.0
         delay = Config.RECONNECT_BASE_DELAY * (2 ** (attempt - 1))
         return min(delay, Config.RECONNECT_MAX_DELAY)
+
+    def _consume_browser_alert_text(self, driver: Any) -> str:
+        try:
+            alert = driver.switch_to.alert
+            text = str(getattr(alert, "text", "") or "")
+            dismiss = getattr(alert, "dismiss", None)
+            if callable(dismiss):
+                dismiss()
+            return text
+        except Exception:
+            return ""
+
+    def _looks_like_main_landing(self, url: str) -> bool:
+        lowered = str(url or "").strip().lower()
+        if not lowered:
+            return False
+        if "player.asp" in lowered:
+            return False
+        return "/main" in lowered and "assembly.webcast.go.kr" in lowered
+
+    def _raise_if_no_broadcast_landing(self, driver: Any, requested_url: str) -> None:
+        alert_text = self._consume_browser_alert_text(driver)
+        current_url = ""
+        try:
+            current_url = str(getattr(driver, "current_url", "") or "")
+        except Exception:
+            current_url = ""
+        if "잘못된 요청" in alert_text:
+            raise NoBroadcastError(self.NO_BROADCAST_MESSAGE)
+        requested = str(requested_url or "")
+        requested_player = "player.asp" in requested.lower() or "xcode=" in requested.lower()
+        if requested_player and self._looks_like_main_landing(current_url):
+            raise NoBroadcastError(self.NO_BROADCAST_MESSAGE)
+
+    def _open_initial_capture_driver_session(
+        self,
+        options: Options,
+        base_url: str,
+        selector: str,
+    ) -> tuple[Any, str, list[str], str, bool, tuple[int, ...]]:
+        attempts = max(1, int(Config.MAX_RECONNECT_ATTEMPTS))
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return self._open_capture_driver_session(
+                    options,
+                    base_url,
+                    selector,
+                    reconnecting=False,
+                )
+            except NoBroadcastError:
+                raise
+            except RecoverableWebDriverError as exc:
+                last_error = exc
+                if attempt >= attempts:
+                    raise
+                delay = self._get_reconnect_delay(attempt)
+                try:
+                    self.message_queue.put(
+                        (
+                            "reconnecting",
+                            {
+                                "attempt": attempt,
+                                "max_attempts": attempts,
+                                "delay": delay,
+                            },
+                        )
+                    )
+                except Exception:
+                    pass
+                if self.stop_event.wait(timeout=delay):
+                    raise
+            except Exception:
+                raise
+        if last_error is not None:
+            raise last_error
+        raise RecoverableWebDriverError("브라우저 세션을 시작하지 못했습니다.")
 
     def _is_recoverable_webdriver_error(self, error: Exception) -> bool:
         """재연결로 복구 가능한 웹드라이버 오류인지 판단"""
@@ -209,12 +290,20 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
             )
 
             self.message_queue.put(("status", "페이지 로딩 중..."))
-            driver.get(connected_url)
+            try:
+                driver.get(connected_url)
+            except Exception as exc:
+                if "잘못된 요청" in str(exc):
+                    raise NoBroadcastError(self.NO_BROADCAST_MESSAGE) from exc
+                self._raise_if_recoverable_webdriver_error(exc, "페이지 로딩 실패")
+                raise
+            self._raise_if_no_broadcast_landing(driver, base_url)
             connected_url = self._resolve_live_url_for_driver(
                 driver,
                 connected_url,
                 reconnecting=reconnecting,
             )
+            self._raise_if_no_broadcast_landing(driver, base_url)
 
             self.message_queue.put(("status", "AI 자막 활성화 중..."))
             self._activate_subtitle(driver)
@@ -385,11 +474,10 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                     active_selector,
                     observer_active,
                     observer_frame_path,
-                ) = self._open_capture_driver_session(
+                ) = self._open_initial_capture_driver_session(
                     options,
                     requested_url,
                     selector,
-                    reconnecting=False,
                 )
             except Exception as e:
                 terminal_success = False

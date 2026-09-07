@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.9
+- **버전**: v16.14.10
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -110,8 +110,8 @@ Raw Text(Observer/폴링) → preview 메시지 → _prepare_preview_raw(정규�
 
 ### 4.3 예외 처리
 - 파일 I/O는 모두 `try-except`로 보호
-- WebDriver 연결 실패 시 **지수 백오프로 자동 재연결** (최대 5회)
-- 자막 요소 없을 경우 여러 선택자를 순차 시도
+- 수집 루프의 WebDriver 단절과 최초 접속의 recoverable 오류는 **지수 백오프로 자동 재연결** (최대 5회). 비중계·자막 요소 없음은 재시도하지 않고 안내 후 종료
+- 자막 요소 없을 경우 여러 선택자를 순차 시도. 비중계(alert/메인 복귀)면 selector 대기를 건너뛴다
 
 ### 4.4 설정 영속성
 - 저장소 루트는 `development=repo root`, `portable=EXE dir(옆에 portable.flag 존재)`, `frozen default=%LOCALAPPDATA%\AssemblySubtitle\Extractor` 3가지 모드로 고정한다.
@@ -139,6 +139,8 @@ korea-assembly-cc/
     subtitle_pipeline_impl/     # pipeline type/history/incremental/entry helper 내부 구현
     text_utils.py
     url_policy.py               # 시작 URL/프리셋/URL 히스토리 sanitize 공통 정책
+    process_wait.py             # Windows SYNCHRONIZE / POSIX 프로세스 대기
+    runtime_archive_owner.py    # runtime archive owner.json lease
     export_text.py              # export 공통 sanitize / SRT·VTT 상대 타임코드
     subtitle_row_split.py       # multi-speaker 분할 규칙 순수 미러 (probe JS 정합)
     hwpx_export.py              # 기본 HWPX 내보내기
@@ -238,7 +240,16 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.9 기준)
+## 6. 최신 변경 요약 (v16.14.10 기준)
+
+### v16.14.10 PROJECT_AUDIT 후속 (2026-09-07)
+- **Windows 업데이트 helper**: `os.kill(pid, 0)` 제거. SYNCHRONIZE wait + dirty handshake. timeout 시 EXE 교체 없음
+- **runtime generation commit**: 불변 `tail_checkpoint_{N}.json`을 먼저 쓰고 manifest가 가리킨다. 혼합 세대는 `entry_id` 경계만 보정하고 경고한다
+- **다중 인스턴스 소유권**: `run_{time}_{pid}_{token}` exclusive mkdir, `owner.json` lease, live-owner GC/복구 제외, 실시간 TXT exclusive create
+- **cross-volume 업데이트**: EXDEV 시 대상 디렉터리로 복사 후 교체
+- **비중계 UX**: `잘못된 요청`/메인 복귀를 “현재 중계 없음”으로 구분. 위원회 정식명 `기후에너지환경노동위원회`
+- **JSON 계약**: 세션 JSON header에 `save_operation_id`, 일반 backup에 `capture_quality`
+- **회귀**: `tests/test_project_audit_20260907.py`
 
 ### v16.14.9 업데이트 운영 안정화 (2026-08-16)
 - **업데이트 신뢰 경계**: release workflow가 GitHub Secret 공개키와 frozen 기본 공개키, 개인키의 Ed25519 짝을 모두 검증한다.
@@ -639,9 +650,9 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 ## 10-2. 2026-08-11 기능 감사 개선 계약
 
 - **revision 저장**: 모든 세션 mutation은 `_session_revision`을 증가시킨다. 비동기 저장 완료는 시작 revision과 현재 revision이 같을 때만 dirty를 해제하며, 다르면 후속 종료/로드 action을 자동 실행하지 않는다.
-- **DB 저장 멱등성**: JSON snapshot의 `save_operation_id`를 SQLite에도 전달한다. 동일 operation 재시도는 같은 DB 세션을 반환하며 persistence save는 임의 timeout으로 성공/실패를 오판하지 않는다.
+- **DB 저장 멱등성**: JSON snapshot header의 `save_operation_id`를 SQLite에도 전달한다. 동일 operation 재시도는 같은 DB 세션을 반환하며 persistence save는 임의 timeout으로 성공/실패를 오판하지 않는다.
 - **resource budget**: 일반 JSON, runtime manifest/segment/tail, salvage, DB hydrate는 `core/resource_budget.py`의 byte/entry 한도를 공유한다. DB row는 `fetchmany()` 기반으로 progress/cancel을 지원한다.
-- **입력·Windows 계약**: 저장 중복 가드는 Windows case-insensitive canonical path key를 사용한다. URL은 HTTPS 기본 포트, 허용 player path, token과 전체 길이를 검사하고 history/preset/live payload도 크기를 제한한다.
+- **입력·Windows 계약**: 저장 중복 가드는 Windows case-insensitive canonical path key를 사용한다. 시작 URL/프리셋/히스토리는 HTTP/HTTPS와 각 기본 포트를 허용하고, 허용 player path·token·전체 길이를 검사한다. 업데이트 artifact URL은 HTTPS만 허용한다. history/preset/live payload도 크기를 제한한다.
 - **preview 복구·진단**: worker sequence gap 발생 시 최신 full DOM snapshot을 적용한다. drop/gap/salvage/reconnect 진단은 `CaptureQualityState`로 JSON/runtime/DB에 보존한다.
 - **복구 UX**: 자동 복구는 단일 최신 파일을 강제하지 않고 유효 후보를 정렬해 사용자 선택을 받는다. 취소와 로드 실패는 현재 세션을 변경하지 않는다.
 - **업데이트 신뢰 경계**: 개발 실행은 자동 설치를 금지한다. 배포 빌드는 내장 공개키로 Ed25519 manifest 서명, HTTPS, 만료, version, artifact size/SHA-256을 검증하고 검증 후 사용자 승인을 다시 받은 다음 helper가 EXE를 교체한다. 새 EXE `--smoke` 실패 시 백업을 복원하고 다음 시작에서 결과를 알린다.

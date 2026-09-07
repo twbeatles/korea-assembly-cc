@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.8
+- **버전**: v16.14.10
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ### 관련 문서
@@ -159,6 +159,8 @@ korea-assembly-cc/
     subtitle_pipeline_impl/     # pipeline type/history/incremental/entry helper 내부 구현
     text_utils.py
     url_policy.py               # 시작 URL/프리셋/URL 히스토리 sanitize 공통 정책
+    process_wait.py             # Windows SYNCHRONIZE / POSIX 프로세스 대기
+    runtime_archive_owner.py    # runtime archive owner.json lease
     hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim
   ui/                           # UI 구성요소
@@ -251,6 +253,7 @@ pip install -r requirements-dev.txt
 - `tests/test_live_contract_smoke.py`: `RUN_LIVE_SMOKE=1` opt-in 실제 `live_list.asp` schema smoke
 - `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
 - `tests/test_url_policy.py`: URL policy/default URL/history sanitize 회귀 검증
+- `tests/test_project_audit_20260907.py`: 2026-09-07 PROJECT_AUDIT 후속 회귀
 
 ## 9. HWPX 기본 내보내기 추가 (2026-03-23)
 
@@ -265,8 +268,8 @@ pip install -r requirements-dev.txt
 - 툴팁에 응답 시간 표시
 
 ### #31 자동 재연결
-- 지수 백오프 알고리즘 (2→4→8→16→32초)
-- 최대 5회 재시도, 토스트 알림
+- 수집 루프 단절과 최초 접속 recoverable 오류는 지수 백오프(2→4→8→16→32초), 최대 5회
+- 비중계(alert/메인 복귀)와 자막 요소 없음은 재시도하지 않고 안내 후 종료
 - URL에 `xcgcd`가 없는 경우에만 자동 감지를 연결하고, 이미 있으면 기존 URL 유지
 
 ### #28 자동 파일명 생성
@@ -304,7 +307,7 @@ pip install -r requirements-dev.txt
 | 변경 전 | 변경 후 | xcode |
 |---------|---------|-------|
 | 기획재정위원회 | 재정경제기획위원회 | 65 (이전 38) |
-| 환경노동위원회 | 기후환경노동위원회 | 62 (동일) |
+| 환경노동위원회 | 기후에너지환경노동위원회 | 62 (동일) |
 | 여성가족위원회 | 성평등가족위원회 | 63 (이전 36) |
 | - | 정무위원회 (신규 추가) | 26 |
 
@@ -446,6 +449,14 @@ pip install -r requirements-dev.txt
 - 로컬 `typings/` stub과 `pytest.ini --basetemp=.pytest_tmp`로 글로벌 Python/Windows TEMP 권한 편차를 흡수하고, 루트 `.hwpx` 산출물도 `.gitignore`에 반영
 - `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
 - `pytest -q` 85 pass, `pyright` 0 errors
+
+## 9.9.4d v16.14.10 PROJECT_AUDIT 후속 (2026-09-07)
+- Windows 업데이트 helper: `os.kill(pid, 0)` 제거, SYNCHRONIZE wait, dirty handshake, tray 우회
+- runtime generation commit: 불변 `tail_checkpoint_{N}.json` 선기록, 혼합 세대는 `entry_id` 경계 + warning
+- 다중 인스턴스: exclusive `run_{time}_{pid}_{token}`, `owner.json` lease, live-owner GC/복구 제외
+- cross-volume EXE 교체, 비중계 안내, 최초 recoverable retry, 위원회 정식명 `기후에너지환경노동위원회`
+- JSON `save_operation_id` / backup `capture_quality`
+- 회귀: `tests/test_project_audit_20260907.py`
 
 ## 9.9.4c v16.14.8 수집 정합·export·CI 게이트 (2026-08-10)
 - Chrome 확장 P1: AI 자막 active 재클릭 방지, multi-speaker span 분할

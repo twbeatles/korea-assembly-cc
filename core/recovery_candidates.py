@@ -7,6 +7,7 @@ from typing import Any
 
 from core.config import Config
 from core.file_io import canonical_path_key, read_limited_json_file
+from core.runtime_archive_owner import is_archive_owner_alive
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +141,13 @@ def discover_recovery_candidates(
         specs.extend((path, "backup") for path in backup_root.glob("backup_*.json"))
     runtime_root = Path(runtime_session_dir)
     if runtime_root.is_dir():
-        specs.extend((path, "runtime_manifest") for path in runtime_root.rglob("manifest.json"))
+        for path in runtime_root.rglob("manifest.json"):
+            try:
+                if is_archive_owner_alive(path.parent):
+                    continue
+            except Exception:
+                pass
+            specs.append((path, "runtime_manifest"))
 
     unique: dict[str, tuple[Path, str]] = {}
     for path, snapshot_type in specs:

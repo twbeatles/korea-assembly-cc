@@ -464,6 +464,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                     ("url", current_url),
                     ("committee_name", committee_name),
                     ("lineage_id", lineage_id),
+                    ("save_operation_id", operation_id),
                     ("capture_quality", capture_quality),
                 ],
                 sequence_key="subtitles",
@@ -710,6 +711,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                 source_url, committee_name, _duration = self._build_session_save_context()
                 created_at = datetime.now().isoformat()
                 lineage_id = self._ensure_session_lineage_id()
+                capture_quality = self._get_capture_quality_payload()
                 snapshot_entries = [entry.clone() for entry in prepared_entries]
             except Exception as e:
                 try:
@@ -730,6 +732,7 @@ class MainWindowPersistenceSessionMixin(MainWindowHost):
                             ("url", source_url),
                             ("committee_name", committee_name),
                             ("lineage_id", lineage_id),
+                            ("capture_quality", capture_quality),
                         ],
                         sequence_key="subtitles",
                         sequence_items=utils.iter_serialized_subtitles(snapshot_entries),

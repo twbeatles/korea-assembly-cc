@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from core import utils
 from core.config import Config
+from core.file_io import next_available_path
 from core.logging_utils import logger
 from core.models import CaptureQualityState, SubtitleEntry
 from ui.main_window_impl.contracts import RuntimeHost
@@ -233,11 +234,20 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
 
         try:
             Path(Config.REALTIME_DIR).mkdir(exist_ok=True)
-            filename = (
-                f"{Config.REALTIME_DIR}/자막_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            candidate = Path(Config.REALTIME_DIR) / (
+                f"자막_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
             )
-            self.realtime_file = open(filename, "w", encoding="utf-8-sig")
-            self._set_realtime_save_status("active", path=filename)
+            handle = None
+            for _attempt in range(32):
+                try:
+                    handle = open(candidate, "x", encoding="utf-8-sig")
+                    break
+                except FileExistsError:
+                    candidate = next_available_path(candidate)
+            if handle is None:
+                raise FileExistsError(f"realtime path exhausted: {candidate}")
+            self.realtime_file = handle
+            self._set_realtime_save_status("active", path=str(candidate))
             return True
         except Exception as e:
             logger.error("실시간 저장 파일 생성 오류: %s", e)
