@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.10
+- **버전**: v16.14.11
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ### 관련 문서
@@ -307,7 +307,7 @@ pip install -r requirements-dev.txt
 | 변경 전 | 변경 후 | xcode |
 |---------|---------|-------|
 | 기획재정위원회 | 재정경제기획위원회 | 65 (이전 38) |
-| 환경노동위원회 | 기후에너지환경노동위원회 | 62 (동일) |
+| 환경노동위원회 | 기후에너지환경노동위원회 | 62 (동일, 구 표기 기후환경노동위원회) |
 | 여성가족위원회 | 성평등가족위원회 | 63 (이전 36) |
 | - | 정무위원회 (신규 추가) | 26 |
 
@@ -450,6 +450,13 @@ pip install -r requirements-dev.txt
 - `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
 - `pytest -q` 85 pass, `pyright` 0 errors
 
+## 9.9.4e v16.14.11 의사중계 사이트 계약 동기화 (2026-09-17)
+- 청문회/공청회 live_list xcode `99` → `97`. 구 코드는 `LEGACY_COMMITTEE_XCODES`로 식별만 유지한다.
+- 기후노동위 공식명을 `기후에너지환경노동위원회`로 맞추고 구 공식명/약칭은 alias로 둔다.
+- `core/committee_catalog.py` + `select_live_broadcast_row` 식별자 매칭으로 이후 xcode/명칭 변경에 대응한다. `target_xcode` 없는 자동 선택은 유지하지 않는다.
+- 허용 호스트는 `assembly.webcast.go.kr` 계열. `webcast.assembly.go.kr`은 2026-09 기준 DNS 실패.
+- 회귀: `tests/test_committee_catalog.py`
+
 ## 9.9.4d v16.14.10 PROJECT_AUDIT 후속 (2026-09-07)
 - Windows 업데이트 helper: `os.kill(pid, 0)` 제거, SYNCHRONIZE wait, dirty handshake, tray 우회
 - runtime generation commit: 불변 `tail_checkpoint_{N}.json` 선기록, 혼합 세대는 `entry_id` 경계 + warning
@@ -559,7 +566,7 @@ pip install -r requirements-dev.txt
 - 최신 기준선은 `pytest -q` 217 pass / 1 skipped, `pyright --outputjson` 0 errors / 0 warnings, import smoke 및 source smoke 2종 통과, `pyinstaller --clean subtitle_extractor.spec` 빌드 성공, frozen EXE 기본 `--smoke`와 `portable.flag` `--smoke-storage-preflight` exit code 0이다.
 
 ## 9.9.12 v16.14.7 기능 리스크 개선 전체 반영 (2026-05-18)
-- 기본 URL/본회의 프리셋은 `xcode=10`으로 고정하고, `특별위원회(91)`, `청문회/공청회(99)` 프리셋과 약칭을 추가했다. stale `IO` 기본 프리셋은 제거하되 사용자 저장 프리셋 JSON은 유지한다.
+- 기본 URL/본회의 프리셋은 `xcode=10`으로 고정하고, `특별위원회(91)`, `청문회/공청회`(당시 99, 2026-09 live_list 기준 97) 프리셋과 약칭을 추가했다. stale `IO` 기본 프리셋은 제거하되 사용자 저장 프리셋 JSON은 유지한다.
 - `target_xcode`가 없으면 단일 live row도 자동 선택하지 않는다. `resolved_url` 메시지는 `current_url`/history와 `_capture_source_url`, `_capture_source_committee`를 함께 resolved URL 기준으로 갱신한다.
 - `LiveBroadcastDialog`는 `생중계`와 `종료/예정` row를 모두 표시한다. `xcgcd`가 없는 row는 회색 안내 row로 표시하고 URL 적용을 차단한다.
 - runtime archive load는 segment/tail checkpoint fingerprint를 실제 entries와 대조한다. strict load는 실패, salvage는 해당 파일 제외와 `무결성 불일치` 경고로 처리한다.

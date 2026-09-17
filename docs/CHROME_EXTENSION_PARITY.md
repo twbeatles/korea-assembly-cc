@@ -1,6 +1,6 @@
 # 데스크톱 ↔ Chrome 확장 상호 의존·정합
 
-업데이트: `2026-08-10`
+업데이트: `2026-09-17`
 
 이 문서는 **국회 의사중계 자막 추출기(데스크톱, 본 저장소)** 와  
 **[korea-assembly-cc-chrome](https://github.com/twbeatles/korea-assembly-cc-chrome) (Chrome Extension)** 사이의  
@@ -38,9 +38,11 @@
 ### 2.1 URL / 호스트
 
 - 주 호스트: `assembly.webcast.go.kr`
-- 보조 호스트: `webcast.assembly.go.kr` (DNS 불안정 시에도 목록 유지 권장)
+- 보조 호스트: `webcast.assembly.go.kr`는 2026-09 기준 DNS 실패. 데스크톱 `url_policy`는 `assembly.webcast.go.kr` 계열만 허용한다.
 - 플레이어: `/main/player*`, 기자회견: `/main/pressplayer*`
 - 본회의: `xcode=10` 또는 `xcgcd` prefix `DCM000010…`
+- 청문회/공청회: live_list `xcode=97` (구 `99`는 레거시 호환)
+- 기후노동위 공식명: `기후에너지환경노동위원회` (xcode `62`, 약칭 `기후노동위`)
 
 ### 2.2 자막 DOM
 
@@ -114,7 +116,7 @@
 
 1. 가능하면 **확장 저장소**에서 오프라인/라이브 호환 검토 문서를 먼저 갱신한다.
 2. 셀렉터·화자색·버튼·URL 계약이 바뀌면 **양쪽 모두** 수정 후보로 올린다.
-3. 데스크톱은 probe JS + 활성화 스크립트 + (필요 시) `Config` 프리셋/`url_policy` 를 본다.
+3. 데스크톱은 probe JS + 활성화 스크립트 + (필요 시) `Config` 프리셋/`url_policy`/`committee_catalog` 를 본다.
 4. 파이프라인 suffix 의미론 변경은 **최후 수단**이며 `PIPELINE_LOCK.md` 필수.
 
 ---
@@ -128,6 +130,7 @@
 | 레이어 활성 | `capture_observer._activate_subtitle` | `src/content/subtitle-layer.ts` |
 | 파이프라인 | `core/subtitle_pipeline*` | `src/core/subtitle-pipeline/` |
 | URL 정책 | `core/url_policy.py` | `isSupportedAssembly*Url` |
+| 위원회 xcode/명칭 | `core/committee_catalog.py`, `core/config.py` | 확장 측 위원회 상수 |
 
 ---
 

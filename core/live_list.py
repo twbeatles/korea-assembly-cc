@@ -218,6 +218,29 @@ def select_live_broadcast_row(
                 "reason": "ambiguous_xcode",
                 "candidate_count": len(matches),
             }
+
+        from core.committee_catalog import build_committee_catalog
+
+        catalog = build_committee_catalog()
+        target_identity = catalog.identity_for_xcode(target_norm)
+        if target_identity:
+            identity_matches = [
+                row
+                for row in live_rows
+                if catalog.identity_for_row(row) == target_identity
+            ]
+            if len(identity_matches) == 1:
+                return {
+                    "ok": True,
+                    "row": identity_matches[0],
+                    "reason": "committee_identity",
+                }
+            if len(identity_matches) > 1:
+                return {
+                    "ok": False,
+                    "reason": "ambiguous_xcode",
+                    "candidate_count": len(identity_matches),
+                }
         return {"ok": False, "reason": "xcode_not_live", "candidate_count": 0}
 
     if live_rows:

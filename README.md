@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 (Korea Assembly CC) v16.14.10
+# 🏛️ 국회 의사중계 자막 추출기 (Korea Assembly CC) v16.14.11
 
 대한민국 국회 의사중계 웹사이트의 **실시간 AI 자막**을 수집·정리·검색하고 파일로 저장하는 PyQt6 기반 데스크톱 프로그램입니다. 국회 회의와 발언을 실시간으로 기록하거나, 후속 검토를 위한 자막 파일이 필요한 기자·연구자·시민단체·일반 사용자를 위해 만들었습니다.
 
@@ -276,7 +276,7 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 ```bash
 pip install pyinstaller
 pyinstaller subtitle_extractor.spec
-# dist/국회의사중계자막추출기 v16.14.10.exe
+# dist/국회의사중계자막추출기 v16.14.11.exe
 ```
 
 **Portable 모드**: EXE 파일 옆에 `portable.flag` 파일을 만들어두면 로그·세션·DB·설정을 EXE 폴더에 저장합니다.  
@@ -331,6 +331,11 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 ---
 
 ## 📝 변경 이력
+
+### v16.14.11 (2026-09-17)
+- **의사중계 사이트 계약 동기화** — 청문회/공청회 live_list xcode `97`(구 99), 기후노동위 공식명 `기후에너지환경노동위원회`
+- **유연 매칭** — 명칭·약칭·레거시 xcode로 생중계 URL을 보정. 저장된 구 URL도 식별
+- 회귀: `tests/test_committee_catalog.py`
 
 ### v16.14.10 (2026-09-07)
 - **PROJECT_AUDIT 후속** — Windows 업데이트 helper가 부모를 강제 종료하지 않음, runtime checkpoint 세대 commit, 다중 인스턴스 archive 소유권, cross-volume EXE 교체, 비중계 안내, 위원회 정식명 동기화

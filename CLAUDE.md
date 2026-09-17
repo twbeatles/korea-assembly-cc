@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.10
+- **버전**: v16.14.11
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -132,6 +132,7 @@ korea-assembly-cc/
     live_capture.py
     live_capture_impl/          # ledger/model/reconcile 내부 구현
     live_list.py                # live_list.asp 공유 fetch/parse/selection helper
+    committee_catalog.py        # 위원회 명칭/약칭/레거시 xcode 식별 매칭
     logging_utils.py
     models.py
     reflow.py
@@ -240,7 +241,14 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.10 기준)
+## 6. 최신 변경 요약 (v16.14.11 기준)
+
+### v16.14.11 의사중계 사이트 계약 동기화 (2026-09-17)
+- **청문회/공청회 xcode**: live_list 기준 `99` → `97`. 구 `99`는 `LEGACY_COMMITTEE_XCODES`로 유지해 저장된 URL도 식별한다.
+- **기후노동위 공식명**: 프리셋을 `기후에너지환경노동위원회`(xcode 62)로 맞추고, `기후환경노동위원회`/`기후노동위`/`환노위`는 약칭으로 유지한다.
+- **유연 매칭**: `core/committee_catalog.py`가 명칭·약칭·레거시 xcode를 같은 위원회로 묶고, `select_live_broadcast_row`는 정확 xcode가 없을 때 식별자로 1건만 보정한다. `target_xcode` 없는 자동 선택은 기존처럼 하지 않는다.
+- **호스트**: 허용 호스트는 `assembly.webcast.go.kr` 계열. `webcast.assembly.go.kr`은 2026-09 기준 DNS 실패.
+- **회귀**: `tests/test_committee_catalog.py`
 
 ### v16.14.10 PROJECT_AUDIT 후속 (2026-09-07)
 - **Windows 업데이트 helper**: `os.kill(pid, 0)` 제거. SYNCHRONIZE wait + dirty handshake. timeout 시 EXE 교체 없음

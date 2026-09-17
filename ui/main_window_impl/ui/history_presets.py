@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from importlib import import_module
 
+from core.committee_catalog import canonical_committee_name
 from core.file_io import read_limited_json_file
 from core.url_policy import (
     is_allowed_assembly_host,
@@ -244,6 +245,9 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                                 logger.debug("프리셋 항목 제외: %s", error)
                                 continue
                             preset_name, preset_url = entry
+                            resolved_name = canonical_committee_name(preset_name)
+                            if resolved_name in Config.DEFAULT_COMMITTEE_PRESETS:
+                                preset_name = resolved_name
                             self.committee_presets[preset_name] = preset_url
                     if isinstance(data, dict) and isinstance(data.get("custom"), dict):
                         for name, url in data["custom"].items():

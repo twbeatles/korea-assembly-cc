@@ -411,7 +411,7 @@ class Config:
         "성평등가족위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=63",
         "예산결산특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=21",
         "특별위원회": "https://assembly.webcast.go.kr/main/player.asp?xcode=91",
-        "청문회/공청회": "https://assembly.webcast.go.kr/main/player.asp?xcode=99",
+        "청문회/공청회": "https://assembly.webcast.go.kr/main/player.asp?xcode=97",
         "기자회견": "https://assembly.webcast.go.kr/main/pressplayer.asp",
     }
     
@@ -436,13 +436,23 @@ class Config:
         "성평등가족위원회": 63,
         "예산결산특별위원회": 21,
         "특별위원회": 91,
-        "청문회/공청회": 99,
+        "청문회/공청회": 97,
     }
     
     # 특별위원회 문자열 xcode 목록 (숫자가 아닌 코드들)
     # 현재 기본값에는 검증된 문자열 xcode가 없다. 사용자가 직접 저장한
     # 기존 프리셋 JSON은 유지하되, 새 기본 프리셋에는 stale 코드를 넣지 않는다.
     SPECIAL_COMMITTEE_XCODES = {}
+
+    # 사이트 live_list가 바꾼 이전 xcode. 기본 프리셋에는 넣지 않고
+    # 사용자 저장 URL/구 북마크 식별용으로만 유지한다.
+    LEGACY_COMMITTEE_XCODES = {
+        "99": "청문회/공청회",  # 2026-09 live_list 기준 97
+        "38": "재정경제기획위원회",  # 구 기획재정/기재위
+        "34": "기후에너지환경노동위원회",  # 구 환경노동위원회
+        "36": "성평등가족위원회",  # 구 여성가족위원회
+        "ED": "특별위원회",
+    }
 
     # 정보위원회 xcode/생중계 여부는 이번 배치에서 외부 검증하지 않는다.
     # 사용자가 직접 확인한 URL은 사용자 프리셋/직접 입력으로 사용할 수 있다.
@@ -466,8 +476,8 @@ class Config:
         "산자중기위": "산업통상자원중소벤처기업위원회",
         "복지위": "보건복지위원회",
         "환노위": "기후에너지환경노동위원회",  # 구 환경노동위원회
-        "기후노동위": "기후에너지환경노동위원회",  # 사이트 내 타이틀 표기
-        "기후환경노동위원회": "기후에너지환경노동위원회",  # 구 정식 명칭
+        "기후노동위": "기후에너지환경노동위원회",  # 사이트 약칭
+        "기후환경노동위원회": "기후에너지환경노동위원회",  # 구 공식명
         "국토위": "국토교통위원회",
         "여가위": "성평등가족위원회",  # 구 여성가족위원회 → 성평등가족위원회
         "성평등가족위": "성평등가족위원회",  # 사이트 내 타이틀 표기

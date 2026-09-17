@@ -437,6 +437,6 @@ def test_config_uses_verified_live_list_xcodes_for_default_presets():
     assert Config.DEFAULT_COMMITTEE_PRESETS["본회의"].endswith("xcode=10")
     assert Config.COMMITTEE_XCODE_MAP["본회의"] == 10
     assert Config.COMMITTEE_XCODE_MAP["특별위원회"] == 91
-    assert Config.COMMITTEE_XCODE_MAP["청문회/공청회"] == 99
+    assert Config.COMMITTEE_XCODE_MAP["청문회/공청회"] == 97
     assert Config.COMMITTEE_ABBREVIATIONS["청문회"] == "청문회/공청회"
     assert Config.COMMITTEE_ABBREVIATIONS["공청회"] == "청문회/공청회"
