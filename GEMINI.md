@@ -91,7 +91,7 @@
 
 | 클래스 | 파일 | 역할 |
 |--------|------|------|
-| `Config` | core/config.py | 상수 및 기본 설정 |
+| `Config` | core/config.py (facade, 구현은 core/config_impl/) | 상수 및 기본 설정 |
 | `ToastWidget` | ui/widgets.py | 비차단 토스트 알림 |
 | `SubtitleEntry` | core/models.py | 자막 데이터 모델 |
 | `MainWindow` | ui/main_window.py | 메인 윈도우 파사드 및 lifecycle 조립 |
@@ -105,6 +105,7 @@
 - 공개 import 경로는 유지하지만 capture/pipeline/view/runtime의 실제 구현은 `ui/main_window_impl/`로 이동했습니다.
 - `core/live_capture.py`는 facade이고 실제 ledger/model/reconcile 구현은 `core/live_capture_impl/`에 있습니다.
 - 내부 구현 계약은 `ui/main_window_impl/contracts.py`의 관심사별 Protocol로 더 잘게 분리되어 있고, 공개 호환 표면만 `MainWindowHost`로 유지됩니다.
+- 코드 분할 시 `core/config.py`, `ui/themes.py`, `runtime_lifecycle.py`, `persistence_session.py`, `persistence_exports.py`, `database_dialogs.py`를 책임 단위 mixin으로 나누고 원본은 얇은 퍼사드로 유지합니다.
 
 ## 6. 핵심 메서드
 
@@ -145,7 +146,8 @@
 korea-assembly-cc/
   국회의사중계 자막.py       # 메인 엔트리포인트
   core/                         # 공통 로직/설정
-    config.py
+    config.py                   # facade (구현은 config_impl/)
+    config_impl/              # version/storage/app_config 내부 구현
     database_manager.py
     database_impl/             # DatabaseManager 내부 connection/schema/FTS/session/search 구현
     file_io.py
@@ -175,7 +177,12 @@ korea-assembly-cc/
     main_window_view.py
     main_window_impl/           # capture/pipeline/view/runtime 내부 구현
       persistence_runtime_*.py  # runtime hydrate/archive/segment/reader/manifest 세부 mixin
-    themes.py
+      runtime_lifecycle_*.py    # extraction/stop/detached/background/shutdown + common (퍼사드: runtime_lifecycle.py)
+      persistence_session_*.py  # deferred/save/load/recovery/backup (퍼사드: persistence_session.py)
+      persistence_exports_*.py  # dispatch/text/documents/session (퍼사드: persistence_exports.py)
+      database_dialogs_*.py     # base/history/search/stats_merge (퍼사드: database_dialogs.py)
+    themes.py                   # facade (구현은 themes_impl/ 팔레트/템플릿/API)
+    themes_impl/              # palettes/template/api 내부 구현
     widgets.py
     main_window.py              # MainWindow 파사드
   database.py                   # SQLite DB 호환 shim

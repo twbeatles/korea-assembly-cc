@@ -1,10 +1,6 @@
 # -*- coding: utf-8 -*-
 
-"""테마 정의 (SOLID 분할 후 얇은 퍼사드).
-
-실제 팔레트/템플릿/조합 로직은 `ui.themes_impl` 패키지가 소유한다.
-기존 `from ui.themes import DARK_THEME, ...` import 계약을 그대로 유지한다.
-"""
+"""Theme implementation package (palettes/template/api)."""
 
 from ui.themes_impl.api import DARK_THEME, LIGHT_THEME, _build_theme, get_palette
 from ui.themes_impl.palettes import _DARK_PALETTE, _LIGHT_PALETTE

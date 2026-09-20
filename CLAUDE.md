@@ -125,7 +125,8 @@ Raw Text(Observer/폴링) → preview 메시지 → _prepare_preview_raw(정규�
 korea-assembly-cc/
   국회의사중계 자막.py       # 메인 엔트리포인트
   core/                         # 공통 로직/설정
-    config.py
+    config.py                   # facade (구현은 config_impl/)
+    config_impl/              # version/storage/app_config 내부 구현
     database_manager.py
     database_impl/             # DatabaseManager 내부 connection/schema/FTS/session/search 구현
     file_io.py
@@ -163,8 +164,13 @@ korea-assembly-cc/
     main_window_view.py
     main_window_impl/           # capture/pipeline/view/runtime/ui 내부 구현
       persistence_runtime_*.py  # runtime hydrate/archive/segment/reader/manifest 세부 mixin
+      runtime_lifecycle_*.py    # extraction/stop/detached/background/shutdown + common (퍼사드: runtime_lifecycle.py)
+      persistence_session_*.py  # deferred/save/load/recovery/backup (퍼사드: persistence_session.py)
+      persistence_exports_*.py  # dispatch/text/documents/session (퍼사드: persistence_exports.py)
+      database_dialogs_*.py     # base/history/search/stats_merge (퍼사드: database_dialogs.py)
       ui/                       # tray/menu/layout/theme/history/preset/help UI mixin
-    themes.py
+    themes.py                   # facade (구현은 themes_impl/ 팔레트/템플릿/API)
+    themes_impl/              # palettes/template/api 내부 구현
     widgets.py
     main_window.py              # MainWindow 파사드
   database.py                   # SQLite DB 호환 shim
@@ -198,7 +204,7 @@ korea-assembly-cc/
 ### 5.2 주요 클래스
 | 클래스 | 파일 | 역할 |
 |--------|------|------|
-| `Config` | core/config.py | 상수 및 기본 설정 값 |
+| `Config` | core/config.py (facade, 구현은 core/config_impl/) | 상수 및 기본 설정 값 |
 | `ToastWidget` | ui/widgets.py | 비차단 토스트 알림 UI |
 | `SubtitleEntry` | core/models.py | 자막 데이터 모델 (타임스탬프 포함) |
 | `MainWindow` | ui/main_window.py | 메인 윈도우 파사드 및 lifecycle 조립 |
@@ -212,6 +218,7 @@ korea-assembly-cc/
 - 공개 import 경로는 유지하지만 capture/pipeline/view/runtime의 실제 구현은 `ui/main_window_impl/`로 이동했습니다.
 - `core/live_capture.py`는 facade이고 실제 ledger/model/reconcile 구현은 `core/live_capture_impl/`에 있습니다.
 - 내부 모듈은 `ui.main_window_impl.contracts`의 좁은 Protocol을 사용하고, 공개 호환 계약은 `ui.main_window_types.MainWindowHost`로 유지합니다.
+- 코드 분할 시 `core/config.py`, `ui/themes.py`, `runtime_lifecycle.py`, `persistence_session.py`, `persistence_exports.py`, `database_dialogs.py`를 책임 단위 mixin으로 나누고 원본은 얇은 퍼사드로 유지합니다. 테스트의 모듈 속성 monkeypatch 계약(`core.config._probe_*`, `persistence_session.datetime`, `runtime_lifecycle.QApplication`)은 late-binding으로 보존됩니다.
 
 ### 5.3 핵심 메서드
 | 메서드 | 설명 |
@@ -242,6 +249,11 @@ korea-assembly-cc/
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
 ## 6. 최신 변경 요약 (v16.14.11 기준)
+
+### 코드 분할 리팩토링 SOLID 후속 (2026-09-20)
+- **분할**: `core/config_impl/`(version/storage/app_config), `ui/themes_impl/`(palettes/template/api), `runtime_lifecycle_*`(extraction/stop/detached/background/shutdown/common), `persistence_session_*`(deferred/save/load/recovery/backup), `persistence_exports_*`(dispatch/text/documents/session), `database_dialogs_*`(base/history/search/stats_merge). 원본 파일은 공개 import/테스트 패치 계약을 유지하는 퍼사드
+- **동작 보존**: 이동 83개 메서드 전수 표면 검증, `pytest -q` 465 pass / 2 skipped, `pyright` 0 errors / 0 warnings
+- **빌드**: `subtitle_extractor.spec` hidden import에 신규 모듈 반영
 
 ### v16.14.11 의사중계 사이트 계약 동기화 (2026-09-17)
 - **청문회/공청회 xcode**: live_list 기준 `99` → `97`. 구 `99`는 `LEGACY_COMMITTEE_XCODES`로 유지해 저장된 URL도 식별한다.
