@@ -357,6 +357,7 @@ def test_handle_escape_shortcut_closes_search_before_stopping():
     calls: list[str] = []
     win._hide_search = lambda: calls.append("hide")
     win._stop = lambda *args, **kwargs: calls.append("stop")
+    win.confirm_escape_stop = False
 
     MainWindow._handle_escape_shortcut(win)
 

@@ -361,7 +361,7 @@ class MainWindowUIHelpMixin(MainWindowHost):
     <h3>⌨️ 주요 단축키</h3>
     <table>
     <tr><td><b>F5</b></td><td>시작</td></tr>
-    <tr><td><b>Escape</b></td><td>검색창 닫기 / 추출 중지</td></tr>
+    <tr><td><b>Escape</b></td><td>검색창 닫기 / 추출 중지 (확인 후)</td></tr>
     <tr><td><b>Ctrl+F</b></td><td>검색</td></tr>
     <tr><td><b>F3</b></td><td>다음 검색</td></tr>
     <tr><td><b>Ctrl+T</b></td><td>테마 전환</td></tr>
@@ -386,7 +386,7 @@ class MainWindowUIHelpMixin(MainWindowHost):
     <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
     <tr style="background-color: #f0f0f0;"><th>단축키</th><th>기능</th></tr>
     <tr><td><b>F5</b></td><td>추출 시작</td></tr>
-    <tr><td><b>Escape</b></td><td>검색창 닫기 / 추출 중지</td></tr>
+    <tr><td><b>Escape</b></td><td>검색창 닫기 / 추출 중지 (확인 후)</td></tr>
     <tr><td><b>Ctrl+Q</b></td><td>프로그램 종료</td></tr>
     </table>
 

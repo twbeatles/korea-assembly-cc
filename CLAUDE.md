@@ -256,6 +256,7 @@ korea-assembly-cc/
 - **수집 흐름 피드백**: 진행 바는 접속~`connected`까지만(재연결 중 재표시, 4px 슬림). 재연결 시 `(n/N, x초 후 재시도)` 상태, worker status는 선행 이모지로 warning/success/error, 그 외 실행 중이면 running 색상. 수동 중지 시 중지 버튼 즉시 비활성 + `⏹ 중지됨 — N문장 · M자 · HH:MM:SS`, 성공 완료 `수집 완료 — …`, 중지/완료/자막 없음 → 연결 칩 `idle`
 - **실행 시간 고정**: `_reset_ui`가 `_capture_end_time`을 기록하고 `_get_capture_elapsed_seconds()`를 통계와 세션 저장 duration이 공유한다(중지 후 저장 시 duration이 늘어나던 문제 수정).
 - **레이아웃 폴리싱**: `⬇️ 최신 자막` 버튼은 `OverlayAnchor`로 자막 뷰 하단 중앙에 떠 있어 표시/숨김 시 레이아웃이 흔들리지 않는다. `previewFrame` objectName 누락 수정, 비활성 시작/중지 버튼 전용 `:disabled` 스타일(중지 버튼이 비활성인데 활성처럼 보이던 문제), 통계 칩 최소 높이·패널 폭 250px, 시작/중지 툴팁에 F5/Esc
+- **Esc 중지 확인**: 수집 중 Esc는 `_confirm_escape_stop()` 확인 창(기본 버튼 `계속 수집`, 현재까지 요약, `다시 묻지 않기`)을 거친 뒤 `_stop()`한다. QSettings `confirm_escape_stop`(기본 True)과 보기 메뉴 `Esc로 중지 전 확인`으로 끌 수 있고, 확인 창 동안 수집이 끝났으면 중지하지 않는다. 중지 버튼 클릭은 확인 없이 즉시 중지
 - **회귀**: `tests/test_capture_ui_ux_20260930.py`
 
 ### 코드 분할 리팩토링 SOLID 후속 (2026-09-20)

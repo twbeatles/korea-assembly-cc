@@ -59,6 +59,9 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self.keep_browser_on_stop = self.settings.value(
             "keep_browser_on_stop", False, type=bool
         )
+        self.confirm_escape_stop = self.settings.value(
+            "confirm_escape_stop", True, type=bool
+        )
         self.check_updates_on_startup = self.settings.value(
             "check_updates_on_startup", True, type=bool
         )

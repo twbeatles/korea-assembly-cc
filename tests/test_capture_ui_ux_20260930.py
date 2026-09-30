@@ -312,3 +312,79 @@ def test_stop_disables_stop_button_and_reports_idle(monkeypatch) -> None:
     assert statuses[0][1] == "warning"
     assert statuses[-1] == ("⏹ 중지됨 — 1문장 · 5자 · 00:00:03", "info")
     assert connection == ["idle"]
+
+
+class _HiddenFrame:
+    def isVisible(self) -> bool:
+        return False
+
+
+def _escape_window(confirm_answer: bool) -> tuple[Any, list[str]]:
+    win: Any = MainWindow.__new__(MainWindow)
+    win.search_frame = _HiddenFrame()
+    win.is_running = True
+    calls: list[str] = []
+    win._stop = lambda *_a, **_k: calls.append("stop")
+
+    def fake_confirm() -> bool:
+        calls.append("confirm")
+        return confirm_answer
+
+    win._confirm_escape_stop = fake_confirm
+    return win, calls
+
+
+def test_escape_asks_before_stopping_by_default() -> None:
+    win, calls = _escape_window(confirm_answer=False)
+    MainWindow._handle_escape_shortcut(win)
+    assert calls == ["confirm"]
+
+    win, calls = _escape_window(confirm_answer=True)
+    MainWindow._handle_escape_shortcut(win)
+    assert calls == ["confirm", "stop"]
+
+
+def test_escape_skips_confirmation_when_disabled() -> None:
+    win, calls = _escape_window(confirm_answer=False)
+    win.confirm_escape_stop = False
+    MainWindow._handle_escape_shortcut(win)
+    assert calls == ["stop"]
+
+
+def test_escape_does_not_stop_if_capture_ended_during_dialog() -> None:
+    win, calls = _escape_window(confirm_answer=True)
+
+    def confirm_then_finish() -> bool:
+        calls.append("confirm")
+        win.is_running = False
+        return True
+
+    win._confirm_escape_stop = confirm_then_finish
+    MainWindow._handle_escape_shortcut(win)
+    assert calls == ["confirm"]
+
+
+def test_escape_is_noop_when_not_running() -> None:
+    win, calls = _escape_window(confirm_answer=True)
+    win.is_running = False
+    MainWindow._handle_escape_shortcut(win)
+    assert calls == []
+
+
+def test_set_confirm_escape_stop_persists_and_syncs_menu() -> None:
+    _qapp()
+    from PyQt6.QtGui import QAction
+
+    win: Any = MainWindow.__new__(MainWindow)
+    action = QAction("Esc로 중지 전 확인")
+    action.setCheckable(True)
+    action.setChecked(True)
+    win.confirm_escape_stop_action = action
+    saved: list[tuple[str, object]] = []
+    win._save_setting_value = lambda key, value, **_k: saved.append((key, value))
+
+    MainWindow._set_confirm_escape_stop(win, False)
+
+    assert win.confirm_escape_stop is False
+    assert action.isChecked() is False
+    assert saved == [("confirm_escape_stop", False)]

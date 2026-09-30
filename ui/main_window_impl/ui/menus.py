@@ -159,6 +159,19 @@ class MainWindowUIMenuMixin(MainWindowHost):
             )
             view_menu.addAction(self.keep_browser_action)
 
+            self.confirm_escape_stop_action = QAction("Esc로 중지 전 확인", self)
+            self.confirm_escape_stop_action.setCheckable(True)
+            self.confirm_escape_stop_action.setChecked(
+                bool(getattr(self, "confirm_escape_stop", True))
+            )
+            self.confirm_escape_stop_action.setToolTip(
+                "수집 중 Esc를 눌렀을 때 바로 중지하지 않고 확인 창을 띄웁니다."
+            )
+            self.confirm_escape_stop_action.triggered.connect(
+                self._toggle_confirm_escape_stop
+            )
+            view_menu.addAction(self.confirm_escape_stop_action)
+
             self.check_updates_on_startup_action = QAction(
                 "프로그램 시작 시 업데이트 확인", self
             )

@@ -88,6 +88,26 @@ class MainWindowUIThemeStatusMixin(MainWindowHost):
                 self._show_toast("수동 중지 시 Chrome 창을 종료합니다.", "info")
 
 
+    def _toggle_confirm_escape_stop(self):
+            """Esc 중지 확인 옵션 토글 (메뉴)"""
+            self._set_confirm_escape_stop(self.confirm_escape_stop_action.isChecked())
+            if self.confirm_escape_stop:
+                self._show_toast("Esc로 중지할 때 확인 창을 띄웁니다.", "info")
+            else:
+                self._show_toast("Esc를 누르면 확인 없이 바로 중지합니다.", "info")
+
+    def _set_confirm_escape_stop(self, enabled: bool) -> None:
+            """Esc 중지 확인 설정 저장 + 메뉴 체크 상태 동기화"""
+            self.confirm_escape_stop = bool(enabled)
+            action = self.__dict__.get("confirm_escape_stop_action")
+            if action is not None and action.isChecked() != self.confirm_escape_stop:
+                action.setChecked(self.confirm_escape_stop)
+            self._save_setting_value(
+                "confirm_escape_stop",
+                self.confirm_escape_stop,
+                context="Esc 중지 확인 설정 저장",
+            )
+
     def _toggle_check_updates_on_startup(self):
             self.check_updates_on_startup = bool(
                 self.check_updates_on_startup_action.isChecked()

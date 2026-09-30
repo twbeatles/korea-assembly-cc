@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
+from PyQt6.QtWidgets import QCheckBox, QMessageBox
+
 from core import utils
 from core.config import Config
 from core.file_io import next_available_path
@@ -516,8 +518,46 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
         if search_frame is not None and search_frame.isVisible():
             self._hide_search()
             return
-        if self.is_running:
-            self._stop()
+        if not self.is_running:
+            return
+        # 장시간 수집을 Esc 오입력으로 끊지 않도록 기본적으로 확인을 받는다.
+        if bool(self.__dict__.get("confirm_escape_stop", True)):
+            if not self._confirm_escape_stop():
+                return
+            # 확인 창이 떠 있는 동안 수집이 이미 끝났을 수 있다.
+            if not self.is_running:
+                return
+        self._stop()
+
+    def _confirm_escape_stop(self) -> bool:
+        """Esc 중지 확인 창. '계속 수집'이 기본 버튼이다."""
+        summary = ""
+        builder = getattr(self, "_build_capture_summary_text", None)
+        if callable(builder):
+            try:
+                summary = str(builder() or "")
+            except Exception:
+                summary = ""
+        body = "자막 수집을 중지할까요?"
+        if summary:
+            body += f"\n\n현재까지: {summary}"
+        box = QMessageBox(self)
+        box.setWindowTitle("수집 중지 확인")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(body)
+        stop_button = box.addButton("⏹ 중지", QMessageBox.ButtonRole.AcceptRole)
+        continue_button = box.addButton("계속 수집", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(continue_button)
+        box.setEscapeButton(continue_button)
+        dont_ask = QCheckBox("다시 묻지 않기 (보기 메뉴에서 다시 켤 수 있음)")
+        box.setCheckBox(dont_ask)
+        box.exec()
+        confirmed = box.clickedButton() is stop_button
+        if confirmed and dont_ask.isChecked():
+            setter = getattr(self, "_set_confirm_escape_stop", None)
+            if callable(setter):
+                setter(False)
+        return confirmed
 
     def _normalize_subtitle_text_for_option(self, text: object) -> str:
         raw = "" if text is None else str(text)
