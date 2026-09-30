@@ -38,7 +38,15 @@ class MainWindowRuntimeLifecycleStopMixin(RuntimeLifecycleBase):
         try:
             self.is_running = False
             self.stop_event.set()
-            self._set_status("중지 중...", "warning")
+            # 중지 확정은 워커 대기로 수 초간 UI 스레드를 점유할 수 있으므로
+            # 중복 클릭을 막고 '중지 중' 표시를 즉시 그린다.
+            stop_btn = self.__dict__.get("stop_btn")
+            if stop_btn is not None:
+                stop_btn.setEnabled(False)
+            self._set_status("중지 중... 마지막 자막을 정리하고 있습니다", "warning")
+            status_label = self.__dict__.get("status_label")
+            if status_label is not None:
+                status_label.repaint()
             self._is_stopping = True
             preserve_driver = (not for_app_exit) and bool(
                 self.__dict__.get("keep_browser_on_stop", False)
@@ -111,8 +119,12 @@ class MainWindowRuntimeLifecycleStopMixin(RuntimeLifecycleBase):
             self.worker = None
             self._retire_capture_run()
             self._reset_ui()
-            self._set_status("중지됨", "warning")
+            summary = self._build_capture_summary_text()
+            self._set_status(
+                f"⏹ 중지됨 — {summary}" if summary else "⏹ 중지됨", "info"
+            )
             self._update_tray_status("⚪ 대기 중")
+            self._update_connection_status("idle")
         except Exception as e:
             logger.error(f"중지 중 오류 발생: {e}")
             self._reset_ui()

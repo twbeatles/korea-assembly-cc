@@ -23,6 +23,20 @@ def _pipeline_public():
 
 PipelineMessagesBase = PipelineMessagesHost if TYPE_CHECKING else object
 
+# worker status 메시지의 선행 이모지로 상태 색상을 고른다.
+_STATUS_PREFIX_TYPES = (
+    ("⚠", "warning"),
+    ("❌", "error"),
+    ("✅", "success"),
+)
+
+
+def _infer_worker_status_type(text: str, default: str) -> str:
+    for prefix, status_type in _STATUS_PREFIX_TYPES:
+        if text.startswith(prefix):
+            return status_type
+    return default
+
 
 class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
     def _has_pending_message_backlog(self) -> bool:
@@ -256,7 +270,13 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             if msg_type == "status":
                 status_text = str(data)[:200]
                 if status_text != self._last_status_message:
-                    self._schedule_status_update(status_text, "info")
+                    default_type = (
+                        "running" if bool(self.__dict__.get("is_running", False)) else "info"
+                    )
+                    self._schedule_status_update(
+                        status_text,
+                        _infer_worker_status_type(status_text, default_type),
+                    )
 
             elif msg_type == "resolved_url":
                 resolved_url = str(data or "").strip()
@@ -313,6 +333,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self._update_tray_status("⚪ 대기 중")
                 self._update_connection_status("disconnected")
                 self._clear_preview()
+                self._schedule_status_update(f"수집 중단: {data}", "error")
                 pipeline_mod.QMessageBox.critical(self, "오류", str(data))
 
             elif msg_type == "finished":
@@ -351,16 +372,16 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self._clear_preview()
                 self._reset_ui()
                 self._update_tray_status("⚪ 대기 중")
-                self._update_connection_status("disconnected")
                 if not success:
+                    self._update_connection_status("disconnected")
                     rendered_error = error_message or "자막 수집이 실패했습니다."
                     self._schedule_status_update(rendered_error, "error")
                     pipeline_mod.QMessageBox.critical(self, "오류", rendered_error)
                     return
-                subtitle_count = self._get_global_subtitle_count()
-                total_chars = self._get_global_total_chars()
+                self._update_connection_status("idle")
+                summary = self._build_capture_summary_text()
                 self._schedule_status_update(
-                    f"완료 - {subtitle_count}문장, {total_chars:,}자",
+                    f"수집 완료 — {summary}" if summary else "수집 완료",
                     "success",
                 )
 
@@ -504,7 +525,11 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self.progress.hide()
                 self._reset_ui()
                 self._update_tray_status("⚪ 대기 중")
+                self._update_connection_status("idle")
                 self._clear_preview()
+                self._schedule_status_update(
+                    "자막을 찾지 못해 수집을 종료했습니다", "warning"
+                )
                 msg_box = pipeline_mod.QMessageBox(self)
                 msg_box.setWindowTitle("자막을 찾을 수 없습니다")
                 msg_box.setIcon(pipeline_mod.QMessageBox.Icon.Warning)
@@ -529,10 +554,29 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 status = data.get("status", "disconnected")
                 latency = data.get("latency")
                 self._update_connection_status(status, latency)
+                # 접속이 확인되면 진행 바는 역할을 다했으므로 숨긴다.
+                progress = self.__dict__.get("progress")
+                if status == "connected" and progress is not None:
+                    progress.hide()
 
             elif msg_type == "reconnecting":
                 self.reconnect_attempts = data.get("attempt", 0)
                 self._update_connection_status("reconnecting")
+                progress = self.__dict__.get("progress")
+                if progress is not None and bool(self.__dict__.get("is_running", False)):
+                    progress.show()
+                delay = data.get("delay")
+                delay_text = ""
+                try:
+                    if delay is not None:
+                        delay_text = f", {float(delay):.0f}초 후 재시도"
+                except (TypeError, ValueError):
+                    delay_text = ""
+                self._schedule_status_update(
+                    f"연결이 끊겨 재연결 대기 중 "
+                    f"({self.reconnect_attempts}/{Config.MAX_RECONNECT_ATTEMPTS}{delay_text})",
+                    "warning",
+                )
                 self._show_toast(
                     f"재연결 시도 중... ({self.reconnect_attempts}/{Config.MAX_RECONNECT_ATTEMPTS})",
                     "warning",
@@ -542,6 +586,9 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             elif msg_type == "reconnected":
                 self.reconnect_attempts = 0
                 self._update_connection_status("connected")
+                progress = self.__dict__.get("progress")
+                if progress is not None:
+                    progress.hide()
                 self._on_capture_reconnected(data)
                 self._show_toast("재연결 성공!", "success", 2000)
 

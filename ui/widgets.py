@@ -1,8 +1,55 @@
 # -*- coding: utf-8 -*-
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QEvent, QObject, QTimer
 from PyQt6.QtGui import QMouseEvent
-from PyQt6.QtWidgets import QFrame, QGroupBox, QHBoxLayout, QLabel, QLayout
+from PyQt6.QtWidgets import QFrame, QGroupBox, QHBoxLayout, QLabel, QLayout, QWidget
+
+
+def set_state_property(widget: QWidget | None, name: str, value: str) -> bool:
+    """QSS 선택자용 동적 속성을 갱신하고 변경 시에만 스타일을 다시 적용한다."""
+    if widget is None:
+        return False
+    if widget.property(name) == value:
+        return False
+    widget.setProperty(name, value)
+    style = widget.style()
+    if style is not None:
+        style.unpolish(widget)
+        style.polish(widget)
+    widget.update()
+    return True
+
+
+class OverlayAnchor(QObject):
+    """overlay 위젯을 host 하단 중앙에 띄워 둔다.
+
+    레이아웃에 넣지 않으므로 표시/숨김 시 주변 위젯이 밀리지 않는다.
+    """
+
+    _WATCHED_EVENTS = (QEvent.Type.Resize, QEvent.Type.Show)
+
+    def __init__(self, host: QWidget, overlay: QWidget, bottom_margin: int = 16):
+        super().__init__(host)
+        self._host = host
+        self._overlay = overlay
+        self._bottom_margin = bottom_margin
+        host.installEventFilter(self)
+        overlay.installEventFilter(self)
+
+    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        if a1 is not None and a1.type() in self._WATCHED_EVENTS:
+            self.reposition()
+        return False
+
+    def reposition(self) -> None:
+        self._overlay.adjustSize()
+        width = self._overlay.width()
+        height = self._overlay.height()
+        x = max(0, (self._host.width() - width) // 2)
+        y = max(0, self._host.height() - height - self._bottom_margin)
+        self._overlay.move(x, y)
+        self._overlay.raise_()
+
 
 class CollapsibleGroupBox(QGroupBox):
     """접기/펼치기 가능한 그룹박스 - 클릭으로 내용 숨기기/보이기"""

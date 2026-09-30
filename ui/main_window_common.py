@@ -99,8 +99,17 @@ from core.subtitle_pipeline import (
 )
 from ui.dialogs import LiveBroadcastDialog
 from ui.themes import DARK_THEME, LIGHT_THEME
-from ui.widgets import CollapsibleGroupBox, ToastWidget
+from ui.widgets import (
+    CollapsibleGroupBox,
+    OverlayAnchor,
+    ToastWidget,
+    set_state_property,
+)
 from core import utils
+
+# 수집 시작 버튼 라벨 (대기 / 수집 중)
+CAPTURE_START_BUTTON_TEXT = "▶  시작"
+CAPTURE_RUNNING_BUTTON_TEXT = "⏺  수집 중"
 
 
 class _TimerSignalShim:

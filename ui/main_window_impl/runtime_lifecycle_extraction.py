@@ -197,6 +197,8 @@ class MainWindowRuntimeLifecycleExtractionMixin(RuntimeLifecycleBase):
             self._is_stopping = False
             self._clear_preview()
             self.start_time = time.time()
+            self._capture_end_time = None
+            self.reconnect_attempts = 0
             self._clear_session_dirty()
             self._clear_session_db_identity()
             self._clear_destructive_undo_state()
@@ -221,12 +223,12 @@ class MainWindowRuntimeLifecycleExtractionMixin(RuntimeLifecycleBase):
 
             self.is_running = True
             self.stop_event.clear()
-            self.start_btn.setEnabled(False)
-            self.stop_btn.setEnabled(True)
-            self.url_combo.setEnabled(False)
-            self.selector_combo.setEnabled(False)
+            self._apply_capture_controls_state(True)
+            # 접속이 확인될 때까지만 진행 바를 보인다 (connection_status=connected 에서 숨김).
             self.progress.show()
+            self._update_connection_status("connecting")
             self._sync_runtime_action_state()
+            self._update_stats_now()
 
             status_text = "Chrome 브라우저 시작 중..."
             status_level = "running"

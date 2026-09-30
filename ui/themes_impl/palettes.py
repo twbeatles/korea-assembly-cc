@@ -44,6 +44,13 @@ _DARK_PALETTE = {
     "scrollbar_bg": "#0d1117",
     "scrollbar_handle": "#30363d",
     "scrollbar_handle_hover": "#484f58",
+    # 상태 표시(상태 라벨/연결 칩) 전용 전경색
+    "state_info": "#58a6ff",
+    "state_success": "#3fb950",
+    "state_warning": "#d29922",
+    "state_error": "#f85149",
+    "state_running": "#a371f7",
+    "state_idle": "#8b949e",
 }
 
 _LIGHT_PALETTE = {
@@ -86,4 +93,11 @@ _LIGHT_PALETTE = {
     "scrollbar_bg": "#f6f8fa",
     "scrollbar_handle": "#afb8c1",
     "scrollbar_handle_hover": "#8c959f",
+    # 상태 표시(상태 라벨/연결 칩) 전용 전경색
+    "state_info": "#0969da",
+    "state_success": "#1a7f37",
+    "state_warning": "#9a6700",
+    "state_error": "#cf222e",
+    "state_running": "#8250df",
+    "state_idle": "#57606a",
 }

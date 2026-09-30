@@ -432,7 +432,7 @@ class MainWindowViewRenderMixin(ViewRenderBase):
                 self.main_splitter.setSizes([1080, 0])
             else:
                 self.toggle_stats_btn.setText("📊 통계 숨기기")
-                self.main_splitter.setSizes([860, 220])
+                self.main_splitter.setSizes([830, 250])
 
     def _refresh_text(self, force_full: bool = False) -> None:
         self._render_subtitles(force_full=force_full)
@@ -507,6 +507,16 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         if hasattr(self, "theme_toggle_btn"):
             self.theme_toggle_btn.setText("🌙" if self.is_dark_theme else "☀️")
 
+    def _get_capture_elapsed_seconds(self) -> int:
+        """수집 경과 시간(초). 중지 후에는 _reset_ui가 고정한 종료 시각까지만 센다."""
+        start_time = self.__dict__.get("start_time")
+        if not start_time:
+            return 0
+        end_time = None
+        if not bool(self.__dict__.get("is_running", False)):
+            end_time = self.__dict__.get("_capture_end_time")
+        return max(0, int((end_time or time.time()) - start_time))
+
     def _update_stats_now(self) -> None:
         if any(
             self.__dict__.get(name) is None
@@ -514,7 +524,7 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         ):
             return
         if self.start_time:
-            elapsed = int(time.time() - self.start_time)
+            elapsed = self._get_capture_elapsed_seconds()
             h, r = divmod(elapsed, 3600)
             m, s = divmod(r, 60)
             self.stat_time.setText(f"⏱️ 실행 시간: {h:02d}:{m:02d}:{s:02d}")
@@ -525,8 +535,7 @@ class MainWindowViewRenderMixin(ViewRenderBase):
 
             self.stat_chars.setText(f"📝 글자 수: {total_chars:,}")
             self.stat_words.setText(f"📖 공백 기준 단어 수: {total_words:,}")
-            self.stat_sents.setText(f"💬 문장 수: {subtitle_count}")
+            self.stat_sents.setText(f"💬 문장 수: {subtitle_count:,}")
 
-            if elapsed > 0:
-                cpm = int(total_chars / (elapsed / 60))
-                self.stat_cpm.setText(f"⚡ 분당 글자: {cpm}")
+            cpm = int(total_chars / (elapsed / 60)) if elapsed > 0 else 0
+            self.stat_cpm.setText(f"⚡ 분당 글자: {cpm:,}")

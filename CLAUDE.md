@@ -250,6 +250,14 @@ korea-assembly-cc/
 
 ## 6. 최신 변경 요약 (v16.14.11 기준)
 
+### 자막 수집 UI/UX 다듬기 (2026-09-30)
+- **캡처 컨트롤 단일화**: `_apply_capture_controls_state(running)`가 시작/중지/URL/선택자 활성 상태, 시작 버튼 라벨(`▶ 시작`/`⏺ 수집 중`), 창 제목(`● 수집 중 · 위원회 — 앱`)을 함께 맞춘다. `_begin_extraction_run`/`_reset_ui`가 공유한다.
+- **상태 라벨/연결 칩 테마화**: 인라인 `setStyleSheet` 대신 `statusType`/`connState` 동적 속성 + `QLabel#statusLabel`/`QLabel#connectionIndicator` QSS 규칙(팔레트 `state_*` 토큰). 이모지로 시작하는 메시지는 아이콘 중복 없음, 100자 초과 시 `…` + 전체 툴팁. 연결 칩은 `idle/connecting/connected/reconnecting/disconnected` 텍스트 표시(지연 ms는 툴팁)
+- **수집 흐름 피드백**: 진행 바는 접속~`connected`까지만(재연결 중 재표시, 4px 슬림). 재연결 시 `(n/N, x초 후 재시도)` 상태, worker status는 선행 이모지로 warning/success/error, 그 외 실행 중이면 running 색상. 수동 중지 시 중지 버튼 즉시 비활성 + `⏹ 중지됨 — N문장 · M자 · HH:MM:SS`, 성공 완료 `수집 완료 — …`, 중지/완료/자막 없음 → 연결 칩 `idle`
+- **실행 시간 고정**: `_reset_ui`가 `_capture_end_time`을 기록하고 `_get_capture_elapsed_seconds()`를 통계와 세션 저장 duration이 공유한다(중지 후 저장 시 duration이 늘어나던 문제 수정).
+- **레이아웃 폴리싱**: `⬇️ 최신 자막` 버튼은 `OverlayAnchor`로 자막 뷰 하단 중앙에 떠 있어 표시/숨김 시 레이아웃이 흔들리지 않는다. `previewFrame` objectName 누락 수정, 비활성 시작/중지 버튼 전용 `:disabled` 스타일(중지 버튼이 비활성인데 활성처럼 보이던 문제), 통계 칩 최소 높이·패널 폭 250px, 시작/중지 툴팁에 F5/Esc
+- **회귀**: `tests/test_capture_ui_ux_20260930.py`
+
 ### 코드 분할 리팩토링 SOLID 후속 (2026-09-20)
 - **분할**: `core/config_impl/`(version/storage/app_config), `ui/themes_impl/`(palettes/template/api), `runtime_lifecycle_*`(extraction/stop/detached/background/shutdown/common), `persistence_session_*`(deferred/save/load/recovery/backup), `persistence_exports_*`(dispatch/text/documents/session), `database_dialogs_*`(base/history/search/stats_merge). 원본 파일은 공개 import/테스트 패치 계약을 유지하는 퍼사드
 - **동작 보존**: 이동 83개 메서드 전수 표면 검증, `pytest -q` 465 pass / 2 skipped, `pyright` 0 errors / 0 warnings

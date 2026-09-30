@@ -49,7 +49,7 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             """세션/백업 저장에 사용할 메타데이터를 계산한다."""
             source_url = self._get_capture_source_url(fallback_to_current=True)
             committee_name = self._get_capture_source_committee(fallback_to_url=True)
-            duration = int(time.time() - self.start_time) if self.start_time else 0
+            duration = self._get_capture_elapsed_seconds()
             return source_url, committee_name, duration
 
     def _has_runtime_archived_segments(self) -> bool:

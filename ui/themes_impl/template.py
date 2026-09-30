@@ -90,6 +90,13 @@ QPushButton#stopBtn:pressed {
     background: $danger_btn_bottom;
 }
 
+/* 비활성 시작/중지 버튼 - objectName 규칙이 기본 :disabled 를 덮어쓰지 않도록 명시 */
+QPushButton#startBtn:disabled, QPushButton#stopBtn:disabled {
+    background: $btn_disabled_bg;
+    color: $btn_disabled_text;
+    border: 1px solid $border;
+}
+
 /* ===== 퀵 액션 툴바 ===== */
 QFrame#quickToolbar {
     background-color: rgba($accent_rgb, 0.05);
@@ -344,6 +351,51 @@ QLabel#countLabel {
     border-radius: 6px;
     padding: 4px 10px;
     font-weight: 500;
+}
+
+/* 상태 메시지 - statusType 동적 속성으로 색상 결정 */
+QLabel#statusLabel {
+    background: transparent;
+    border: none;
+    font-weight: 600;
+    font-size: 13px;
+    color: $text;
+}
+QLabel#statusLabel[statusType="info"] { color: $state_info; }
+QLabel#statusLabel[statusType="success"] { color: $state_success; }
+QLabel#statusLabel[statusType="warning"] { color: $state_warning; }
+QLabel#statusLabel[statusType="error"] { color: $state_error; }
+QLabel#statusLabel[statusType="running"] { color: $state_running; }
+
+/* 연결 상태 칩 - connState 동적 속성으로 색상 결정 */
+QLabel#connectionIndicator {
+    background: rgba($accent_rgb, 0.08);
+    border: none;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-weight: 600;
+    color: $state_idle;
+}
+QLabel#connectionIndicator[connState="connecting"] { color: $state_info; }
+QLabel#connectionIndicator[connState="connected"] { color: $state_success; }
+QLabel#connectionIndicator[connState="reconnecting"] { color: $state_warning; }
+QLabel#connectionIndicator[connState="disconnected"] { color: $state_error; }
+
+/* 수집 진행 표시 - 얇은 indeterminate 바 */
+QProgressBar#captureProgress {
+    max-height: 4px;
+    min-height: 4px;
+    border-radius: 2px;
+}
+QProgressBar#captureProgress::chunk {
+    border-radius: 2px;
+}
+
+/* 수집 중 시작 버튼 - 비활성이지만 '진행 중' 상태로 보이게 */
+QPushButton#startBtn[capturing="true"]:disabled {
+    background-color: rgba($accent_rgb, 0.12);
+    color: $state_success;
+    border: 1px solid rgba($accent_rgb, 0.30);
 }
 
 /* 메뉴바 */

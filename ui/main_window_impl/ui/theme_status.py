@@ -2,8 +2,36 @@
 
 from __future__ import annotations
 
+import unicodedata
+
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
+
+
+_STATUS_ICONS = {
+    "info": "ℹ️",
+    "success": "✅",
+    "warning": "⚠️",
+    "error": "❌",
+    "running": "🔄",
+}
+_STATUS_MAX_LENGTH = 100
+
+# status -> (아이콘, 짧은 라벨)
+_CONNECTION_STATES = {
+    "idle": ("⚪", "대기"),
+    "connecting": ("🔵", "접속 중"),
+    "connected": ("🟢", "연결됨"),
+    "reconnecting": ("🟡", "재연결 중"),
+    "disconnected": ("🔴", "연결 끊김"),
+}
+
+
+def _starts_with_symbol(text: str) -> bool:
+    """메시지가 이미 이모지/기호 아이콘으로 시작하는지 확인한다."""
+    if not text:
+        return False
+    return unicodedata.category(text[0]) == "So"
 
 
 class MainWindowUIThemeStatusMixin(MainWindowHost):
@@ -146,33 +174,32 @@ class MainWindowUIThemeStatusMixin(MainWindowHost):
 
 
     def _set_status_now(self, text: str, status_type: str = "info"):
-            """상태 표시 (아이콘 + 색상)"""
+            """상태 표시 (아이콘 + 테마 색상)
+
+            색상은 ``statusType`` 동적 속성과 themes의 QSS 규칙이 담당하므로
+            테마 전환 시에도 자동으로 다시 칠해진다. 메시지가 이미 이모지로
+            시작하면 아이콘을 중복으로 붙이지 않는다.
+            """
             status_label = self.__dict__.get("status_label")
             if status_label is None:
                 self._last_status_message = str(text or "")
                 return
-            icons = {
-                "info": "ℹ️",
-                "success": "✅",
-                "warning": "⚠️",
-                "error": "❌",
-                "running": "🔄",
-            }
-            colors = {
-                "info": "#4fc3f7",
-                "success": "#4caf50",
-                "warning": "#ff9800",
-                "error": "#f44336",
-                "running": "#ab47bc",
-            }
-            icon = icons.get(status_type, "")
-            color = colors.get(status_type, "#eaeaea")
-            rendered = f"{icon} {text}"[:100]
-            current_style = f"color: {color};"
+            if status_type not in _STATUS_ICONS:
+                status_type = "info"
+            message = str(text or "").strip()
+            if _starts_with_symbol(message):
+                full_text = message
+            else:
+                full_text = f"{_STATUS_ICONS[status_type]} {message}".strip()
+            rendered = full_text
+            if len(rendered) > _STATUS_MAX_LENGTH:
+                rendered = rendered[: _STATUS_MAX_LENGTH - 1].rstrip() + "…"
+            tooltip = full_text if rendered != full_text else ""
             if status_label.text() != rendered:
                 status_label.setText(rendered)
-            if status_label.styleSheet() != current_style:
-                status_label.setStyleSheet(current_style)
+            if status_label.toolTip() != tooltip:
+                status_label.setToolTip(tooltip)
+            set_state_property(status_label, "statusType", status_type)
             self._last_status_message = rendered
 
     def _set_status(self, text: str, status_type: str = "info"):
@@ -196,41 +223,39 @@ class MainWindowUIThemeStatusMixin(MainWindowHost):
 
 
     def _update_connection_status(self, status: str, latency: int | None = None):
-            """연결 상태 인디케이터 업데이트 (#30)
+            """연결 상태 칩 업데이트 (#30)
 
             Args:
-                status: 'connected', 'disconnected', 'reconnecting'
+                status: 'idle', 'connecting', 'connected', 'disconnected', 'reconnecting'
                 latency: 응답 시간 (ms), 연결된 경우에만
             """
+            if status not in _CONNECTION_STATES:
+                status = "disconnected"
             self.connection_status = status
+            icon, text = _CONNECTION_STATES[status]
 
-            # 상태별 아이콘과 툴팁
-            status_config = {
-                "connected": ("🟢", "#4caf50", "연결됨"),
-                "disconnected": ("🔴", "#f44336", "연결 끊김"),
-                "reconnecting": ("🟡", "#ff9800", "재연결 중..."),
-            }
-
-            icon, color, text = status_config.get(status, ("⚫", "#888", "알 수 없음"))
-
-            # 레이턴시가 있으면 툴팁에 표시
             if latency is not None and status == "connected":
                 self.ping_latency = latency
-                tooltip = f"연결 상태: {text} ({latency}ms)"
+                tooltip = f"연결 상태: {text} (응답 {latency}ms)"
             elif status == "reconnecting":
-                tooltip = f"연결 상태: {text} (시도 {self.reconnect_attempts}/{Config.MAX_RECONNECT_ATTEMPTS})"
+                attempt = int(self.__dict__.get("reconnect_attempts", 0) or 0)
+                text = f"재연결 {attempt}/{Config.MAX_RECONNECT_ATTEMPTS}"
+                tooltip = (
+                    f"연결 상태: 재연결 중 "
+                    f"(시도 {attempt}/{Config.MAX_RECONNECT_ATTEMPTS})"
+                )
             else:
                 tooltip = f"연결 상태: {text}"
 
-            current_style = (
-                f"background: transparent; border: none; font-size: 12px; color: {color};"
-            )
-            if self.connection_indicator.text() != icon:
-                self.connection_indicator.setText(icon)
-            if self.connection_indicator.toolTip() != tooltip:
-                self.connection_indicator.setToolTip(tooltip)
-            if self.connection_indicator.styleSheet() != current_style:
-                self.connection_indicator.setStyleSheet(current_style)
+            indicator = self.__dict__.get("connection_indicator")
+            if indicator is None:
+                return
+            rendered = f"{icon} {text}"
+            if indicator.text() != rendered:
+                indicator.setText(rendered)
+            if indicator.toolTip() != tooltip:
+                indicator.setToolTip(tooltip)
+            set_state_property(indicator, "connState", status)
 
 
     def _set_font_size(self, size: int):

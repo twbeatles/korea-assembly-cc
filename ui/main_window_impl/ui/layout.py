@@ -228,12 +228,14 @@ class MainWindowUILayoutMixin(MainWindowHost):
             # === 컨트롤 버튼 ===
             btn_layout = QHBoxLayout()
 
-            self.start_btn = QPushButton("▶  시작")
+            self.start_btn = QPushButton(CAPTURE_START_BUTTON_TEXT)
             self.start_btn.setObjectName("startBtn")
+            self.start_btn.setToolTip("자막 수집 시작 (F5)")
             self.start_btn.clicked.connect(self._start)
 
             self.stop_btn = QPushButton("⏹  중지")
             self.stop_btn.setObjectName("stopBtn")
+            self.stop_btn.setToolTip("자막 수집 중지 (Esc)")
             self.stop_btn.setEnabled(False)
             self.stop_btn.clicked.connect(self._stop)
 
@@ -254,8 +256,12 @@ class MainWindowUILayoutMixin(MainWindowHost):
             layout.addLayout(btn_layout)
 
             # === 진행 표시 ===
+            # 브라우저 접속/재연결 구간에만 보이는 얇은 indeterminate 바
             self.progress = QProgressBar()
+            self.progress.setObjectName("captureProgress")
             self.progress.setMaximum(0)
+            self.progress.setTextVisible(False)
+            self.progress.setFixedHeight(4)
             self.progress.hide()
             layout.addWidget(self.progress)
 
@@ -280,8 +286,22 @@ class MainWindowUILayoutMixin(MainWindowHost):
 
             subtitle_layout.addWidget(self.subtitle_text)
 
+            # === "최신 자막" 플로팅 버튼 (스마트 스크롤용) ===
+            # 레이아웃에 넣지 않고 자막 뷰 위에 띄워 표시/숨김 시 화면이 흔들리지 않게 한다.
+            self.scroll_to_bottom_btn = QPushButton("⬇️ 최신 자막", self.subtitle_text)
+            self.scroll_to_bottom_btn.setObjectName("scrollToBottom")
+            self.scroll_to_bottom_btn.setToolTip("최신 자막으로 이동하고 자동 스크롤 재개")
+            self.scroll_to_bottom_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.scroll_to_bottom_btn.clicked.connect(self._scroll_to_bottom)
+            self.scroll_to_bottom_btn.hide()  # 초기에는 숨김
+            self._scroll_to_bottom_anchor = OverlayAnchor(
+                self.subtitle_text, self.scroll_to_bottom_btn
+            )
+
             # 실시간 미리보기 영역 (별도 표시)
             self.preview_frame = QFrame()
+            self.preview_frame.setObjectName("previewFrame")
+            self.preview_frame.setToolTip("아직 확정되지 않은 실시간 자막입니다")
             preview_layout = QHBoxLayout(self.preview_frame)
             preview_layout.setContentsMargins(8, 6, 8, 6)
             preview_layout.setSpacing(8)
@@ -332,22 +352,16 @@ class MainWindowUILayoutMixin(MainWindowHost):
             for label in stat_labels:
                 label.setObjectName("statChip")
                 label.setFont(QFont("맑은 고딕", 10))
+                # 패널이 낮아져도 칩 텍스트가 잘리지 않도록 최소 높이를 보장한다.
+                label.setMinimumHeight(30)
                 stats_layout.addWidget(label)
 
             stats_layout.addStretch()
-            self.stats_group.setFixedWidth(220)
+            self.stats_group.setFixedWidth(250)
             self.main_splitter.addWidget(self.stats_group)
 
-            self.main_splitter.setSizes([860, 220])
+            self.main_splitter.setSizes([830, 250])
             layout.addWidget(self.main_splitter)
-
-            # === "최신 자막" 플로팅 버튼 (스마트 스크롤용) ===
-            self.scroll_to_bottom_btn = QPushButton("⬇️ 최신 자막")
-            self.scroll_to_bottom_btn.setObjectName("scrollToBottom")
-            self.scroll_to_bottom_btn.setToolTip("최신 자막으로 이동하고 자동 스크롤 재개")
-            self.scroll_to_bottom_btn.clicked.connect(self._scroll_to_bottom)
-            self.scroll_to_bottom_btn.hide()  # 초기에는 숨김
-            layout.addWidget(self.scroll_to_bottom_btn)
 
             # === 검색바 (숨김) - 개선된 디자인 ===
             self.search_frame = QFrame()
@@ -404,18 +418,18 @@ class MainWindowUILayoutMixin(MainWindowHost):
             status_layout.setSpacing(12)
 
             # 상태 텍스트
+            # 색상은 themes의 QLabel#statusLabel[statusType=...] 규칙이 담당한다.
             self.status_label = QLabel("⚪ 대기 중")
-            self.status_label.setStyleSheet(
-                "background: transparent; border: none; font-weight: 600; font-size: 13px;"
+            self.status_label.setObjectName("statusLabel")
+            # 긴 메시지가 창 폭을 밀어내지 않도록 가로 크기는 레이아웃에 맡긴다.
+            self.status_label.setSizePolicy(
+                QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
             )
 
-            # 연결 상태 인디케이터 (#30) - 개선된 디자인
-            self.connection_indicator = QLabel("⚫")
+            # 연결 상태 칩 (#30) - 색상은 connState 동적 속성 QSS 규칙이 담당한다.
+            self.connection_indicator = QLabel("⚪ 대기")
+            self.connection_indicator.setObjectName("connectionIndicator")
             self.connection_indicator.setToolTip("연결 상태: 대기 중")
-            self.connection_indicator.setStyleSheet(
-                "background: transparent; border: none; font-size: 14px;"
-                " padding: 2px 8px; border-radius: 4px;"
-            )
 
             # 구분선
             separator = QFrame()
@@ -437,8 +451,7 @@ class MainWindowUILayoutMixin(MainWindowHost):
             )
             self.db_status_label.hide()
 
-            status_layout.addWidget(self.status_label)
-            status_layout.addStretch()
+            status_layout.addWidget(self.status_label, 1)
             status_layout.addWidget(self.connection_indicator)
             status_layout.addWidget(separator)
             status_layout.addWidget(self.realtime_status_label)
