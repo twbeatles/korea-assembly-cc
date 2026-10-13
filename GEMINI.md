@@ -20,7 +20,7 @@
 
 ## 2. 기술 스택
 
-- **언어**: Python 3.10+ (CI 3.12, 로컬 3.10–3.14)
+- **언어**: Python 3.10+ (CI 3.15, 로컬 3.10–3.15)
 - **GUI**: PyQt6 (Qt)
 - **웹 자동화**: Selenium + Chrome WebDriver
 - **동시성**: threading, bounded `queue.Queue` wrapper (`MainWindowMessageQueue`)
@@ -222,13 +222,13 @@ pip install -r requirements-dev.txt
 ```
 
 - `requirements-dev.txt`에는 DOCX(`python-docx`)와 HWP(`pywin32`) 저장용 optional 패키지가 함께 정리되어 있음
-- `pyinstaller==6.20.0`은 release/frozen smoke 검증용 개발 의존성으로 고정되어 있음
+- `pyinstaller==6.22.3`은 release/frozen smoke 검증용 개발 의존성으로 고정되어 있음
 - HWPX 저장은 기본 내장 기능이며 별도 외부 프로그램이 필요하지 않음
 
 ### 8.1 개발 품질 게이트
 - 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors` (`requirements-dev.txt` 핀)
 - **푸시 전**: `python scripts/install_git_hooks.py` (1회), `python scripts/check_before_push.py --pyright-only`
-- **CI**: `.github/workflows/ci.yml` — **pyright fail-fast → pytest** (Windows / Python 3.12)
+- **CI**: `.github/workflows/ci.yml` — **pyright fail-fast → pytest** (Windows / Python 3.15)
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
@@ -456,6 +456,12 @@ pip install -r requirements-dev.txt
 - 로컬 `typings/` stub과 `pytest.ini --basetemp=.pytest_tmp`로 글로벌 Python/Windows TEMP 권한 편차를 흡수하고, 루트 `.hwpx` 산출물도 `.gitignore`에 반영
 - `pywin32` 미설치 시 HWP 저장은 즉시 `HWPX`로 자동 대체되고, 저장 실패 경로에서만 RTF/DOCX/TXT 선택 다이얼로그를 유지
 - `pytest -q` 85 pass, `pyright` 0 errors
+
+## 9.9.4f 의존성 전면 업그레이드 + CI Python 3.15 (2026-10-13)
+- `requirements-dev.txt` 전면 상향: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
+- cryptography 47+에 Windows ARM64 휠이 없어 ARM64에서 `pip install` 전체가 깨지므로 `platform_machine` 조건 핀(ARM64만 46.0.3)으로 둔다. x64 CI는 50.0.2 휠로 설치된다.
+- CI(`.github/workflows/ci.yml`)를 Python 3.15 단일 버전으로 전환한다. 프로젝트 `.venv` 격리 검증을 기준으로 삼는다.
+- 회귀 기준선: `pytest -q` 486 pass / 2 skipped, `pyright` 0 errors / 0 warnings, `--smoke` 정상.
 
 ## 9.9.4e v16.14.11 의사중계 사이트 계약 동기화 (2026-09-17)
 - 청문회/공청회 live_list xcode `99` → `97`. 구 코드는 `LEGACY_COMMITTEE_XCODES`로 식별만 유지한다.

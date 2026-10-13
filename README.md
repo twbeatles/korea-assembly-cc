@@ -83,7 +83,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 
 ### 1. Python 설치
 
-Python **3.10 이상**에서 동작합니다. CI는 **3.12**, 로컬 개발은 3.10–3.14 범위를 지원합니다.  
+Python **3.10 이상**에서 동작합니다. CI는 **3.15** 단일 버전, 로컬 개발은 3.10–3.15 범위를 지원합니다.  
 개발·검증·빌드 시 `requirements-dev.txt` 핀을 그대로 설치하세요.  
 [Python 공식 사이트](https://www.python.org/downloads/)에서 다운로드하세요.
 

@@ -250,6 +250,13 @@ korea-assembly-cc/
 
 ## 6. 최신 변경 요약 (v16.14.11 기준)
 
+### 의존성 전면 업그레이드 + CI Python 3.15 (2026-10-13)
+- **`requirements-dev.txt` 전면 상향**: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
+- **cryptography ARM64 조건 핀**: 47+에 Windows ARM64 휠이 없어 ARM64에서 `pip install` 전체가 깨지므로 `platform_machine` 조건으로 ARM64만 46.0.3을 쓴다. x64 CI는 50.0.2 휠로 설치된다.
+- **CI 단일 버전 전환**: `.github/workflows/ci.yml`을 Python 3.15로 바꾸고 README/CLAUDE/GEMINI의 버전 표기를 맞췄다. 검증은 프로젝트 루트 `.venv` 격리 환경이 기준이다.
+- **`.venv` 스캔 제외**: 신규 `.venv`가 인코딩 위생 테스트에 걸려 `EXCLUDED_DIRS`와 `pytest.ini norecursedirs`에 venv 계열을 추가했다(의도는 그대로).
+- **회귀 기준선**: `pytest -q` 486 pass / 2 skipped, `pyright` 0 errors / 0 warnings, `--smoke` 정상.
+
 ### 자막 수집 UI/UX 다듬기 (2026-09-30)
 - **캡처 컨트롤 단일화**: `_apply_capture_controls_state(running)`가 시작/중지/URL/선택자 활성 상태, 시작 버튼 라벨(`▶ 시작`/`⏺ 수집 중`), 창 제목(`● 수집 중 · 위원회 — 앱`)을 함께 맞춘다. `_begin_extraction_run`/`_reset_ui`가 공유한다.
 - **상태 라벨/연결 칩 테마화**: 인라인 `setStyleSheet` 대신 `statusType`/`connState` 동적 속성 + `QLabel#statusLabel`/`QLabel#connectionIndicator` QSS 규칙(팔레트 `state_*` 토큰). 이모지로 시작하는 메시지는 아이콘 중복 없음, 100자 초과 시 `…` + 전체 툴팁. 연결 칩은 `idle/connecting/connected/reconnecting/disconnected` 텍스트 표시(지연 ms는 툴팁)
@@ -612,7 +619,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - **푸시 전 (필수 권장)**:
   - `python scripts/install_git_hooks.py` (1회) → `git push` 시 pre-push 가 pyright 실행
   - 수동: `python scripts/check_before_push.py --pyright-only`
-- **GitHub CI** (`.github/workflows/ci.yml`): **pyright fail-fast → pytest** 순서 (Windows, Python 3.12)
+- **GitHub CI** (`.github/workflows/ci.yml`): **pyright fail-fast → pytest** 순서 (Windows, Python 3.15)
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과 (기본 in-process smoke·pyright fallback 포함, `*_subprocess` 테스트는 환경에 따라 skip)
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - pyright suppression policy: `tests/test_pyright_suppression_policy.py`가 파일 단위 `# pyright:` directive 재도입을 차단

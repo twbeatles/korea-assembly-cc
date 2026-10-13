@@ -29,14 +29,18 @@ EXCLUDED_DIRS = {
     ".pytest_tmp",
     ".ruff_cache",
     ".tox",
+    ".venv",
+    "ENV",
     "__pycache__",
     "backups",
     "build",
     "dist",
+    "env",
     "logs",
     "realtime_output",
     "sessions",
     "tmp_extension_unpacked",
+    "venv",
 }
 ROUND_TRIP_EXPECTATIONS = {
     PROJECT_ROOT / ".editorconfig": "charset = utf-8",

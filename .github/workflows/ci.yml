@@ -27,7 +27,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           # README/로컬과 맞춘 지원 축. requirements-dev.txt 핀을 그대로 설치한다.
-          python-version: "3.12"
+          python-version: "3.15"
           cache: pip
           # 이 저장소는 requirements.txt / pyproject.toml 대신
           # requirements-dev.txt 를 단일 의존성 핀 파일로 쓴다.
