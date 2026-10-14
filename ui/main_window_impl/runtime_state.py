@@ -7,8 +7,8 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, cast
 
-from PyQt6.QtCore import QSettings, QTimer
-from PyQt6.QtGui import QColor, QFont, QIcon, QTextCharFormat
+from PySide6.QtCore import QSettings, QTimer
+from PySide6.QtGui import QColor, QFont, QIcon, QTextCharFormat
 
 from core.config import Config
 from core.live_capture import create_empty_live_capture_ledger

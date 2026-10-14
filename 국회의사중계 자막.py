@@ -3,7 +3,7 @@
 국회 의사중계 자막 추출기
 - 버전 표기는 README.md 기준
 - 참조 코드 기반 안정성 강화
-- PyQt6 모던 UI
+- PySide6 모던 UI
 - 추가 기능: 자동저장, 실시간 저장, 검색 필터, URL 히스토리, SRT/VTT 내보내기, 통계, 하이라이트, 세션 저장
 """
 
@@ -15,7 +15,7 @@ import sys
 import time
 from typing import Any, cast
 
-# HiDPI 지원 - PyQt6 임포트 전에 설정 필요
+# HiDPI 지원 - PySide6 임포트 전에 설정 필요
 os.environ['QT_ENABLE_HIGHDPI_SCALING'] = '1'
 os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 
@@ -255,8 +255,8 @@ def _run_window_instantiation_smoke(
 def _run_smoke(args: argparse.Namespace) -> int:
     output_path = str(getattr(args, "smoke_output", "") or "")
     try:
-        from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: F401
-        from PyQt6.QtGui import QFont  # noqa: F401
+        from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: F401
+        from PySide6.QtGui import QFont  # noqa: F401
         from selenium import webdriver  # noqa: F401
 
         from core.config import Config
@@ -378,10 +378,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         try:
-            from PyQt6.QtWidgets import QApplication, QMessageBox
-            from PyQt6.QtGui import QFont
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            from PySide6.QtGui import QFont
         except ImportError:
-            print("PyQt6 필요: pip install PyQt6")
+            print("PySide6 필요: pip install PySide6")
             return 1
 
         try:
@@ -432,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
             return int(app.exec())
 
     except Exception as e:
-        from PyQt6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox
         from core.logging_utils import logger
 
         logger.exception(f"프로그램 오류: {e}")

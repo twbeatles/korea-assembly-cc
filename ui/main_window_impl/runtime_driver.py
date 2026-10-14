@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
-from PyQt6.QtWidgets import QCheckBox, QMessageBox
+from PySide6.QtWidgets import QCheckBox, QMessageBox
 
 from core import utils
 from core.config import Config

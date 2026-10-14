@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 from typing import Any
 
-from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QCloseEvent
-from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QCloseEvent
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -95,7 +95,7 @@ class RecoveryCandidateDialog(QDialog):
 class LiveBroadcastDialog(QDialog):
     """현재 생중계 중인 방송 목록을 보여주고 선택하는 다이얼로그"""
 
-    sig_fetch_done = pyqtSignal(int, object)
+    sig_fetch_done = Signal(int, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)

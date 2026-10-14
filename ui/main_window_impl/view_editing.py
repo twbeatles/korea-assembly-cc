@@ -4,7 +4,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QDialog,

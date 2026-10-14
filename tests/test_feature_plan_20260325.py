@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from PyQt6 import QtGui
-from PyQt6.QtGui import QTextCharFormat, QTextCursor
+from PySide6 import QtGui
+from PySide6.QtGui import QTextCharFormat, QTextCursor
 
 import ui.main_window_database as database_mod
 import ui.main_window_persistence as persistence_mod

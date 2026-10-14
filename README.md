@@ -1,11 +1,11 @@
 # 🏛️ 국회 의사중계 자막 추출기 (Korea Assembly CC) v16.14.12
 
-대한민국 국회 의사중계 웹사이트의 **실시간 AI 자막**을 수집·정리·검색하고 파일로 저장하는 PyQt6 기반 데스크톱 프로그램입니다. 국회 회의와 발언을 실시간으로 기록하거나, 후속 검토를 위한 자막 파일이 필요한 기자·연구자·시민단체·일반 사용자를 위해 만들었습니다.
+대한민국 국회 의사중계 웹사이트의 **실시간 AI 자막**을 수집·정리·검색하고 파일로 저장하는 PySide6 기반 데스크톱 프로그램입니다. 국회 회의와 발언을 실시간으로 기록하거나, 후속 검토를 위한 자막 파일이 필요한 기자·연구자·시민단체·일반 사용자를 위해 만들었습니다.
 
 수집한 자막은 TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션으로 저장할 수 있습니다. Python과 Chrome을 설치한 뒤 아래 설치 방법의 명령으로 바로 실행할 수 있으며, 최신 배포본은 [GitHub Releases](https://github.com/twbeatles/korea-assembly-cc/releases)에서 받을 수 있습니다.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green)
+![PyQt6](https://img.shields.io/badge/GUI-PySide6-green)
 ![Selenium](https://img.shields.io/badge/Automation-Selenium-orange)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
 
@@ -96,7 +96,7 @@ pip install -r requirements-dev.txt
 최소 실행만 필요한 경우:
 
 ```bash
-pip install PyQt6 selenium cryptography
+pip install PySide6 selenium cryptography
 ```
 
 ### 3. 선택 기능 참고

@@ -5,8 +5,8 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QTextCursor
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QTextCursor
 
 from core import utils
 from core.config import Config
@@ -255,6 +255,10 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         self._pending_search_focus_query = ""
 
     def _render_subtitles(self, force_full: bool = False) -> None:
+        # UI가 아직 생성되지 않은 윈도우에서는 렌더를 건너뛴다.
+        # (지연 리프레시가 이벤트 루프에서 뒤늦게 발화되는 경우 크래시 방지)
+        if getattr(self, "subtitle_text", None) is None:
+            return
         scrollbar = self.subtitle_text.verticalScrollBar()
         assert scrollbar is not None
         preserve_scroll = bool(getattr(self, "_user_scrolled_up", False))

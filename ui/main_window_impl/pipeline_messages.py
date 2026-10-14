@@ -9,7 +9,7 @@ from datetime import datetime
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 
-from PyQt6.QtCore import QTimer
+from PySide6.QtCore import QTimer
 
 from core.config import Config
 from core.logging_utils import logger

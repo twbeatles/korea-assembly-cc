@@ -10,9 +10,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QCloseEvent
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCloseEvent
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
 from core.config import Config
 from core.live_capture import create_empty_live_capture_ledger

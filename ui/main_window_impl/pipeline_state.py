@@ -6,7 +6,7 @@ from datetime import datetime
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from PyQt6.QtCore import QTimer
+from PySide6.QtCore import QTimer
 
 from core import utils
 from core.config import Config

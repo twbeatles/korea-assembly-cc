@@ -14,7 +14,7 @@ from typing import Any, Callable, Iterable, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
@@ -46,8 +46,8 @@ from PyQt6.QtWidgets import (
     QToolBar,
     QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QTimer, QSettings
-from PyQt6.QtGui import (
+from PySide6.QtCore import Qt, QTimer, QSettings
+from PySide6.QtGui import (
     QCloseEvent,
     QFont,
     QColor,

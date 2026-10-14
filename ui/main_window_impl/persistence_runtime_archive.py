@@ -14,8 +14,8 @@ from core.runtime_archive_owner import (
     write_owner_file,
 )
 
-from PyQt6 import QtWidgets
-from PyQt6.QtCore import Qt, QTimer
+from PySide6 import QtWidgets
+from PySide6.QtCore import Qt, QTimer
 
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost

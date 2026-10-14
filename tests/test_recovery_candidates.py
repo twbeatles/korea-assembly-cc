@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from core.recovery_candidates import discover_recovery_candidates
 from ui.dialogs import RecoveryCandidateDialog
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 
 def _write_session(path, *, created: str, count: int) -> None:

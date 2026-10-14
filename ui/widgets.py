@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
-from PyQt6.QtCore import QEvent, QObject, QTimer
-from PyQt6.QtGui import QMouseEvent
-from PyQt6.QtWidgets import QFrame, QGroupBox, QHBoxLayout, QLabel, QLayout, QWidget
+from PySide6.QtCore import QEvent, QObject, QTimer
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtWidgets import QFrame, QGroupBox, QHBoxLayout, QLabel, QLayout, QWidget
 
 
 def set_state_property(widget: QWidget | None, name: str, value: str) -> bool:

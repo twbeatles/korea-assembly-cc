@@ -476,7 +476,7 @@ class MainWindowUIHelpMixin(MainWindowHost):
 
     <h3>📦 필요 라이브러리</h3>
     <ul>
-    <li>PyQt6</li>
+    <li>PySide6</li>
     <li>selenium</li>
     <li>python-docx (DOCX 저장용)</li>
     </ul>

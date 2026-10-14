@@ -21,7 +21,7 @@
 ## 2. 기술 스택
 
 - **언어**: Python 3.10+ (CI 3.15, 로컬 3.10–3.15)
-- **GUI**: PyQt6 (Qt)
+- **GUI**: PySide6 (Qt)
 - **웹 자동화**: Selenium + Chrome WebDriver
 - **동시성**: threading, bounded `queue.Queue` wrapper (`MainWindowMessageQueue`)
 - **설정**: QSettings, JSON
@@ -251,7 +251,7 @@ pip install -r requirements-dev.txt
 - `pyrightconfig.json`: 저장소 공통 타입 체크 기준
 - `.vscode/settings.json`: 워크스페이스 Pylance/UTF-8 설정
 - `.editorconfig`, `.gitattributes`: 텍스트 파일 인코딩/라인엔딩 기준
-- `typings/`: 글로벌 인터프리터 편차를 흡수하는 로컬 PyQt6/selenium/pytest stub
+- `typings/`: 글로벌 인터프리터 편차를 흡수하는 로컬 PySide6/selenium/pytest stub
 - `pytest.ini`: 워크스페이스 내부 basetemp(`.pytest_tmp`) 강제
 - `requirements-dev.txt`: 개발/검증 및 optional export 의존성 기준선
 - `ui/main_window_types.py`: 분할된 `MainWindow` mixin의 공통 `self` 타입 계약(`MainWindowHost`)

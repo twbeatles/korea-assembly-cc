@@ -1,5 +1,5 @@
 # Core runtime and repo-wide verification baseline
-PyQt6==6.11.0
+PySide6==6.12.0
 selenium==4.51.0
 pytest==9.1.1
 pyright==1.1.414

@@ -6,9 +6,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Pattern, TextIO
 
-from PyQt6.QtCore import QSettings, QTimer
-from PyQt6.QtGui import QAction, QTextCharFormat
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QSettings, QTimer
+from PySide6.QtGui import QAction, QTextCharFormat
+from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
@@ -29,7 +29,7 @@ from ui.main_window_common import SearchMatch, WorkerQueueMessage
 from ui.widgets import CollapsibleGroupBox, ToastWidget
 
 if TYPE_CHECKING:
-    from PyQt6.QtWidgets import QMainWindow
+    from PySide6.QtWidgets import QMainWindow
     from ui.main_window_common import DatabaseProtocol
 
     class MainWindowHost(QMainWindow):

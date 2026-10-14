@@ -15,7 +15,7 @@ import pytest
 
 mw_mod = pytest.importorskip("ui.main_window")
 widgets_mod = pytest.importorskip("ui.widgets")
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QWidget  # noqa: E402
 
 import ui.main_window_impl.pipeline_messages as pipeline_messages_mod  # noqa: E402
 from ui.themes import DARK_THEME, LIGHT_THEME, get_palette  # noqa: E402
@@ -373,7 +373,7 @@ def test_escape_is_noop_when_not_running() -> None:
 
 def test_set_confirm_escape_stop_persists_and_syncs_menu() -> None:
     _qapp()
-    from PyQt6.QtGui import QAction
+    from PySide6.QtGui import QAction
 
     win: Any = MainWindow.__new__(MainWindow)
     action = QAction("Esc로 중지 전 확인")

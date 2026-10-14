@@ -9,7 +9,7 @@
 reset/merge/runtime flush hardening,
 persistent snapshot/terminal queue/conditional FTS rebuild/smoke CLI/constructor smoke는 런타임 로직 변경만 포함하며,
 README/assets 외 추가 datas는 필요하지 않습니다.
-smoke CLI는 표준 라이브러리 argparse/json/ctypes와 기존 PyQt6/Selenium/Core/UI import surface만 사용합니다.
+smoke CLI는 표준 라이브러리 argparse/json/ctypes와 기존 PySide6/Selenium/Core/UI import surface만 사용합니다.
 facade 뒤 내부 구현은 `core.database_impl`, `core.subtitle_pipeline_impl`,
 `core.capture_contracts`, `ui.main_window_impl.persistence_runtime_*` hidden import로 고정합니다.
 SOLID 분할 후 `core.config_impl`, `ui.themes_impl`, `ui.main_window_impl.runtime_lifecycle_*`, `persistence_session_*`, `persistence_exports_*`, `database_dialogs_*`도 hidden import에 포함합니다.
@@ -57,17 +57,17 @@ EXCLUDES = [
     'IPython', 'jupyter', 'notebook',
     'pytest', 'unittest', 'test',
     # Qt 불필요 모듈
-    'PyQt6.QtBluetooth', 'PyQt6.QtDesigner', 'PyQt6.QtHelp',
-    'PyQt6.QtMultimedia', 'PyQt6.QtMultimediaWidgets',
-    'PyQt6.QtNfc', 'PyQt6.QtOpenGL',
-    'PyQt6.QtPositioning', 'PyQt6.QtPrintSupport',
-    'PyQt6.QtQml', 'PyQt6.QtQuick', 'PyQt6.QtQuickWidgets',
-    'PyQt6.QtRemoteObjects', 'PyQt6.QtSensors', 'PyQt6.QtSerialPort',
-    'PyQt6.QtSql', 'PyQt6.QtSvg', 'PyQt6.QtTest', 'PyQt6.QtWebChannel',
-    'PyQt6.QtWebEngine', 'PyQt6.QtWebEngineCore', 'PyQt6.QtWebEngineWidgets',
-    'PyQt6.QtWebSockets', 'PyQt6.QtXml', 'PyQt6.Qt3DCore',
-    'PyQt6.Qt3DAnimation', 'PyQt6.Qt3DExtras', 'PyQt6.Qt3DInput',
-    'PyQt6.Qt3DLogic', 'PyQt6.Qt3DRender',
+    'PySide6.QtBluetooth', 'PySide6.QtDesigner', 'PySide6.QtHelp',
+    'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets',
+    'PySide6.QtNfc', 'PySide6.QtOpenGL',
+    'PySide6.QtPositioning', 'PySide6.QtPrintSupport',
+    'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuickWidgets',
+    'PySide6.QtRemoteObjects', 'PySide6.QtSensors', 'PySide6.QtSerialPort',
+    'PySide6.QtSql', 'PySide6.QtSvg', 'PySide6.QtTest', 'PySide6.QtWebChannel',
+    'PySide6.QtWebEngine', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineWidgets',
+    'PySide6.QtWebSockets', 'PySide6.QtXml', 'PySide6.Qt3DCore',
+    'PySide6.Qt3DAnimation', 'PySide6.Qt3DExtras', 'PySide6.Qt3DInput',
+    'PySide6.Qt3DLogic', 'PySide6.Qt3DRender',
     # 기타
     'lib2to3', 'pydoc', 'doctest',
     'pkg_resources', 'setuptools', 'distutils',
@@ -137,7 +137,7 @@ HIDDEN_IMPORTS = [
     'selenium.webdriver.support.ui',
     'selenium.webdriver.support.expected_conditions',
     'ui.dialogs',
-    'PyQt6.QtNetwork',  # LiveBroadcastDialog(QNetworkAccessManager) 경로
+    'PySide6.QtNetwork',  # LiveBroadcastDialog(QNetworkAccessManager) 경로
     'ui.main_window',
     'ui.main_window_capture',
     'ui.main_window_common',

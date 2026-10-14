@@ -6,8 +6,8 @@ import shutil
 from typing import Any, Iterable, cast
 from uuid import uuid4
 
-from PyQt6 import QtWidgets
-from PyQt6.QtCore import Qt, QTimer
+from PySide6 import QtWidgets
+from PySide6.QtCore import Qt, QTimer
 
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost

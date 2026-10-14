@@ -152,7 +152,7 @@ class MainWindowUILayoutMixin(MainWindowHost):
             settings_layout.addWidget(selector_label, 1, 0)
             self.selector_combo = QComboBox()
             self.selector_combo.setEditable(True)
-            self.selector_combo.addItems(Config.DEFAULT_SELECTORS)
+            self.selector_combo.addItems(list(Config.DEFAULT_SELECTORS))
             self.selector_combo.setToolTip(
                 "자막 텍스트가 표시되는 HTML 요소의 CSS 선택자\n기본값을 사용하거나 직접 입력하세요"
             )
