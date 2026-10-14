@@ -1,10 +1,10 @@
 {
   "payload": {
-    "artifact_url": "https://github.com/twbeatles/korea-assembly-cc/releases/download/v16.14.12/korea-assembly-cc-v16.14.12.exe",
-    "expires_at": "2027-10-01T00:19:53Z",
-    "sha256": "9ee58ffe42af50c75dbbb6d2383f428ab393c7795ab9163ddd051e620f24ebbb",
-    "size": 54185073,
-    "version": "16.14.12"
+    "artifact_url": "https://github.com/twbeatles/korea-assembly-cc/releases/download/v16.14.13/korea-assembly-cc-v16.14.13.exe",
+    "expires_at": "2027-10-14T11:34:24Z",
+    "sha256": "faa37ee0ede438a7600ded0a6819c29ca0136f12fe920749f0e00dbd38d49bd2",
+    "size": 59690182,
+    "version": "16.14.13"
   },
-  "signature": "LDTrIkZmUz5j1dK0I+7B6NA5zfNWFhknTmvYYxycSEZJU5kKKSAxr4o5p6XoGQRB/y0O0gHcYjFvoSdy3CL1CQ=="
+  "signature": "KQV84Thl6m+irqRDcaojVNNgkVXH2W0FkpwrT1i0UKgT0vnoVeO9r1/G7iHxC/2fmMUNNQX0dT1eVnE7bS8GAQ=="
 }
