@@ -4,12 +4,29 @@ import json
 import os
 import re
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterable, Iterator, List, Mapping, Optional, TextIO, Union
 from core.config import Config
 from core.models import SubtitleEntry
 from core.resource_budget import ResourceLimitExceeded, check_file_size
+
+
+def _discard_temporary_file(path: Path) -> None:
+    """Best-effort cleanup, allowing a short-lived Windows sharing lock to clear.
+
+    Never replace the original serialization/write exception with a cleanup error.
+    """
+    for attempt in range(3):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if attempt < 2:
+                time.sleep(0.01 * (attempt + 1))
+        except Exception:
+            return
 
 
 def canonical_path_key(path: str | Path) -> str:
@@ -60,10 +77,7 @@ def atomic_write_json(
             os.fsync(f.fileno())
         os.replace(str(temp_file), str(target))
     except Exception:
-        try:
-            temp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        _discard_temporary_file(temp_file)
         raise
 
 
@@ -152,10 +166,7 @@ def atomic_write_json_stream(
             os.fsync(f.fileno())
         os.replace(str(temp_file), str(target))
     except Exception:
-        try:
-            temp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        _discard_temporary_file(temp_file)
         raise
 
 def atomic_write_text(
@@ -180,10 +191,7 @@ def atomic_write_text(
             os.fsync(f.fileno())
         os.replace(str(temp_file), str(target))
     except Exception:
-        try:
-            temp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        _discard_temporary_file(temp_file)
         raise
 
 
@@ -209,10 +217,7 @@ def atomic_write_text_via_writer(
             os.fsync(f.fileno())
         os.replace(str(temp_file), str(target))
     except Exception:
-        try:
-            temp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        _discard_temporary_file(temp_file)
         raise
 
 def atomic_write_bytes(path: Union[str, Path], content: bytes) -> None:
@@ -231,10 +236,7 @@ def atomic_write_bytes(path: Union[str, Path], content: bytes) -> None:
             os.fsync(f.fileno())
         os.replace(str(temp_file), str(target))
     except Exception:
-        try:
-            temp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        _discard_temporary_file(temp_file)
         raise
 
 
@@ -257,8 +259,5 @@ def atomic_write_bytes_via_writer(
             os.fsync(f.fileno())
         os.replace(str(temp_file), str(target))
     except Exception:
-        try:
-            temp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        _discard_temporary_file(temp_file)
         raise

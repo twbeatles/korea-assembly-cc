@@ -1,4 +1,4 @@
-from typing import Any, ContextManager
+from typing import Any, Callable, ContextManager
 
 
 class _MarkDecorator:
@@ -9,6 +9,7 @@ class _MarkNamespace:
     skip: _MarkDecorator
     skipif: _MarkDecorator
     requires_subprocess: _MarkDecorator
+    parametrize: _MarkDecorator
 
 
 class Item:
@@ -28,11 +29,16 @@ class MonkeyPatch:
     ) -> None: ...
 
 
-class RaisesContext(ContextManager[BaseException]):
+class ExceptionInfo:
+    value: BaseException
+
+
+class RaisesContext(ContextManager[ExceptionInfo]):
     ...
 
 
 def importorskip(modname: str, minversion: str | None = None, reason: str | None = None) -> Any: ...
+def fixture(fixture_function: Callable[..., Any] | None = ..., **kwargs: Any) -> Any: ...
 def raises(expected_exception: type[BaseException], *args: Any, **kwargs: Any) -> RaisesContext: ...
 def skip(reason: str = "", *, allow_module_level: bool = False) -> None: ...
 

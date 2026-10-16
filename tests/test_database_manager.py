@@ -137,11 +137,8 @@ def test_database_checkpoint_accepts_only_known_modes(tmp_path):
     try:
         assert db.checkpoint("PASSIVE") is True
         assert db.checkpoint("full") is True
-        try:
+        with pytest.raises(ValueError):
             db.checkpoint("PASSIVE); VACUUM; --")
-            assert False, "허용되지 않은 checkpoint mode는 ValueError가 발생해야 함"
-        except ValueError:
-            pass
     finally:
         db.close_all()
 
