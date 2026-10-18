@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.13
+- **버전**: v16.14.14
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -249,6 +249,14 @@ korea-assembly-cc/
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
 ## 6. 최신 변경 요약 (v16.14.11 기준)
+
+### 자동 줄넘김 정리 = 타임스탬프 블록 문단화 (v16.14.14, 2026-10-18)
+- **원인**: 기존 옵션은 엔트리 *내부* 개행만 평탄화(`flatten_subtitle_text`)해 실질 효과가 없었고, 화면의 줄바꿈은 `_build_render_chunk`가 엔트리마다 넣는 `\n`이었다.
+- **새 의미**: `core/timestamp_blocks.py`가 공통 규칙을 가진다. 직전 블록 시작으로부터 간격(`timestamp_block_interval`, 30초/1분/2분/5분, 기본 1분, QSettings 저장) 이상 지나면 새 문단 + `[HH:MM:SS]`, 그 안의 엔트리는 화자 무관 공백/문장부호 규칙으로 이어 붙인다. 타임스탬프 표시가 꺼져도 문단 경계는 같다.
+- **적용 범위**: 화면 렌더, TXT/DOCX/HWPX/HWP/RTF export, 클립보드 복사. `SubtitleEntry` 데이터·SRT/VTT·JSON·DB는 변경하지 않는다. export는 UI 스레드에서 `_get_display_layout()` 스냅샷을 넘긴다. 실시간 저장은 엔트리 단위 그대로.
+- **렌더**: 엔트리별 span(검색/포커스)과 tail patch는 유지, `(merge, interval)` 변경 시 full render. 옵션 OFF면 기존 엔트리별 줄 + 간격 기준 타임스탬프.
+- **UI**: 체크박스 옆 `⏱️ 간격` 콤보, 예시 포함 리치 툴팁. 툴바 `✨ 줄넘김 정리`(1회 데이터 리플로우)와의 차이를 툴팁에 명시.
+- **회귀**: `tests/test_timestamp_blocks.py`
 
 ### 의존성 전면 업그레이드 + CI Python 3.15 (2026-10-13)
 - **`requirements-dev.txt` 전면 상향**: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.

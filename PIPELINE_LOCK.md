@@ -114,6 +114,7 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
   -> driver lifecycle은 _driver_lock + identity helper로 serialize
   -> MutationObserver 버퍼 우선 수집, 미수집 시 structured probe 수행
   -> auto_clean_newlines 옵션(기본 ON)에 따라 줄바꿈/빈 줄 평탄화
+     (v16.14.14: 표시 계층 `core/timestamp_blocks.py`가 타임스탬프 블록 단위로 이어 붙임 — 코어 suffix 의미론·SubtitleEntry 데이터는 변경 없음)
   -> clean/compact 기준 중복 전송 억제
   -> 동일 raw 유지 구간 keepalive 메시지 발행
   -> 자막 영역 클리어 감지 → subtitle_reset (완전 리셋)

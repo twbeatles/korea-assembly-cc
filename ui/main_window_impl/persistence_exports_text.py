@@ -149,13 +149,17 @@ class MainWindowPersistenceExportsTextMixin(MainWindowHost):
             if not path:
                 return
 
+            layout = self._get_display_layout()
+
             def do_save(filepath):
                 def writer(handle) -> None:
-                    for timestamp, text, should_print_ts in self._iter_display_session_rows(
+                    for row in self._iter_display_session_rows(
                         prepared_entries,
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
+                        layout=layout,
                     ):
+                        timestamp, text, should_print_ts = row[0], row[1], row[2]
                         safe_text = sanitize_document_text(text)
                         if not safe_text.strip():
                             continue

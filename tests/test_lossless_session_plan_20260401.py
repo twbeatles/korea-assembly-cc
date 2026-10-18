@@ -1377,6 +1377,8 @@ def test_save_rtf_writes_ascii_safe_unicode_and_preserves_line_breaks(tmp_path, 
     entry = SubtitleEntry("한글🙂\n둘째 줄")
 
     win = MainWindow.__new__(MainWindow)
+    # 자동 줄넘김 정리 OFF: 엔트리 내부 개행 보존 계약
+    win.auto_clean_newlines_enabled = False
     win._build_prepared_entries_snapshot = lambda: [entry]
     win._generate_smart_filename = lambda _ext: "unicode-test.rtf"
     win._save_in_background = lambda save_func, path, *_args: save_func(path)

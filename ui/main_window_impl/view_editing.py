@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.config import Config
+from core.timestamp_blocks import build_plain_text
 from ui.main_window_common import (
     build_subtitle_dialog_items,
     filter_subtitle_dialog_items,
@@ -99,13 +100,25 @@ class MainWindowViewEditingMixin(ViewEditingBase):
         state["rendered_items"] = []
         self._load_more_subtitle_dialog_items(list_widget, state, reset=True)
 
+    def _build_clipboard_text(self, entries: list[Any]) -> str:
+        layout = self._get_display_layout()
+        if not layout.merge_blocks:
+            return "\n".join(s.text for s in entries)
+        return build_plain_text(
+            ((s.timestamp, s.text) for s in entries),
+            layout,
+            with_timestamps=bool(
+                getattr(self.__dict__.get("timestamp_action"), "isChecked", lambda: False)()
+            ),
+        )
+
     def _copy_to_clipboard(self) -> None:
         if self.is_running and self._has_runtime_archived_segments():
             with self.subtitle_lock:
                 if not self.subtitles:
                     self._show_toast("복사할 자막이 없습니다", "warning")
                     return
-                text = "\n".join(s.text for s in self.subtitles)
+                text = self._build_clipboard_text(self.subtitles)
                 copied_count = len(self.subtitles)
 
             clipboard = QApplication.clipboard()
@@ -125,7 +138,7 @@ class MainWindowViewEditingMixin(ViewEditingBase):
                 if not self.subtitles:
                     self._show_toast("복사할 자막이 없습니다", "warning")
                     return
-                text = "\n".join(s.text for s in self.subtitles)
+                text = self._build_clipboard_text(self.subtitles)
                 copied_count = len(self.subtitles)
 
             clipboard = QApplication.clipboard()

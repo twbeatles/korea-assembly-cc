@@ -8,6 +8,7 @@ from zipfile import ZIP_STORED, ZipFile
 
 from core.export_text import sanitize_document_text, strip_illegal_xml_chars
 from core.file_io import atomic_write_bytes
+from core.timestamp_blocks import DisplayLayout, iter_display_rows
 
 _TITLE = "국회 의사중계 자막"
 _HEADER_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "assets" / "hwpx" / "header.xml"
@@ -76,27 +77,26 @@ _PARAGRAPH_TEMPLATE = (
 def build_hwpx_lines(
     subtitles_snapshot: Iterable[tuple[datetime, str]],
     generated_at: datetime,
+    *,
+    layout: DisplayLayout | None = None,
 ) -> list[str]:
     total_chars = 0
     total_count = 0
     lines = [_TITLE, f"생성 일시: {generated_at.strftime('%Y년 %m월 %d일 %H:%M:%S')}", ""]
 
-    last_printed_ts: datetime | None = None
-    for timestamp, text in subtitles_snapshot:
-        safe_text = sanitize_document_text(text)
+    active_layout = layout or DisplayLayout(merge_blocks=False)
+    sanitized_rows = (
+        (timestamp, sanitize_document_text(text))
+        for timestamp, text in subtitles_snapshot
+    )
+    for row in iter_display_rows(sanitized_rows, active_layout):
+        safe_text = row.text
         if not safe_text.strip():
             continue
-        total_count += 1
+        total_count += row.entry_count
         total_chars += len(safe_text)
-        should_print_ts = False
-        if last_printed_ts is None:
-            should_print_ts = True
-        elif (timestamp - last_printed_ts).total_seconds() >= 60:
-            should_print_ts = True
-
-        if should_print_ts:
-            prefix = f"[{timestamp.strftime('%H:%M:%S')}] "
-            last_printed_ts = timestamp
+        if row.print_timestamp:
+            prefix = f"[{row.timestamp.strftime('%H:%M:%S')}] "
         else:
             prefix = ""
 
@@ -184,6 +184,8 @@ def build_content_hpf(generated_at: datetime) -> str:
 def build_hwpx_bytes(
     subtitles_snapshot: Iterable[tuple[datetime, str]],
     generated_at: datetime | None = None,
+    *,
+    layout: DisplayLayout | None = None,
 ) -> bytes:
     generated = generated_at or datetime.now().astimezone()
     if not _HEADER_TEMPLATE_PATH.is_file():
@@ -191,7 +193,7 @@ def build_hwpx_bytes(
             f"HWPX 헤더 템플릿을 찾을 수 없습니다: {_HEADER_TEMPLATE_PATH}"
         )
     header_xml = _HEADER_TEMPLATE_PATH.read_text(encoding="utf-8")
-    lines = build_hwpx_lines(subtitles_snapshot, generated)
+    lines = build_hwpx_lines(subtitles_snapshot, generated, layout=layout)
     section_xml = build_section_xml(lines)
     preview_text = "\r\n".join(line.replace("\n", "\r\n") for line in lines).rstrip() + "\r\n"
     content_hpf = build_content_hpf(generated)
@@ -244,5 +246,10 @@ def save_hwpx_document(
     filepath: str | Path,
     subtitles_snapshot: Iterable[tuple[datetime, str]],
     generated_at: datetime | None = None,
+    *,
+    layout: DisplayLayout | None = None,
 ) -> None:
-    atomic_write_bytes(filepath, build_hwpx_bytes(subtitles_snapshot, generated_at))
+    atomic_write_bytes(
+        filepath,
+        build_hwpx_bytes(subtitles_snapshot, generated_at, layout=layout),
+    )

@@ -19,6 +19,7 @@ from core.export_text import (
 )
 from core.hwpx_export import save_hwpx_document
 from core.file_io import canonical_path_key
+from core.timestamp_blocks import iter_display_rows
 
 
 
@@ -73,6 +74,7 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
             point_factory = cast(Callable[[int], Any], docx_shared.Pt)
             paragraph_alignment = cast(Any, docx_enum_text.WD_ALIGN_PARAGRAPH)
             break_types = cast(Any, docx_enum_text.WD_BREAK)
+            layout = self._get_display_layout()
 
             def do_save(filepath):
                 doc = document_factory()
@@ -85,19 +87,20 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
 
                 total_count = 0
                 total_chars = 0
-                for timestamp, text, should_print_ts in self._iter_display_session_rows(
+                for row in self._iter_display_session_rows(
                     prepared_entries,
                     runtime_root=runtime_root,
                     runtime_manifest=runtime_manifest,
+                    layout=layout,
                 ):
-                    safe_text = sanitize_document_text(text)
+                    safe_text = sanitize_document_text(row.text)
                     if not safe_text.strip():
                         continue
-                    total_count += 1
+                    total_count += row.entry_count
                     total_chars += len(safe_text)
                     paragraph = doc.add_paragraph()
-                    if should_print_ts:
-                        ts = timestamp.strftime("%H:%M:%S")
+                    if row.print_timestamp:
+                        ts = row.timestamp.strftime("%H:%M:%S")
                         run = paragraph.add_run(f"[{ts}] ")
                         run.font.size = point_factory(9)
                         run.font.color.rgb = None
@@ -145,6 +148,7 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
                 return
 
             generated_at = datetime.now()
+            layout = self._get_display_layout()
 
             def do_save(filepath):
                 save_hwpx_document(
@@ -155,6 +159,7 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
                         runtime_manifest=runtime_manifest,
                     ),
                     generated_at,
+                    layout=layout,
                 )
 
             self._save_in_background(do_save, path, "HWPX 저장 완료!", "HWPX 저장 실패")
@@ -211,6 +216,8 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
                     self._save_hwpx()
                     return
 
+            layout = self._get_display_layout()
+
             def do_save(filepath):
                 hwp_obj: Any | None = None
                 pythoncom_module = None
@@ -258,18 +265,19 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
 
                     total_count = 0
                     total_chars = 0
-                    for timestamp, text, should_print_ts in self._iter_display_session_rows(
+                    for row in self._iter_display_session_rows(
                         prepared_entries,
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
+                        layout=layout,
                     ):
-                        safe_text = normalize_hwp_insert_text(text)
+                        safe_text = normalize_hwp_insert_text(row.text)
                         if not safe_text.strip():
                             continue
-                        total_count += 1
+                        total_count += row.entry_count
                         total_chars += len(safe_text.replace("\r\n", "\n"))
-                        if should_print_ts:
-                            ts = timestamp.strftime("%H:%M:%S")
+                        if row.print_timestamp:
+                            ts = row.timestamp.strftime("%H:%M:%S")
                             insert_text(f"[{ts}] {safe_text}\r\n")
                         else:
                             insert_text(f"{safe_text}\r\n")
@@ -417,6 +425,8 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
             if not path:
                 return
 
+            layout = self._get_display_layout()
+
             def do_save(filepath):
                 total_count = 0
                 total_chars = 0
@@ -437,15 +447,24 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
                     )
                     handle.write(f"\\pard\\ql\\fs20 {date_str}\\par\\par\n".encode("ascii"))
 
-                    for timestamp, text in self._iter_full_session_text_rows(
+                    text_rows = self._iter_full_session_text_rows(
                         prepared_entries,
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
-                    ):
+                    )
+                    if layout.merge_blocks:
+                        rows = (
+                            (row.timestamp, row.text, row.entry_count)
+                            for row in iter_display_rows(text_rows, layout)
+                        )
+                    else:
+                        # 일반 모드 RTF는 기존처럼 엔트리마다 타임스탬프를 붙인다.
+                        rows = ((timestamp, text, 1) for timestamp, text in text_rows)
+                    for timestamp, text, entry_count in rows:
                         safe_text = sanitize_document_text(text)
                         if not safe_text.strip():
                             continue
-                        total_count += 1
+                        total_count += entry_count
                         total_chars += len(safe_text)
                         encoded_text = self._rtf_encode(safe_text)
                         handle.write(

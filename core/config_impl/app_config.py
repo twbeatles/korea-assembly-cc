@@ -316,6 +316,10 @@ class Config:
     # 자동 줄넘김 정리 기본값
     AUTO_CLEAN_NEWLINES_DEFAULT = True
 
+    # 타임스탬프 블록 간격(초): [HH:MM:SS] 표기/문단 분리 기준
+    TIMESTAMP_BLOCK_INTERVAL_DEFAULT = 60
+    TIMESTAMP_BLOCK_INTERVAL_CHOICES = (30, 60, 120, 300)
+
     # 세션 병합 중복 제거 시간 버킷(초)
     MERGE_DEDUP_TIME_BUCKET_SECONDS = 30
 

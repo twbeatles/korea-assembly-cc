@@ -140,6 +140,8 @@ def test_save_hwpx_strips_control_chars(tmp_path, monkeypatch):
 
 def test_save_hwp_uses_smart_filename_and_multiline(tmp_path, monkeypatch):
     win = _build_window()
+    # 자동 줄넘김 정리 OFF: 엔트리 내부 개행 보존 계약
+    win.auto_clean_newlines_enabled = False
     entry = SubtitleEntry("첫 줄\n둘째 줄", datetime(2026, 3, 23, 10, 0, 0))
     win._build_prepared_entries_snapshot = lambda: [entry]
     names: list[str] = []

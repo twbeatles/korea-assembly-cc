@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.12
+- **버전**: v16.14.14
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ### 관련 문서
@@ -613,6 +613,14 @@ pip install -r requirements-dev.txt
 ### 📄 Export / 저장소 hygiene
 - DOCX/HWPX는 한 `SubtitleEntry`를 한 문단/블록으로 유지하고, 엔트리 내부 개행은 paragraph split이 아니라 line break로 저장
 - `.gitignore`는 `session_recovery.json` 같은 런타임 복구 state를 무시하고, `subtitle_extractor.spec`은 이 state가 frozen 번들에 포함되지 않음을 명시
+
+## 9.9.4 v16.14.14 자동 줄넘김 정리 = 타임스탬프 블록 문단화 (2026-10-18)
+- 원인: 기존 옵션은 엔트리 *내부* 개행만 평탄화(`flatten_subtitle_text`)해 효과가 없었고, 화면 줄바꿈은 `_build_render_chunk`가 엔트리마다 넣는 `
+`이었다.
+- `core/timestamp_blocks.py`가 공통 규칙을 가진다. 직전 블록 시작으로부터 `timestamp_block_interval`(30초/1분/2분/5분, 기본 1분, QSettings) 이상 지나면 새 문단 + `[HH:MM:SS]`, 그 안의 엔트리는 화자 무관하게 공백/문장부호 규칙으로 이어 붙인다.
+- 적용: 화면 렌더, TXT/DOCX/HWPX/HWP/RTF export, 클립보드. `SubtitleEntry`·SRT/VTT·JSON·DB는 변경하지 않으며 export는 UI 스레드에서 `_get_display_layout()` 스냅샷을 넘긴다. 실시간 저장은 엔트리 단위 유지.
+- 렌더: 엔트리별 span(검색/포커스)·tail patch 유지, `(merge, interval)` 변경 시 full render.
+- UI: `⏱️ 간격` 콤보 + 예시 포함 툴팁. 회귀: `tests/test_timestamp_blocks.py`
 
 ## 9.10 v16.14.1 자동 줄넘김 정리 기본 활성화 (2026-03-17)
 ### 🧹 자동 줄넘김 정리 옵션

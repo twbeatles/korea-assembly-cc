@@ -11,6 +11,7 @@ from PySide6.QtGui import QTextCursor
 from core import utils
 from core.config import Config
 from core.models import SubtitleEntry
+from core.timestamp_blocks import block_join_separator, starts_new_block
 from ui.main_window_impl.contracts import ViewRenderHost
 
 
@@ -139,7 +140,32 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         previous_entry: SubtitleEntry | None,
         show_ts: bool,
         last_printed_ts: datetime | None,
+        *,
+        merge_blocks: bool = False,
+        interval_seconds: int = Config.TIMESTAMP_BLOCK_INTERVAL_DEFAULT,
     ) -> tuple[str, str, datetime | None]:
+        """엔트리 앞 구분자/타임스탬프 prefix와 다음 블록 시작 시각을 계산한다.
+
+        ``last_printed_ts``는 현재 타임스탬프 블록의 시작 시각이다.
+        merge 모드(자동 줄넘김 정리)에서는 블록 안 엔트리를 공백으로 이어 붙이고
+        블록이 바뀔 때만 줄을 바꾼다. 타임스탬프 표시가 꺼져 있어도 문단 경계는 같다.
+        """
+        if merge_blocks:
+            new_block = starts_new_block(entry.timestamp, last_printed_ts, interval_seconds)
+            if new_block:
+                separator = "\n" if previous_entry is not None else ""
+                prefix = (
+                    f"[{entry.timestamp.strftime('%H:%M:%S')}] " if show_ts else ""
+                )
+                return separator, prefix, entry.timestamp
+            separator = ""
+            if previous_entry is not None:
+                separator = block_join_separator(
+                    str(previous_entry.text or "").rstrip(),
+                    str(entry.text or "").lstrip(),
+                )
+            return separator, "", last_printed_ts
+
         separator = ""
         same_second = False
         if previous_entry is not None:
@@ -151,13 +177,7 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         prefix = ""
         next_last_printed_ts = last_printed_ts
         if show_ts and not same_second:
-            should_print = False
-            if last_printed_ts is None:
-                should_print = True
-            elif (entry.timestamp - last_printed_ts).total_seconds() >= 60:
-                should_print = True
-
-            if should_print:
+            if starts_new_block(entry.timestamp, last_printed_ts, interval_seconds):
                 prefix = f"[{entry.timestamp.strftime('%H:%M:%S')}] "
                 next_last_printed_ts = entry.timestamp
 
@@ -307,6 +327,14 @@ class MainWindowViewRenderMixin(ViewRenderBase):
 
         timestamp_action = getattr(self, "timestamp_action", None)
         show_ts = bool(timestamp_action.isChecked()) if timestamp_action else False
+        layout = self._get_display_layout()
+        merge_blocks = bool(layout.merge_blocks)
+        interval_seconds = int(layout.interval_seconds)
+        layout_key = (merge_blocks, interval_seconds)
+        previous_layout_key = self.__dict__.get("_last_render_layout_key")
+        layout_changed = (
+            previous_layout_key is not None and previous_layout_key != layout_key
+        )
 
         if not hasattr(self, "_last_printed_ts"):
             self._last_printed_ts = None
@@ -327,6 +355,7 @@ class MainWindowViewRenderMixin(ViewRenderBase):
             force_full
             or offset_changed
             or show_ts_changed
+            or layout_changed
             or (total_count < self._last_rendered_count)
             or (previous_visible_count > visible_count)
         )
@@ -346,6 +375,8 @@ class MainWindowViewRenderMixin(ViewRenderBase):
                     prev_entry,
                     show_ts,
                     last_printed_ts,
+                    merge_blocks=merge_blocks,
+                    interval_seconds=interval_seconds,
                 )
                 span = self._insert_render_chunk(cursor, separator, prefix, entry.text)
                 chunk_specs.append((separator, prefix, entry.text))
@@ -381,6 +412,8 @@ class MainWindowViewRenderMixin(ViewRenderBase):
                     prev_entry,
                     show_ts,
                     last_printed_ts,
+                    merge_blocks=merge_blocks,
+                    interval_seconds=interval_seconds,
                 )
                 span = self._insert_render_chunk(cursor, separator, prefix, entry.text)
                 chunk_specs.append((separator, prefix, entry.text))
@@ -398,6 +431,7 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         self._last_rendered_last_text = last_text
         self._last_render_offset = render_offset
         self._last_render_show_ts = show_ts
+        self._last_render_layout_key = layout_key
 
         auto_scroll_check = getattr(self, "auto_scroll_check", None)
         if auto_scroll_check is not None and auto_scroll_check.isChecked() and not preserve_scroll:

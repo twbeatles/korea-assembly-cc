@@ -14,6 +14,11 @@ from core.config import Config
 from core.file_io import next_available_path
 from core.logging_utils import logger
 from core.models import CaptureQualityState, SubtitleEntry
+from core.timestamp_blocks import (
+    DisplayLayout,
+    format_interval_label,
+    normalize_block_interval,
+)
 from ui.main_window_impl.contracts import RuntimeHost
 
 
@@ -573,6 +578,43 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
             enabled,
             context="자동 줄넘김 설정 저장",
         )
+        self._refresh_text(force_full=True)
+
+    def _get_timestamp_block_interval(self) -> int:
+        return normalize_block_interval(
+            self.__dict__.get(
+                "timestamp_block_interval",
+                Config.TIMESTAMP_BLOCK_INTERVAL_DEFAULT,
+            )
+        )
+
+    def _get_display_layout(self) -> DisplayLayout:
+        """화면/텍스트 export 공통 표시 옵션 스냅샷 (UI 스레드에서 호출)."""
+        return DisplayLayout(
+            merge_blocks=self._is_auto_clean_newlines_enabled(),
+            interval_seconds=self._get_timestamp_block_interval(),
+        )
+
+    def _set_timestamp_block_interval(self, seconds: object) -> None:
+        interval = normalize_block_interval(seconds)
+        if interval == self._get_timestamp_block_interval():
+            return
+        self.timestamp_block_interval = interval
+        self._save_setting_value(
+            "timestamp_block_interval",
+            interval,
+            context="타임스탬프 간격 저장",
+        )
+        self._refresh_text(force_full=True)
+        self._show_toast(
+            f"타임스탬프 간격: {format_interval_label(interval)}", "info", 1500
+        )
+
+    def _on_timestamp_interval_combo_changed(self, index: int) -> None:
+        combo = self.__dict__.get("timestamp_interval_combo")
+        if combo is None or index < 0:
+            return
+        self._set_timestamp_block_interval(combo.itemData(index))
 
     def _next_capture_run_id(self) -> int:
         next_run_id = int(self.__dict__.get("_capture_run_sequence", 0)) + 1

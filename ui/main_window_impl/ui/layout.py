@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from core.timestamp_blocks import format_interval_label
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 
@@ -56,7 +57,9 @@ class MainWindowUILayoutMixin(MainWindowHost):
             self.clean_btn = QPushButton("✨ 줄넘김 정리")
             self.clean_btn.setObjectName("toolbarButton")
             self.clean_btn.setToolTip(
-                "문장 부호로 끊어지지 않은 줄을 자동으로 병합 (Ctrl+Shift+L)"
+                "저장된 자막 데이터를 문장 부호 기준으로 1회 재정렬합니다 (Ctrl+Shift+L)\n"
+                "끊어진 문장을 병합하며 되돌릴 수 없습니다.\n"
+                "화면/저장 표시만 문단으로 정리하려면 '✨ 자동 줄넘김 정리' 옵션을 사용하세요."
             )
             self.clean_btn.clicked.connect(self._clean_newlines)
 
@@ -173,12 +176,47 @@ class MainWindowUILayoutMixin(MainWindowHost):
                 bool(getattr(self, "auto_clean_newlines_enabled", True))
             )
             self.auto_clean_newlines_check.setToolTip(
-                "수집 중 줄바꿈과 빈 줄을 자동으로 한 줄로 정리합니다.\n"
-                "자막 내용은 유지하고 개행만 정리합니다."
+                "<b>✨ 자동 줄넘김 정리</b><br>"
+                "타임스탬프 간격마다 문단을 나누고, 그 사이의 자막은 "
+                "<b>한 문단으로 이어 붙여</b> 보여줍니다.<br><br>"
+                "<b>켜짐</b><br>"
+                "<code>[14:02:05] 위원장님, 질의하겠습니다. 이번 예산안에 대해…</code><br>"
+                "<code>[14:03:12] 답변드리겠습니다. 해당 사업은…</code><br><br>"
+                "<b>꺼짐</b>: 수집된 자막 조각마다 한 줄씩 표시합니다.<br><br>"
+                "• 적용 범위: 자막 화면, TXT·DOCX·HWPX·HWP·RTF 저장, 클립보드 복사<br>"
+                "• SRT/VTT 타이밍, 세션 JSON, DB의 원본 자막은 바뀌지 않습니다.<br>"
+                "• 문단 간격은 오른쪽 <b>⏱️ 간격</b>에서 고릅니다. 수집 중에도 바꿀 수 있습니다."
             )
             self.auto_clean_newlines_check.toggled.connect(
                 self._toggle_auto_clean_newlines_option
             )
+
+            interval_tooltip = (
+                "<b>⏱️ 타임스탬프 간격</b><br>"
+                "직전 타임스탬프로부터 이 시간이 지나면 새 문단과 "
+                "<code>[HH:MM:SS]</code>를 시작합니다.<br>"
+                "자동 줄넘김 정리가 켜져 있으면 같은 간격 안의 자막을 한 문단으로 이어 붙입니다."
+            )
+            interval_label = QLabel("⏱️ 간격")
+            interval_label.setToolTip(interval_tooltip)
+            self.timestamp_interval_combo = QComboBox()
+            self.timestamp_interval_combo.setToolTip(interval_tooltip)
+            current_interval = self._get_timestamp_block_interval()
+            for seconds in Config.TIMESTAMP_BLOCK_INTERVAL_CHOICES:
+                self.timestamp_interval_combo.addItem(
+                    format_interval_label(seconds), int(seconds)
+                )
+                if int(seconds) == current_interval:
+                    self.timestamp_interval_combo.setCurrentIndex(
+                        self.timestamp_interval_combo.count() - 1
+                    )
+            self.timestamp_interval_combo.currentIndexChanged.connect(
+                self._on_timestamp_interval_combo_changed
+            )
+            interval_layout = QHBoxLayout()
+            interval_layout.setSpacing(6)
+            interval_layout.addWidget(interval_label)
+            interval_layout.addWidget(self.timestamp_interval_combo)
 
             self.realtime_save_check = QCheckBox("💾 실시간 저장")
             self.realtime_save_check.setChecked(False)
@@ -197,6 +235,7 @@ class MainWindowUILayoutMixin(MainWindowHost):
             )
             options_layout.addWidget(self.auto_scroll_check)
             options_layout.addWidget(self.auto_clean_newlines_check)
+            options_layout.addLayout(interval_layout)
             options_layout.addWidget(self.realtime_save_check)
             options_layout.addWidget(self.headless_check)
             options_layout.addStretch()

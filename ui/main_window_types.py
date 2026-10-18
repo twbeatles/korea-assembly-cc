@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from core.live_capture import LiveCaptureLedger
 from core.models import CaptureSessionState, SubtitleEntry
+from core.timestamp_blocks import DisplayLayout
 from ui.main_window_common import SearchMatch, WorkerQueueMessage
 from ui.widgets import CollapsibleGroupBox, ToastWidget
 
@@ -223,6 +224,9 @@ if TYPE_CHECKING:
         progress: QProgressBar
         auto_scroll_check: QCheckBox
         auto_clean_newlines_check: QCheckBox
+        timestamp_interval_combo: QComboBox
+        timestamp_block_interval: int
+        _last_render_layout_key: tuple[bool, int] | None
         headless_check: QCheckBox
         realtime_save_check: QCheckBox
         start_btn: QPushButton
@@ -362,6 +366,10 @@ if TYPE_CHECKING:
         def _join_stream_text(self, base: str, addition: str) -> str: ...
         def _is_active_capture_run(self, run_id: int | None) -> bool: ...
         def _is_auto_clean_newlines_enabled(self) -> bool: ...
+        def _get_timestamp_block_interval(self) -> int: ...
+        def _get_display_layout(self) -> DisplayLayout: ...
+        def _set_timestamp_block_interval(self, seconds: object) -> None: ...
+        def _on_timestamp_interval_combo_changed(self, index: int) -> None: ...
         def _is_runtime_mutation_blocked(self, action_name: str) -> bool: ...
         def _invalidate_destructive_undo(self) -> None: ...
         def _load_session(self) -> None: ...
@@ -486,6 +494,7 @@ if TYPE_CHECKING:
             *,
             runtime_root: Path | None = None,
             runtime_manifest: list[dict[str, Any]] | None = None,
+            layout: DisplayLayout | None = None,
         ) -> Any: ...
         def _build_complete_session_entries_snapshot(
             self,

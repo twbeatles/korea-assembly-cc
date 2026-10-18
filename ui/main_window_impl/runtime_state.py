@@ -20,6 +20,7 @@ from core.subtitle_pipeline import (
     SUFFIX_LENGTH,
     create_empty_capture_state,
 )
+from core.timestamp_blocks import normalize_block_interval
 from ui.main_window_common import (
     AppControlMessageQueue,
     DB_AVAILABLE,
@@ -69,6 +70,12 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
             "auto_clean_newlines",
             Config.AUTO_CLEAN_NEWLINES_DEFAULT,
             type=bool,
+        )
+        self.timestamp_block_interval = normalize_block_interval(
+            self.settings.value(
+                "timestamp_block_interval",
+                Config.TIMESTAMP_BLOCK_INTERVAL_DEFAULT,
+            )
         )
 
         self.message_queue: Any = MainWindowMessageQueue(
@@ -148,6 +155,7 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._last_rendered_last_text = ""
         self._last_render_offset = 0
         self._last_render_show_ts = None
+        self._last_render_layout_key = None
         self._last_render_chunk_specs: list[tuple[str, str, str]] = []
         self._rendered_entry_text_spans: dict[int, tuple[int, int]] = {}
         self._pending_ui_refresh_flags = 0

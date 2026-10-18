@@ -205,7 +205,7 @@ def test_save_txt_streams_from_runtime_segments_without_full_hydration(tmp_path,
 
     called: dict[str, object] = {}
 
-    def iter_rows(prepared_entries, *, runtime_root=None, runtime_manifest=None):
+    def iter_rows(prepared_entries, *, runtime_root=None, runtime_manifest=None, layout=None):
         called["prepared_count"] = len(prepared_entries)
         called["runtime_root"] = runtime_root
         called["runtime_manifest"] = list(runtime_manifest or [])

@@ -9,6 +9,7 @@ from uuid import uuid4
 from PySide6 import QtWidgets
 from PySide6.QtCore import Qt, QTimer
 
+from core.timestamp_blocks import DisplayLayout, iter_display_rows
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 
@@ -101,21 +102,21 @@ class MainWindowRuntimeReadersMixin(MainWindowHost):
             *,
             runtime_root: Path | None = None,
             runtime_manifest: list[dict[str, Any]] | None = None,
+            layout: DisplayLayout | None = None,
         ):
-            last_printed_ts = None
-            for timestamp, text in self._iter_full_session_text_rows(
-                prepared_entries,
-                runtime_root=runtime_root,
-                runtime_manifest=runtime_manifest,
-            ):
-                should_print_ts = False
-                if last_printed_ts is None:
-                    should_print_ts = True
-                elif (timestamp - last_printed_ts).total_seconds() >= 60:
-                    should_print_ts = True
-                if should_print_ts:
-                    last_printed_ts = timestamp
-                yield timestamp, text, should_print_ts
+            """표시용 행(DisplayRow)을 스트리밍한다.
+
+            ``layout``은 UI 스레드에서 ``_get_display_layout()``으로 스냅샷해 넘긴다.
+            자동 줄넘김 정리가 켜져 있으면 타임스탬프 블록 단위로 이어 붙인 행을 낸다.
+            """
+            yield from iter_display_rows(
+                self._iter_full_session_text_rows(
+                    prepared_entries,
+                    runtime_root=runtime_root,
+                    runtime_manifest=runtime_manifest,
+                ),
+                layout,
+            )
 
     def _build_complete_session_entries_snapshot(
             self,

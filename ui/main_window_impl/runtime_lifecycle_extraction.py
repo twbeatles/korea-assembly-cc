@@ -167,6 +167,7 @@ class MainWindowRuntimeLifecycleExtractionMixin(RuntimeLifecycleBase):
             self._last_rendered_last_text = ""
             self._last_render_offset = 0
             self._last_render_show_ts = None
+            self._last_render_layout_key = None
             self._last_render_chunk_specs = []
             self._last_printed_ts = None
             self._rendered_entry_text_spans = {}
