@@ -91,6 +91,9 @@ pyinstaller --clean subtitle_extractor.spec
 
 - [ ] 업데이트 승인 취소 시 staged EXE 삭제 확인
 - [ ] helper 교체 후 새 EXE `--smoke` 실패 fixture에서 기존 EXE 자동 복원 확인
+- [ ] 낡은 백업이 남아 있어도 `Update backup already exists` 없이 덮어쓰는지 확인
+- [ ] helper·재시작·`--smoke` 자식 프로세스가 정리된 환경(`_MEIPASS2`·`_PYI_*` 제거)에서 실행되는지 확인
+- [ ] 업데이트 성공 시 설치된 버전이 자동 재시작되는지(`--no-relaunch` 제외) 확인
 - [ ] 직전 EXE 백업은 설치 EXE와 같은 디렉터리에만 생성되는지 확인
 - [ ] DB(`subtitle_history.db`) 호환(additive migration) 확인
 

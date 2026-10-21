@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.process_wait import wait_for_process_exit
-from core.update_installer import apply_staged_update, write_update_result
+from core.update_installer import (
+    apply_staged_update,
+    relaunch_updated_executable,
+    write_update_result,
+)
 
 
 def _wait_for_parent(
@@ -26,6 +30,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-sha256", required=True)
     parser.add_argument("--expected-size", required=True, type=int)
     parser.add_argument("--result-file", required=True)
+    parser.add_argument(
+        "--no-relaunch",
+        action="store_true",
+        help="Do not restart the updated executable after a successful apply.",
+    )
     args = parser.parse_args(argv)
     base_result = {
         "target": str(Path(args.target).resolve()),
@@ -49,6 +58,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     write_update_result(args.result_file, {**base_result, "status": "applied"})
+    if not args.no_relaunch:
+        try:
+            relaunch_updated_executable(args.target)
+        except Exception:
+            pass
     return 0
 
 

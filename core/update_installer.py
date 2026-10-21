@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from uuid import uuid4
 
@@ -18,6 +18,57 @@ from core.update_manifest import ReleaseManifest
 
 class UpdateApplyError(RuntimeError):
     pass
+
+
+_BOOTLOADER_ENV_EXACT = frozenset({"_MEIPASS", "_MEIPASS2"})
+_BOOTLOADER_ENV_PREFIXES = ("_PYI_",)
+_LIBRARY_PATH_KEYS = (
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+)
+
+
+def sanitized_frozen_child_env(
+    base: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Build a child environment without PyInstaller onefile hand-off state.
+
+    A frozen child that inherits ``_MEIPASS2``/``_PYI_*`` reuses the parent's
+    extraction directory instead of extracting its own bundle. The parent
+    deletes that directory on exit, which breaks the child mid-run. Library
+    search paths the bootloader overrode are restored from their ``*_ORIG``
+    backups, or dropped when there was no original.
+    """
+    env = dict(os.environ if base is None else base)
+    for key in [
+        key
+        for key in env
+        if key in _BOOTLOADER_ENV_EXACT
+        or key.startswith(_BOOTLOADER_ENV_PREFIXES)
+    ]:
+        env.pop(key, None)
+    for key in _LIBRARY_PATH_KEYS:
+        original = env.get(f"{key}_ORIG")
+        if original is not None:
+            env[key] = original
+        else:
+            env.pop(key, None)
+    return env
+
+
+def relaunch_updated_executable(target: str | Path) -> subprocess.Popen[bytes]:
+    """Restart the freshly installed executable with a clean environment.
+
+    Uses a sanitized environment so the new process extracts its own
+    PyInstaller bundle instead of reusing the updater's directory.
+    """
+    return subprocess.Popen(
+        [str(Path(target).resolve())],
+        close_fds=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        env=sanitized_frozen_child_env(),
+    )
 
 
 def update_result_path(staging_root: str | Path) -> Path:
@@ -142,8 +193,6 @@ def _validate_apply_paths(target: Path, staged: Path, backup: Path) -> None:
         raise ValueError("Update backup must stay in the target install directory")
     if not target.is_file() or not staged.is_file():
         raise FileNotFoundError("Update target or staged artifact is missing")
-    if backup.exists():
-        raise FileExistsError(f"Update backup already exists: {backup}")
     backup.parent.mkdir(parents=True, exist_ok=True)
 
 
@@ -153,6 +202,39 @@ def _is_cross_device_error(exc: BaseException) -> bool:
     if getattr(exc, "errno", None) == errno.EXDEV:
         return True
     return getattr(exc, "winerror", None) == 17
+
+
+def _rename_with_cross_volume_retry(src: Path, dst: Path) -> None:
+    """Rename, retrying once on a cross-device error.
+
+    Both swap moves stay inside the install directory, so a cross-device
+    error cannot happen on a real filesystem. The single retry preserves the
+    cross-volume replacement contract (the staged copy is already on the
+    target volume) when the error is transient.
+    """
+    try:
+        os.replace(src, dst)
+    except OSError as exc:
+        if not _is_cross_device_error(exc):
+            raise
+        os.replace(src, dst)
+
+
+def _recover_interrupted_replacement(target: Path, backup: Path) -> bool:
+    """Restore the backup when a previous run died between the two moves.
+
+    The rename swap moves the installed executable to the backup name first
+    and the staged file to the target path second. A crash in between leaves
+    the install directory without a target. The next run restores the backup
+    so the retry starts from the installed executable again.
+    """
+    try:
+        if not target.exists() and backup.is_file():
+            os.replace(backup, target)
+            return True
+    except OSError:
+        return False
+    return False
 
 
 def _hash_file(path: Path) -> str:
@@ -189,26 +271,6 @@ def _stage_on_target_volume(
         raise
 
 
-def _replace_into_target(source: Path, target: Path) -> None:
-    try:
-        os.replace(source, target)
-        return
-    except OSError as exc:
-        if not _is_cross_device_error(exc):
-            raise
-    local = _stage_on_target_volume(
-        source,
-        target,
-        expected_sha256=None,
-        expected_size=None,
-    )
-    try:
-        os.replace(local, target)
-    except Exception:
-        local.unlink(missing_ok=True)
-        raise
-
-
 def cleanup_update_backups(target: str | Path, *, keep_count: int | None = None) -> None:
     target_path = Path(target).resolve()
     keep = max(0, int(Config.UPDATE_BACKUP_KEEP_COUNT if keep_count is None else keep_count))
@@ -238,6 +300,7 @@ def apply_staged_update(
     target_path = Path(target).resolve()
     staged_path = Path(staged).resolve()
     backup_path = Path(backup).resolve()
+    _recover_interrupted_replacement(target_path, backup_path)
     _validate_apply_paths(target_path, staged_path, backup_path)
     if expected_size is not None and staged_path.stat().st_size != int(expected_size):
         raise ValueError("Update artifact size mismatch before replacement")
@@ -248,16 +311,46 @@ def apply_staged_update(
                 digest.update(chunk)
         if digest.hexdigest().lower() != str(expected_sha256).strip().lower():
             raise ValueError("Update artifact hash mismatch before replacement")
-    shutil.copy2(target_path, backup_path)
+    # Stage onto the install volume first so the final move never crosses
+    # devices. The running executable is never overwritten or deleted: it is
+    # renamed to the backup name (allowed on Windows even while the image is
+    # mapped), which also overwrites a stale backup from an earlier attempt.
+    # The staged file then takes the now-free target path.
+    local = _stage_on_target_volume(
+        staged_path,
+        target_path,
+        expected_sha256=expected_sha256,
+        expected_size=expected_size,
+    )
     try:
-        _replace_into_target(staged_path, target_path)
-        staged_path.unlink(missing_ok=True)
+        _rename_with_cross_volume_retry(target_path, backup_path)
+    except OSError as exc:
+        local.unlink(missing_ok=True)
+        raise UpdateApplyError(
+            "Update failed before replacement and the installed "
+            f"executable was left untouched: {exc}"
+        ) from exc
+    try:
+        _rename_with_cross_volume_retry(local, target_path)
+    except OSError as exc:
+        local.unlink(missing_ok=True)
+        try:
+            if backup_path.is_file() and not target_path.exists():
+                os.replace(backup_path, target_path)
+        except OSError as rollback_exc:
+            raise UpdateApplyError(
+                f"Update failed and rollback also failed: {rollback_exc}"
+            ) from exc
+        raise UpdateApplyError("Update failed and was rolled back") from exc
+    staged_path.unlink(missing_ok=True)
+    try:
         if smoke_runner is None:
             completed = subprocess.run(
                 [str(target_path), "--smoke"],
                 timeout=60,
                 check=False,
                 capture_output=True,
+                env=sanitized_frozen_child_env(),
             )
             smoke_ok = completed.returncode == 0
         else:
@@ -289,29 +382,34 @@ def launch_update_helper(
     expected_sha256: str,
     expected_size: int,
     result_file: str | Path,
+    relaunch: bool = True,
 ) -> subprocess.Popen[bytes]:
     staged_path = Path(staged).resolve()
     helper_path = staged_path.parent / f"update-helper-{uuid4().hex}.exe"
     shutil.copy2(Path(sys.executable).resolve(), helper_path)
+    args = [
+        str(helper_path),
+        "--apply-update",
+        "--update-target",
+        str(Path(target).resolve()),
+        "--update-staged",
+        str(staged_path),
+        "--update-backup",
+        str(Path(backup).resolve()),
+        "--update-parent-pid",
+        str(int(parent_pid)),
+        "--update-expected-sha256",
+        str(expected_sha256),
+        "--update-expected-size",
+        str(int(expected_size)),
+        "--update-result-file",
+        str(Path(result_file).resolve()),
+    ]
+    if not relaunch:
+        args.append("--update-no-relaunch")
     return subprocess.Popen(
-        [
-            str(helper_path),
-            "--apply-update",
-            "--update-target",
-            str(Path(target).resolve()),
-            "--update-staged",
-            str(staged_path),
-            "--update-backup",
-            str(Path(backup).resolve()),
-            "--update-parent-pid",
-            str(int(parent_pid)),
-            "--update-expected-sha256",
-            str(expected_sha256),
-            "--update-expected-size",
-            str(int(expected_size)),
-            "--update-result-file",
-            str(Path(result_file).resolve()),
-        ],
+        args,
         close_fds=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        env=sanitized_frozen_child_env(),
     )

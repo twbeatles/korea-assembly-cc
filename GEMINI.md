@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.14
+- **버전**: v16.14.15
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ### 관련 문서
@@ -613,6 +613,11 @@ pip install -r requirements-dev.txt
 ### 📄 Export / 저장소 hygiene
 - DOCX/HWPX는 한 `SubtitleEntry`를 한 문단/블록으로 유지하고, 엔트리 내부 개행은 paragraph split이 아니라 line break로 저장
 - `.gitignore`는 `session_recovery.json` 같은 런타임 복구 state를 무시하고, `subtitle_extractor.spec`은 이 state가 frozen 번들에 포함되지 않음을 명시
+
+## 9.9.5 v16.14.15 업데이터 rename 스왑 교체 (2026-10-21)
+- 실행 중 exe 덮어쓰기 대신 설치본→백업 rename 후 새 파일을 목표 경로로 이동. 첫 이동 실패 시 설치본 유지, 낡은 백업 덮어쓰기, 중단 시 다음 실행에서 백업 복원.
+- helper·재시작·`--smoke` 자식은 `_MEIPASS2`·`_PYI_*` 제거 환경으로 실행. 성공 시 설치된 버전 자동 재시작(`--no-relaunch` 제외).
+- 회귀: `tests/test_update_installer.py`, `tests/test_apply_update_script.py`
 
 ## 9.9.4 v16.14.14 자동 줄넘김 정리 = 타임스탬프 블록 문단화 (2026-10-18)
 - 원인: 기존 옵션은 엔트리 *내부* 개행만 평탄화(`flatten_subtitle_text`)해 효과가 없었고, 화면 줄바꿈은 `_build_render_chunk`가 엔트리마다 넣는 `

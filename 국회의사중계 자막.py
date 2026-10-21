@@ -79,6 +79,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--update-expected-sha256", default="", help=argparse.SUPPRESS)
     parser.add_argument("--update-expected-size", default=0, type=int, help=argparse.SUPPRESS)
     parser.add_argument("--update-result-file", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--update-no-relaunch", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -370,6 +371,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--result-file",
                 args.update_result_file,
             ]
+            + (["--no-relaunch"] if args.update_no_relaunch else [])
         )
     if args.smoke:
         return _run_smoke(args)

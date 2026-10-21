@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,9 @@ import pytest
 from core.update_installer import (
     UpdateApplyError,
     apply_staged_update,
+    launch_update_helper,
+    relaunch_updated_executable,
+    sanitized_frozen_child_env,
     consume_update_result,
     prepare_staged_update,
     resolve_update_staging_root,
@@ -214,3 +218,230 @@ def test_successful_apply_keeps_only_requested_backups(tmp_path, monkeypatch) ->
         )
 
     assert len(list(tmp_path.glob("app.exe.v*.bak"))) == 1
+
+
+def test_stale_backup_is_overwritten_instead_of_rejected(tmp_path) -> None:
+    target = tmp_path / "app.exe"
+    staged = tmp_path / "staged.exe"
+    backup = tmp_path / "app.exe.bak"
+    target.write_bytes(b"old")
+    staged.write_bytes(b"new")
+    backup.write_bytes(b"stale backup from an earlier attempt")
+
+    apply_staged_update(
+        target=target,
+        staged=staged,
+        backup=backup,
+        smoke_runner=lambda path: True,
+    )
+
+    assert target.read_bytes() == b"new"
+    assert backup.read_bytes() == b"old"
+    assert not staged.exists()
+
+
+def test_replacement_never_overwrites_the_running_target(
+    tmp_path, monkeypatch
+) -> None:
+    """Simulate Windows locking: overwriting the mapped exe fails (WinError 5).
+
+    Renaming the running image aside and moving the staged file onto the now
+    free target path must succeed without ever overwriting the locked file.
+    """
+    target = tmp_path / "app.exe"
+    staged = tmp_path / "staged.exe"
+    backup = tmp_path / "app.exe.bak"
+    target.write_bytes(b"old")
+    staged.write_bytes(b"new")
+    backup.write_bytes(b"stale backup from an earlier attempt")
+    moves: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def windows_replace(src: str | Path, dst: str | Path) -> None:
+        moves.append((Path(src), Path(dst)))
+        if Path(dst).name == target.name and Path(dst).exists():
+            raise PermissionError(13, "Permission denied")
+        real_replace(src, dst)
+
+    monkeypatch.setattr("core.update_installer.os.replace", windows_replace)
+
+    apply_staged_update(
+        target=target,
+        staged=staged,
+        backup=backup,
+        smoke_runner=lambda path: True,
+    )
+
+    assert target.read_bytes() == b"new"
+    assert backup.read_bytes() == b"old"
+    assert moves[0][0].name == target.name
+    assert moves[0][1].name == backup.name
+    assert moves[1][1].name == target.name
+
+
+def test_first_move_failure_leaves_installed_executable(
+    tmp_path, monkeypatch
+) -> None:
+    target = tmp_path / "app.exe"
+    staged = tmp_path / "staged.exe"
+    backup = tmp_path / "app.exe.bak"
+    target.write_bytes(b"old")
+    staged.write_bytes(b"new")
+
+    def fail_first_move(src: str | Path, dst: str | Path) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr("core.update_installer.os.replace", fail_first_move)
+
+    with pytest.raises(UpdateApplyError, match="left untouched"):
+        apply_staged_update(
+            target=target,
+            staged=staged,
+            backup=backup,
+            smoke_runner=lambda path: True,
+        )
+
+    assert target.read_bytes() == b"old"
+    assert staged.read_bytes() == b"new"
+    assert not backup.exists()
+    assert list(tmp_path.glob(".update-apply-*.exe")) == []
+
+
+def test_interrupted_replacement_recovers_backup_on_next_run(tmp_path) -> None:
+    target = tmp_path / "app.exe"
+    staged = tmp_path / "staged.exe"
+    backup = tmp_path / "app.exe.bak"
+    backup.write_bytes(b"old")
+    staged.write_bytes(b"new")
+
+    apply_staged_update(
+        target=target,
+        staged=staged,
+        backup=backup,
+        smoke_runner=lambda path: True,
+    )
+
+    assert target.read_bytes() == b"new"
+    assert backup.read_bytes() == b"old"
+    assert not staged.exists()
+
+
+def test_sanitized_frozen_child_env_drops_bootloader_state() -> None:
+    env = sanitized_frozen_child_env(
+        {
+            "_MEIPASS": "C:\\_mei1",
+            "_MEIPASS2": "C:\\_mei2",
+            "_PYI_APPLICATION_HOME_DIR": "C:\\_mei2",
+            "_PYI_ARCHIVE_FILE": "C:\\bundle.exe",
+            "_PYI_PARENT_PROCESS_LEVEL": "1",
+            "LD_LIBRARY_PATH": "/tmp/_mei/lib:/usr/lib",
+            "LD_LIBRARY_PATH_ORIG": "/usr/lib",
+            "DYLD_LIBRARY_PATH": "/tmp/_mei/lib",
+            "PATH": "keep-me",
+        }
+    )
+
+    assert "_MEIPASS" not in env
+    assert "_MEIPASS2" not in env
+    assert not any(key.startswith("_PYI_") for key in env)
+    assert env["LD_LIBRARY_PATH"] == "/usr/lib"
+    assert "DYLD_LIBRARY_PATH" not in env
+    assert env["PATH"] == "keep-me"
+
+
+def test_smoke_child_runs_without_bootloader_env(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "app.exe"
+    staged = tmp_path / "staged.exe"
+    backup = tmp_path / "app.exe.bak"
+    target.write_bytes(b"old")
+    staged.write_bytes(b"new")
+    captured: dict[str, object] = {}
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(argv: list[str], **kwargs: object) -> Completed:
+        captured["argv"] = argv
+        captured["env"] = kwargs.get("env")
+        return Completed()
+
+    monkeypatch.setattr("core.update_installer.subprocess.run", fake_run)
+    monkeypatch.setenv("_MEIPASS2", "C:\\stale\\_mei")
+    monkeypatch.setenv("_PYI_APPLICATION_HOME_DIR", "C:\\stale\\_mei")
+
+    apply_staged_update(target=target, staged=staged, backup=backup)
+
+    assert captured["argv"] == [str(target.resolve()), "--smoke"]
+    child_env = captured["env"]
+    assert isinstance(child_env, dict)
+    assert "_MEIPASS2" not in child_env
+    assert not any(str(key).startswith("_PYI_") for key in child_env)
+
+
+def test_helper_and_relaunch_use_clean_env(tmp_path, monkeypatch) -> None:
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    target = install_dir / "app.exe"
+    staged = tmp_path / "staged.exe"
+    backup = install_dir / "app.exe.bak"
+    result_file = tmp_path / "result.json"
+    target.write_bytes(b"old")
+    staged.write_bytes(b"new")
+    launches: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_copy2(src: str | Path, dst: str | Path) -> Path:
+        helper = Path(dst)
+        helper.write_bytes(b"helper")
+        return helper
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(
+        args: list[str], **kwargs: object
+    ) -> FakeProcess:
+        launches.append((list(args), dict(kwargs)))
+        return FakeProcess()
+
+    monkeypatch.setattr("core.update_installer.shutil.copy2", fake_copy2)
+    monkeypatch.setattr("core.update_installer.subprocess.Popen", fake_popen)
+    monkeypatch.setenv("_MEIPASS2", "C:\\stale\\_mei")
+    monkeypatch.setenv("_PYI_ARCHIVE_FILE", "C:\\stale\\bundle.exe")
+
+    helper = launch_update_helper(
+        target=target,
+        staged=staged,
+        backup=backup,
+        parent_pid=4242,
+        expected_sha256="a" * 64,
+        expected_size=3,
+        result_file=result_file,
+    )
+    assert isinstance(helper, FakeProcess)
+    helper_args, helper_kwargs = launches[-1]
+    assert "--update-no-relaunch" not in helper_args
+    helper_env = helper_kwargs.get("env")
+    assert isinstance(helper_env, dict)
+    assert "_MEIPASS2" not in helper_env
+    assert not any(str(key).startswith("_PYI_") for key in helper_env)
+
+    launch_update_helper(
+        target=target,
+        staged=staged,
+        backup=backup,
+        parent_pid=4242,
+        expected_sha256="a" * 64,
+        expected_size=3,
+        result_file=result_file,
+        relaunch=False,
+    )
+    assert "--update-no-relaunch" in launches[-1][0]
+
+    relaunched = relaunch_updated_executable(target)
+    assert isinstance(relaunched, FakeProcess)
+    relaunch_args, relaunch_kwargs = launches[-1]
+    assert relaunch_args == [str(target.resolve())]
+    relaunch_env = relaunch_kwargs.get("env")
+    assert isinstance(relaunch_env, dict)
+    assert "_MEIPASS2" not in relaunch_env
+    assert not any(str(key).startswith("_PYI_") for key in relaunch_env)
