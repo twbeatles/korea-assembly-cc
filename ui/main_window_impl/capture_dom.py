@@ -10,6 +10,7 @@ from selenium.common.exceptions import (
 )
 
 from core import utils
+from core.config import Config
 from core.logging_utils import logger
 from core.models import ObservedSubtitleRow
 from ui.main_window_impl.contracts import CaptureDomHost
@@ -61,15 +62,18 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
             ".ai_subtitle",
             "[class*='subtitle']",
         }
+        # 기본 후보 순서는 chrome dom-probe PRIMARY_SELECTOR_PRIORITY 와 같다
+        # (parity/capture-contract.json selectorCandidatesOrdered).
+        # `#viewSubtit span` 은 첫 span(가장 오래된 줄)만 읽으므로 container 뒤에 둔다.
         priority = {
             "#viewSubtit .smi_word:last-child": 0,
             "#viewSubtit .smi_word": 1,
-            "#viewSubtit span": 2,
-            "#viewSubtit .incont": 7,
-            "#viewSubtit": 8,
-            ".subtitle_area": 9,
-            ".ai_subtitle": 10,
-            "[class*='subtitle']": 11,
+            "#viewSubtit .incont": 4,
+            "#viewSubtit": 5,
+            "#viewSubtit span": 6,
+            ".subtitle_area": 7,
+            ".ai_subtitle": 8,
+            "[class*='subtitle']": 9,
         }
         primary_norm = (primary_selector or "").strip()
         order_map = {sel: idx for idx, sel in enumerate(candidates)}
@@ -78,11 +82,12 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
             original_idx = order_map.get(sel, 999)
             if sel in priority:
                 return priority[sel], original_idx
+            # 데스크톱 전용: 사용자 지정 셀렉터는 .smi_word 다음, container 앞에 둔다.
             if sel == primary_norm and sel not in broad_selectors:
-                return 3, original_idx
+                return 2, original_idx
             if sel in broad_selectors:
                 return 12, original_idx
-            return 4, original_idx
+            return 3, original_idx
 
         return sorted(candidates, key=_weight)
 
@@ -94,6 +99,13 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
         filter_unconfirmed_enabled: bool = True,
     ) -> dict[str, Any]:
         """Return structured subtitle probe data aligned with the Chrome extension."""
+        # chrome unconfirmed-fallback.ts 정합: 미확정 필터로 container fallback 이
+        # 연속 N회 차단되면 다음 probe 에서 일시 허용하고, 자막을 다시 읽으면 0으로 되돌린다.
+        block_streak = int(self.__dict__.get("_unconfirmed_fallback_block_streak", 0) or 0)
+        allow_unconfirmed_fallback = block_streak >= int(
+            Config.UNCONFIRMED_FALLBACK_ALLOW_STREAK
+        )
+        blocked_by_unconfirmed = False
 
         def _normalize_rows(rows: object) -> list[ObservedSubtitleRow]:
             observed: list[ObservedSubtitleRow] = []
@@ -128,7 +140,7 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
             try:
                 result = driver.execute_script(
                     """
-                    return (function(selectorsArg, filterUnconfirmedArg) {
+                    return (function(selectorsArg, filterUnconfirmedArg, allowUnconfirmedFallbackArg, sampleLimitArg, rawMaxCharsArg) {
                         function normalizeText(value) {
                             return String(value || '').replace(/\\s+/g, ' ').trim();
                         }
@@ -161,16 +173,83 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                             var normalized = String(backgroundColor || '').replace(/\\s+/g, '').toLowerCase();
                             return Boolean(normalized) && normalized !== 'transparent' && normalized !== 'rgba(0,0,0,0)';
                         }
-                        function isConfirmedSubtitleNode(node) {
-                            var bg = window.getComputedStyle(node).backgroundColor;
-                            if (hasOpaqueBackground(bg)) return false;
+                        // chrome subtitle-rows.ts isConfirmedSubtitleNode 정합:
+                        // 배경색 + 배경 이미지 하이라이트, 하위 노드는 텍스트 보유 노드 우선 샘플링(+마지막 노드)
+                        function hasHighlightBackgroundImage(backgroundImage) {
+                            var normalized = String(backgroundImage || '').trim().toLowerCase();
+                            return Boolean(normalized) && normalized !== 'none';
+                        }
+                        function hasVisibleBackgroundHighlight(style) {
+                            return hasOpaqueBackground(style.backgroundColor) ||
+                                hasHighlightBackgroundImage(style.backgroundImage);
+                        }
+                        function hasMeaningfulNodeText(node) {
+                            return Boolean(compactText(node.innerText || node.textContent || ''));
+                        }
+                        function sampleEvenly(items, maxTake) {
+                            if (maxTake <= 0 || !items.length) return [];
+                            if (items.length <= maxTake) return items.slice();
+                            var sampled = [];
+                            var seen = {};
+                            var step = items.length / maxTake;
+                            for (var i = 0; i < maxTake; i++) {
+                                var idx = Math.min(items.length - 1, Math.floor(i * step));
+                                if (seen[idx]) continue;
+                                seen[idx] = true;
+                                sampled.push(items[idx]);
+                            }
+                            var lastIndex = items.length - 1;
+                            if (!seen[lastIndex]) {
+                                if (sampled.length >= maxTake) sampled[sampled.length - 1] = items[lastIndex];
+                                else sampled.push(items[lastIndex]);
+                            }
+                            return sampled;
+                        }
+                        var sampleLimit = Number(sampleLimitArg) > 0 ? Math.floor(Number(sampleLimitArg)) : 96;
+                        function collectConfirmationCheckTargets(node) {
                             var descendants = Array.from(node.querySelectorAll('*'));
-                            var limit = Math.min(descendants.length, 48);
-                            for (var i = 0; i < limit; i++) {
-                                var childBg = window.getComputedStyle(descendants[i]).backgroundColor;
-                                if (hasOpaqueBackground(childBg)) return false;
+                            if (descendants.length <= sampleLimit) return descendants;
+                            var withText = [];
+                            var withoutText = [];
+                            for (var i = 0; i < descendants.length; i++) {
+                                if (hasMeaningfulNodeText(descendants[i])) withText.push(descendants[i]);
+                                else withoutText.push(descendants[i]);
+                            }
+                            var textBudget = Math.min(
+                                withText.length,
+                                Math.max(Math.floor(sampleLimit * 0.85), sampleLimit - 12)
+                            );
+                            var sampledText = sampleEvenly(withText, textBudget);
+                            var sampledRest = sampleEvenly(withoutText, sampleLimit - sampledText.length);
+                            return sampledText.concat(sampledRest);
+                        }
+                        function isConfirmedSubtitleNode(node) {
+                            if (hasVisibleBackgroundHighlight(window.getComputedStyle(node))) return false;
+                            var targets = collectConfirmationCheckTargets(node);
+                            for (var i = 0; i < targets.length; i++) {
+                                if (hasVisibleBackgroundHighlight(window.getComputedStyle(targets[i]))) return false;
                             }
                             return true;
+                        }
+                        var containerConfirmationSelectors = [
+                            '#viewSubtit .smi_word',
+                            '#viewSubtit .incont',
+                            '#viewSubtit',
+                            '.subtitle_area',
+                            '.ai_subtitle'
+                        ];
+                        function hasUnconfirmedSubtitleBackground() {
+                            var seen = [];
+                            for (var i = 0; i < containerConfirmationSelectors.length; i++) {
+                                var nodes = queryAllSafe(containerConfirmationSelectors[i]);
+                                for (var j = 0; j < nodes.length; j++) {
+                                    var node = nodes[j];
+                                    if (seen.indexOf(node) >= 0 || !hasMeaningfulNodeText(node)) continue;
+                                    seen.push(node);
+                                    if (!isConfirmedSubtitleNode(node)) return true;
+                                }
+                            }
+                            return false;
                         }
                         function normalizeRowQuery(selector) {
                             return String(selector || '')
@@ -313,19 +392,36 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                         function buildPreview(rows) {
                             return rows.slice(-3).map(function(row) { return row.text; }).filter(Boolean).join(' ').trim();
                         }
-                        function normalizeContainerText(node) {
-                            var raw = node ? (node.innerText || node.textContent || '') : '';
-                            var text = normalizeText(raw);
-                            if (!text) return '';
-                            if (text.length <= 400) return text;
-                            var lines = String(raw || '').split('\\n').map(normalizeText).filter(Boolean);
-                            return lines.slice(-3).join(' ');
+                        // chrome fallback-preview.ts normalizeFallbackInternalRaw 정합:
+                        // 비교/복원용 내부 raw 는 4KB tail (본회의는 전체), UI 축약은 Python 측에서 한다.
+                        function isPlenaryUrl(url) {
+                            try {
+                                var parsed = new URL(String(url || ''));
+                                var xcode = String(parsed.searchParams.get('xcode') || '').trim().toUpperCase();
+                                var xcgcd = String(parsed.searchParams.get('xcgcd') || '').trim().toUpperCase();
+                                return xcode === '10' || xcgcd.indexOf('DCM000010') === 0;
+                            } catch (e) { return false; }
                         }
+                        function resolveTopUrl() {
+                            try { return window.top.location.href; } catch (e) { return ''; }
+                        }
+                        var rawMaxChars = Number(rawMaxCharsArg) > 0 ? Math.floor(Number(rawMaxCharsArg)) : 4096;
+                        var preserveFullRaw = isPlenaryUrl(resolveTopUrl()) || isPlenaryUrl(window.location.href);
+                        function normalizeContainerText(node) {
+                            var raw = node ? String(node.innerText || node.textContent || '') : '';
+                            raw = raw.replace(/\\r/g, '\\n').trim();
+                            if (!raw) return '';
+                            if (preserveFullRaw || raw.length <= rawMaxChars) return raw;
+                            return raw.slice(-rawMaxChars);
+                        }
+                        // chrome dom-probe.ts shouldBlockContainerFallbackForUnconfirmed 정합
                         function shouldBlockContainerFallback() {
+                            if (allowUnconfirmedFallbackArg) return false;
                             if (!filterUnconfirmedArg) return false;
                             var smiNodes = queryAllSafe('#viewSubtit .smi_word');
-                            if (!smiNodes.length) return false;
-                            return readObservedRows('#viewSubtit .smi_word').length === 0;
+                            if (!smiNodes.length) return hasUnconfirmedSubtitleBackground();
+                            if (readObservedRows('#viewSubtit .smi_word').length === 0) return true;
+                            return hasUnconfirmedSubtitleBackground();
                         }
                         var selectors = Array.isArray(selectorsArg) ? selectorsArg : [];
                         var blockContainerFallback = shouldBlockContainerFallback();
@@ -343,7 +439,7 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                                 var rows = readObservedRows(selector);
                                 var preview = buildPreview(rows);
                                 if (preview) {
-                                    return { text: preview, matchedSelector: selector, found: true, rows: rows, sourceMode: 'smi-window' };
+                                    return { text: preview, matchedSelector: selector, found: true, rows: rows, sourceMode: 'smi-window', blockedByUnconfirmedFilter: false };
                                 }
                                 continue;
                             }
@@ -352,7 +448,7 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                             if (!node) continue;
                             var text = normalizeContainerText(node);
                             if (!text) continue;
-                            return { text: text, matchedSelector: selector, found: true, rows: [], sourceMode: 'container' };
+                            return { text: text, matchedSelector: selector, found: true, rows: [], sourceMode: 'container', blockedByUnconfirmedFilter: false };
                         }
                         if (!blockContainerFallback) {
                             for (var j = 0; j < fallbackSelectors.length; j++) {
@@ -361,14 +457,17 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                                 if (!fallbackNode) continue;
                                 var fallbackText = normalizeContainerText(fallbackNode);
                                 if (!fallbackText) continue;
-                                return { text: fallbackText, matchedSelector: fallbackSelector, found: true, rows: [], sourceMode: 'container' };
+                                return { text: fallbackText, matchedSelector: fallbackSelector, found: true, rows: [], sourceMode: 'container', blockedByUnconfirmedFilter: false };
                             }
                         }
-                        return { text: '', matchedSelector: '', found: false, rows: [], sourceMode: '' };
-                    })(arguments[0], arguments[1]);
+                        return { text: '', matchedSelector: '', found: false, rows: [], sourceMode: '', blockedByUnconfirmedFilter: blockContainerFallback };
+                    })(arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
                     """,
                     selectors,
                     bool(filter_unconfirmed_enabled),
+                    bool(allow_unconfirmed_fallback),
+                    int(Config.UNCONFIRMED_DESCENDANT_SAMPLE_LIMIT),
+                    int(Config.FALLBACK_INTERNAL_RAW_MAX_CHARS),
                 )
             except Exception as e:
                 self._raise_if_recoverable_webdriver_error(e, "subtitle probe error")
@@ -379,6 +478,7 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                     "found": False,
                     "rows": [],
                     "source_mode": "",
+                    "blocked_by_unconfirmed_filter": False,
                 }
             result = result or {}
             return {
@@ -389,6 +489,9 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                 "found": bool(result.get("found", False)),
                 "rows": _normalize_rows(result.get("rows", [])),
                 "source_mode": str(result.get("sourceMode", "") or ""),
+                "blocked_by_unconfirmed_filter": bool(
+                    result.get("blockedByUnconfirmedFilter", False)
+                ),
             }
 
         frame_paths: list[tuple[int, ...]] = []
@@ -410,9 +513,14 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                     except Exception:
                         pass
                 result = _probe_in_current_context()
+                blocked_by_unconfirmed = blocked_by_unconfirmed or bool(
+                    result.get("blocked_by_unconfirmed_filter", False)
+                )
                 if result.get("found"):
                     self._last_subtitle_frame_path = frame_path
                     result["frame_path"] = frame_path
+                    if result.get("text"):
+                        self._unconfirmed_fallback_block_streak = 0
                     return result
             finally:
                 try:
@@ -420,6 +528,8 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
                 except Exception:
                     pass
 
+        if blocked_by_unconfirmed:
+            self._unconfirmed_fallback_block_streak = block_streak + 1
         return {
             "text": "",
             "matched_selector": "",
@@ -427,6 +537,7 @@ class MainWindowCaptureDomMixin(CaptureDomBase):
             "rows": [],
             "source_mode": "",
             "frame_path": (),
+            "blocked_by_unconfirmed_filter": blocked_by_unconfirmed,
         }
 
     def _read_subtitle_text_by_selectors(

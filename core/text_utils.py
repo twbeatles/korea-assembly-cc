@@ -13,8 +13,6 @@ def clean_text(text: str) -> str:
     """자막 텍스트 정리 (성능 최적화: 사전 컴파일된 정규식 사용)"""
     if not text:
         return ""
-    # 년도 제거
-    text = Config.RE_YEAR.sub('', text)
     # 특수 문자 정리 (Zero-width 문자 제거)
     text = Config.RE_ZERO_WIDTH.sub('', text)
     # 연속 공백 정리
@@ -22,10 +20,12 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 def clean_text_display(text: str) -> str:
-    """표시/저장용 텍스트 정리 (공백 유지)"""
+    """표시/저장용 텍스트 정리 (공백 유지).
+
+    `2026년` 같은 본문 연도 표현은 지우지 않는다 (Chrome 확장 cleanDisplayText 정합).
+    """
     if not text:
         return ""
-    text = Config.RE_YEAR.sub('', text)
     text = Config.RE_ZERO_WIDTH.sub('', text)
     return text.strip()
 
@@ -56,18 +56,52 @@ def compact_subtitle_text(text: str) -> str:
     text = Config.RE_ZERO_WIDTH.sub('', text)
     return Config.RE_MULTI_SPACE.sub('', text).strip()
 
+def format_fallback_preview_text(text: str, max_chars: int = 400) -> str:
+    """container fallback 내부 raw 를 UI preview 용으로 짧게 축약한다 (tail 우선).
+
+    내부 raw 는 diff/commit 을 위해 길게(4KB tail, 본회의 전체) 유지하고 화면만 줄인다.
+    """
+    normalized = normalize_subtitle_text(clean_text_display(text or ""))
+    if not normalized or max_chars <= 0 or len(normalized) <= max_chars:
+        return normalized
+    return normalized[-max_chars:].strip()
+
+_PLACEHOLDER_PUNCTUATION_RE =re.compile(r"[.…!?,~·:\-_/()\[\]{}\"'`]")
+_PLACEHOLDER_TEXTS = frozenset({"로딩중", "loading"})
+
+
+def is_placeholder_subtitle_text(text: str) -> bool:
+    """사이트 로딩 표시(`#smiLoading .loadingmsg` "로딩중..") 등 placeholder 인지 판별한다.
+
+    Chrome 확장 `isPlaceholderSubtitleText` 와 같은 규칙이다.
+    """
+    if text is None:
+        return False
+    normalized = Config.RE_MULTI_SPACE.sub(" ", clean_text_display(str(text))).strip()
+    if not normalized:
+        return False
+    compact = Config.RE_MULTI_SPACE.sub(
+        "", _PLACEHOLDER_PUNCTUATION_RE.sub("", normalized)
+    ).strip().lower()
+    return compact in _PLACEHOLDER_TEXTS
+
+
 def is_meaningful_subtitle_text(text: str) -> bool:
     """자막으로 볼 수 있는 유의미 텍스트인지 판별한다.
 
     규칙:
     - 빈값/공백/순수 기호/순수 숫자는 제외
     - 한글/영문이 1자라도 있으면 길이와 무관하게 허용
+    - `로딩중..`, `Loading...` placeholder 는 제외
     """
     if text is None:
         return False
 
     normalized = clean_text_display(str(text)).strip()
     if not normalized:
+        return False
+
+    if is_placeholder_subtitle_text(normalized):
         return False
 
     if re.search(r"[가-힣A-Za-z]", normalized):

@@ -30,6 +30,7 @@
 - 공개 고정 경로는 `ui/main_window_capture.py`, `ui/main_window_pipeline.py`, `ui/main_window_view.py`, `core/live_capture.py`이지만 실제 구현은 `ui/main_window_impl/*`, `core/live_capture_impl/*`로 이동할 수 있다. 고정 의미론 변경 시 facade와 내부 구현 문서를 함께 맞춘다.
 
 ### 2.1 코어 수정 이력 (v16.12 ~ v16.14.8)
+- `core/text_utils.py`/`core/subtitle_pipeline_impl/entry_policy.py`/`entries.py`/`core/subtitle_pipeline.py`/`ui/main_window_impl/capture_dom.py`/`pipeline_state.py`/`pipeline_stream.py`: 2026-10-22 Chrome 확장 수집 정합 2차. `parity/capture-contract.json`·`parity/pipeline-vectors.json` 을 확장 저장소와 같은 내용으로 두고 `tests/test_parity_contract.py` 로 대조한다. 본문 `\d{4}년` 삭제(`RE_YEAR`) 중단, placeholder(`로딩중..`) 차단, 병합 경계를 확장과 같은 순수 함수(`should_merge_into_last_entry`: 알려진 channel 만 경계, structured/화자 entry 뒤 fallback 은 새 entry, fallback gap ×0.4)로 통일하고 새 entry 의 `speaker_changed` 를 설정한다. keepalive 는 raw 가 마지막 entry 와 같거나 그것으로 끝날 때 연장한다(기존: 완전 일치만). probe 는 미확정 배경 이미지·96개 샘플·container 차단 streak(6회)·내부 raw 4KB tail(본회의 전체)을 쓰고, unstable row 는 commit 하지 않고 container/unstable fallback 은 같은 raw 2회 또는 400ms 안정 관측 뒤에만 commit 한다. 글로벌 히스토리 + suffix `rfind` 증분 추출 의미론은 바꾸지 않는다.
 - `ui/main_window_capture.py`/`ui/main_window_impl/capture_browser.py`/`core/config.py`: 브라우저 헬스체크(`window_handles`, `current_url`, script ping), recoverable WebDriver 오류 승격, 같은 모드/마지막 확정 live URL 기반 Chrome 자동 재기동, `reconnected` 상태 반영을 추가했다. 이는 수집 연속성과 driver lifecycle 안정화 레이어 변경이며 글로벌 히스토리 + suffix 의미론 자체는 바꾸지 않는다.
 - `ui/main_window.py`/`ui/main_window_capture.py`/`ui/main_window_pipeline.py`/`ui/main_window_view.py`/`core/live_capture.py`: 공개 facade는 유지하고 실제 구현을 `ui/main_window_impl/`, `core/live_capture_impl/`로 재배치했다. 책임 경계와 import 구조만 바뀌며 코어 자막 의미론은 바뀌지 않는다.
 - `ui/main_window_database.py`/`ui/main_window_persistence.py`/`subtitle_extractor.spec`: 공개 facade는 유지하되 실제 구현을 `ui/main_window_impl/database_worker.py`, `database_dialogs.py`, `persistence_runtime.py`, `persistence_session.py`, `persistence_exports.py`, `persistence_tools.py`로 재분리했고, PyInstaller hidden import도 같은 경계에 맞춰 갱신했다. 이 변경은 책임 분리와 패키징 정합화이며 코어 의미론은 바뀌지 않는다.
@@ -261,6 +262,10 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 - ambiguous large append 기준: `max(200, len(raw_compact) // 3)`
 - 누락 완화를 위해 fallback delta는 1자 이상 허용
 - `_add_text_to_subtitles` 병합 조건: `ENTRY_MERGE_MAX_GAP=5`, `ENTRY_MERGE_MAX_CHARS=300`
+- fallback 경로 merge gap: `ENTRY_MERGE_MAX_GAP × FALLBACK_MERGE_GAP_FACTOR(0.4)` (최소 1초)
+- fallback 안정 관측: `FALLBACK_COMMIT_OBSERVATION_THRESHOLD = 2`, `FALLBACK_COMMIT_STABLE_MS = 400`
+- 미확정 판정: `UNCONFIRMED_DESCENDANT_SAMPLE_LIMIT = 96`, container 차단 허용 streak `UNCONFIRMED_FALLBACK_ALLOW_STREAK = 6`
+- 위 상수는 `parity/capture-contract.json` 과 Chrome 확장에 같은 값으로 고정된다
 - 짧은 발화 정책: 한글/영문 포함 텍스트는 길이와 무관하게 허용
 - keepalive 간격: `Config.SUBTITLE_KEEPALIVE_INTERVAL = 1.0초`
 - `_confirmed_compact` 최대 길이: `Config.CONFIRMED_COMPACT_MAX_LEN = 50000`

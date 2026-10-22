@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""푸시 전 품질 검사 (pyright 필수, pytest 선택).
+"""푸시 전 품질 검사 (pyright 필수, Chrome 확장 parity 동기화, pytest 선택).
 
 사용:
   python scripts/check_before_push.py
@@ -103,6 +103,15 @@ def run_pytest() -> int:
     return int(proc.returncode)
 
 
+def run_parity_sync() -> int:
+    """형제 Chrome 확장 저장소가 있으면 parity/ 사본 일치를 확인한다 (없으면 건너뜀)."""
+    root = _repo_root()
+    cmd = [sys.executable, str(root / "scripts" / "check_parity_sync.py")]
+    print(">>", " ".join(cmd), flush=True)
+    proc = subprocess.run(cmd, cwd=str(root))
+    return int(proc.returncode)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="푸시 전 pyright/pytest 검사")
     parser.add_argument(
@@ -118,6 +127,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     code = run_pyright()
+    if code != 0:
+        return code
+    code = run_parity_sync()
     if code != 0:
         return code
     if args.pyright_only and not args.with_pytest:

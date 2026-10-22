@@ -81,19 +81,24 @@ def test_pending_subtitle_reset_commits_before_structured_preview():
     win._pending_subtitle_reset_source = "observer_cleared"
     win._pending_subtitle_reset_timer.start(1000)
 
-    changed = MainWindow._apply_structured_preview_payload(
-        win,
-        {
-            "raw": "새 발언",
-            "rows": [],
-            "selector": "#viewSubtit",
-            "source_mode": "container",
-        },
-        now=now,
-    )
+    payload = {
+        "raw": "새 발언",
+        "rows": [],
+        "selector": "#viewSubtit",
+        "source_mode": "container",
+    }
+    changed = MainWindow._apply_structured_preview_payload(win, dict(payload), now=now)
 
     assert changed is True
     assert win._pending_subtitle_reset_timer.isActive() is False
+    # container fallback 은 안정 관측(2회 또는 400ms) 뒤에만 commit 된다 (Chrome 정합).
+    assert [entry.text for entry in win.capture_state.entries] == ["이전 발언"]
+
+    changed = MainWindow._apply_structured_preview_payload(
+        win, dict(payload), now=now + timedelta(milliseconds=100)
+    )
+
+    assert changed is True
     assert [entry.text for entry in win.capture_state.entries] == ["이전 발언", "새 발언"]
 
 

@@ -302,6 +302,19 @@ class Config:
     # 자막 병합 기준 (현재 운영 동작 유지: 5초/300자)
     ENTRY_MERGE_MAX_CHARS = 300
     ENTRY_MERGE_MAX_GAP = 5  # 초
+    # structured node key 가 없는 fallback 경로는 merge gap 에 이 배율을 곱한다 (Chrome 정합)
+    FALLBACK_MERGE_GAP_FACTOR = 0.4
+
+    # container/unstable fallback 안정 관측 commit 게이트 (Chrome FALLBACK_COMMIT_* 정합)
+    FALLBACK_COMMIT_OBSERVATION_THRESHOLD = 2
+    FALLBACK_COMMIT_STABLE_MS = 400
+    # container fallback 내부 raw tail 상한 (본회의는 전체 보존), UI preview 축약 길이
+    FALLBACK_INTERNAL_RAW_MAX_CHARS = 4096
+    FALLBACK_PREVIEW_MAX_CHARS = 400
+
+    # 미확정(인식 중) 하이라이트 판정: 하위 노드 샘플 상한, container fallback 허용 연속 차단 횟수
+    UNCONFIRMED_DESCENDANT_SAMPLE_LIMIT = 96
+    UNCONFIRMED_FALLBACK_ALLOW_STREAK = 6
 
     # 스트리밍 자막 최대 길이 (초과 시 강제 분할하여 새 타임스탬프 생성)
     STREAM_SUBTITLE_MAX_LENGTH = 300

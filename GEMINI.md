@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.15
+- **버전**: v16.14.16
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ### 관련 문서
@@ -13,6 +13,7 @@
 | 문서 | 내용 |
 |------|------|
 | `docs/CHROME_EXTENSION_PARITY.md` | Chrome 확장과 수집 계약 정합 |
+| `parity/README.md` | Chrome 확장과 공유하는 수집 계약·테스트 벡터 (2026-10-22~) |
 | `docs/HWPX_EXPORT_ANALYSIS.md` | HWPX 최소 패키지 / 스키마 전면 개편 불필요 |
 | `PROJECT_AUDIT.md` | 기능 감사·후속 조치 |
 | `docs/RELEASE_CHECKLIST.md` | 릴리스·CI·pyright 게이트 |

@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.15
+- **버전**: v16.14.16
 - **핵심 가치**: 
   - **실시간 스트리밍 자막 (Delay-free)**
   - 안정적인 멀티스레딩 아키텍처
@@ -18,6 +18,7 @@
 | 문서 | 내용 |
 |------|------|
 | [`docs/CHROME_EXTENSION_PARITY.md`](docs/CHROME_EXTENSION_PARITY.md) | Chrome 확장(`korea-assembly-cc-chrome`)과 사이트/수집 계약 정합·이식 정책 |
+| [`parity/README.md`](parity/README.md) | Chrome 확장과 같은 내용으로 유지하는 수집 공유 계약·테스트 벡터 (`tests/test_parity_contract.py`) |
 | [`docs/HWPX_EXPORT_ANALYSIS.md`](docs/HWPX_EXPORT_ANALYSIS.md) | HWPX 최소 패키지 설계, **스키마 전면 개편 불필요** 판정 |
 | [`PROJECT_AUDIT.md`](PROJECT_AUDIT.md) | 기능 감사·리스크·후속 조치 현황 |
 | [`PIPELINE_LOCK.md`](PIPELINE_LOCK.md) | 자막 파이프라인 코어 의미론 고정 |
@@ -248,7 +249,15 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.15 기준)
+## 6. 최신 변경 요약 (v16.14.16 기준)
+
+### Chrome 확장 수집 알고리즘 정합 2차 + 공유 계약 `parity/` (2026-10-22)
+- **연결 방식**: 코드 공유 없이 `parity/capture-contract.json`(사이트·DOM·상수·의도적 차이)과 `parity/pipeline-vectors.json`(순수 함수 벡터)을 Chrome 확장 저장소와 같은 내용으로 둔다. `tests/test_parity_contract.py` 가 구현을 대조하고, `python scripts/check_parity_sync.py`(pre-push `check_before_push.py` 포함, 형제 저장소 없으면 skip)가 사본 일치를 검사한다. 수집 의미론을 바꾸면 `parity/` 를 먼저 고치고 양쪽을 맞춘 뒤 `--write` 로 복사한다.
+- **데이터 손실 수정**: `clean_text_display`/`clean_text` 가 `\d{4}년`(예: `2026년`)을 자막 본문에서 지우던 `RE_YEAR` 적용을 제거했다. `Config.RE_YEAR` 상수는 호환용으로 남는다.
+- **placeholder 차단**: 사이트 `#viewSubtit > #smiLoading .loadingmsg` 의 `로딩중..`/`Loading...` 은 `is_meaningful_subtitle_text` 에서 거부된다.
+- **병합/keepalive 정책**: `core/subtitle_pipeline_impl/entry_policy.py` 가 확장 `entry-policy.ts` 와 같은 규칙을 가진다(알려진 channel 만 화자 경계, structured/화자 entry 뒤 fallback 은 새 entry, fallback gap ×0.4, 새 entry `speaker_changed`, keepalive 접미 규칙).
+- **probe/파이프라인**: 미확정 판정에 배경 이미지·텍스트 노드 우선 96개 샘플, container 차단 확장 + 연속 6회 허용, 내부 raw 4KB tail(본회의 전체)·UI preview 400자, 기본 셀렉터 순서 확장과 동일. stable key row 만 commit 하고 unstable/container fallback 은 같은 raw 2회 또는 400ms 안정 관측 뒤 commit 한다(일반 자막 `p.smi_word` 는 stable key 가 없음).
+- **문서**: `docs/CHROME_EXTENSION_PARITY.md` §4.1, `PIPELINE_LOCK.md` §2.1/§7, 확장 저장소 `DESKTOP_PARITY.md`.
 
 ### 업데이터 rename 스왑 교체 (v16.14.15, 2026-10-21)
 - **교체**: 실행 중 exe 덮어쓰기(WinError 5) 대신 설치본→백업 rename 후 staging된 새 파일을 빈 목표 경로로 이동. 첫 이동 실패 시 설치본 유지, 낡은 백업 덮어쓰기, 두 이동 사이 중단 시 다음 실행에서 백업 복원.

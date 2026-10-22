@@ -77,6 +77,133 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             except Exception:
                 timer = _ResetTimerShim()
             self._pending_subtitle_reset_timer = timer
+        if "_fallback_commit_candidate" not in state_dict:
+            self._fallback_commit_candidate = None
+        if "_fallback_commit_token" not in state_dict:
+            self._fallback_commit_token = 0
+        if "_fallback_commit_timer" not in state_dict:
+            try:
+                fallback_timer = QTimer(self)
+                fallback_timer.setSingleShot(True)
+                fallback_timer.timeout.connect(self._commit_scheduled_fallback_candidate)
+            except Exception:
+                fallback_timer = _ResetTimerShim()
+            self._fallback_commit_timer = fallback_timer
+
+    def _clear_fallback_commit_candidate(self) -> None:
+        timer = self.__dict__.get("_fallback_commit_timer")
+        if timer is not None:
+            try:
+                if timer.isActive():
+                    timer.stop()
+            except Exception:
+                pass
+        self._fallback_commit_candidate = None
+
+    def _observe_fallback_commit_candidate(
+        self,
+        raw: str,
+        now: datetime,
+        *,
+        selector: str = "",
+        frame_path: tuple[int, ...] = (),
+        source_mode: str = "",
+    ) -> bool:
+        """container/unstable fallback 텍스트는 안정 관측 뒤에만 commit 한다.
+
+        Chrome `observeFallbackCommitCandidate` 정합: 같은 normalized raw 가
+        `FALLBACK_COMMIT_OBSERVATION_THRESHOLD`회 관측되거나
+        `FALLBACK_COMMIT_STABLE_MS` 이상 유지되면 commit 한다.
+        """
+        self._ensure_capture_runtime_state()
+        normalized_raw = str(raw or "").strip()
+        if not normalized_raw:
+            self._clear_fallback_commit_candidate()
+            return False
+
+        candidate = self.__dict__.get("_fallback_commit_candidate")
+        if isinstance(candidate, dict) and candidate.get("raw") == normalized_raw:
+            candidate["observation_count"] = int(candidate.get("observation_count", 1)) + 1
+            candidate["selector"] = selector
+            candidate["frame_path"] = tuple(frame_path)
+            candidate["source_mode"] = source_mode or candidate.get("source_mode", "")
+        else:
+            self._fallback_commit_token = int(self.__dict__.get("_fallback_commit_token", 0)) + 1
+            candidate = {
+                "raw": normalized_raw,
+                "selector": selector,
+                "frame_path": tuple(frame_path),
+                "source_mode": source_mode,
+                "first_seen_at": now,
+                "observation_count": 1,
+                "token": self._fallback_commit_token,
+            }
+            self._fallback_commit_candidate = candidate
+
+        stable_ms = int(Config.FALLBACK_COMMIT_STABLE_MS)
+        elapsed_ms = (now - candidate["first_seen_at"]).total_seconds() * 1000
+        if (
+            int(candidate["observation_count"]) >= int(Config.FALLBACK_COMMIT_OBSERVATION_THRESHOLD)
+            or elapsed_ms >= stable_ms
+        ):
+            return self._commit_fallback_candidate(int(candidate["token"]), now)
+
+        timer = self.__dict__.get("_fallback_commit_timer")
+        if timer is not None:
+            try:
+                if timer.isActive():
+                    timer.stop()
+                timer.start(max(0, int(stable_ms - elapsed_ms)))
+            except Exception:
+                pass
+        return False
+
+    def _commit_scheduled_fallback_candidate(self) -> None:
+        candidate = self.__dict__.get("_fallback_commit_candidate")
+        if not isinstance(candidate, dict):
+            return
+        self._commit_fallback_candidate(int(candidate.get("token", 0)), datetime.now())
+
+    def _commit_fallback_candidate(self, token: int, now: datetime) -> bool:
+        candidate = self.__dict__.get("_fallback_commit_candidate")
+        if not isinstance(candidate, dict) or int(candidate.get("token", -1)) != token:
+            return False
+        self._clear_fallback_commit_candidate()
+        if not bool(getattr(self, "is_running", False)):
+            return False
+
+        preview_result = apply_preview(
+            self.capture_state,
+            str(candidate.get("raw", "")),
+            now,
+            self._current_capture_settings(),
+            meta=PipelineSourceMeta(
+                selector=str(candidate.get("selector", "") or ""),
+                frame_path=tuple(candidate.get("frame_path", ()) or ()),
+                source_mode=str(candidate.get("source_mode", "") or "fallback"),
+            ),
+        )
+        appended_entries = (
+            [preview_result.appended_entry] if preview_result.appended_entry else []
+        )
+        updated_existing = bool(
+            not preview_result.appended_entry and preview_result.updated_entry
+        )
+        self._apply_capture_pipeline_refresh(
+            preview_text=utils.format_fallback_preview_text(
+                self.capture_state.preview_text,
+                int(Config.FALLBACK_PREVIEW_MAX_CHARS),
+            ),
+            appended_entries=appended_entries,
+            updated_existing=updated_existing,
+        )
+        if appended_entries or updated_existing:
+            self._mark_session_dirty()
+            self._invalidate_destructive_undo()
+            self._schedule_initial_recovery_snapshot_if_needed(
+                self._build_prepared_entries_snapshot()
+            )
+        return bool(appended_entries or updated_existing)
 
     def _current_capture_settings(self) -> dict[str, int | bool]:
         return {
@@ -136,6 +263,7 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
         if self._pending_subtitle_reset_timer.isActive():
             self._pending_subtitle_reset_timer.stop()
         self._pending_subtitle_reset_source = ""
+        self._clear_fallback_commit_candidate()
 
     def _schedule_deferred_subtitle_reset(self, source: str) -> None:
         self._ensure_capture_runtime_state()
@@ -161,6 +289,7 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             datetime.now(),
             self._current_capture_settings(),
         )
+        self._clear_fallback_commit_candidate()
         self.live_capture_ledger = clear_live_capture_ledger()
         self._sync_capture_state_entries(force_refresh=False)
         if source:
@@ -343,9 +472,20 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
         now = now or datetime.now()
         self._commit_scheduled_subtitle_reset_before_preview()
 
-        event = normalize_capture_event(
+        # Chrome analyzeCaptureCommit 정합: stable key row 만 commit 하고,
+        # unstable row(일반 자막 `p.smi_word` 처럼 stable class/id 없음)는 preview-only 로
+        # 두어 안정 관측 fallback 경로로 내려보낸다.
+        full_event = normalize_capture_event(
             raw=raw,
             rows=observed_rows,
+            selector=selector,
+            frame_path=frame_path,
+            timestamp=now.timestamp(),
+        )
+        stable_rows = [row for row in full_event.rows if not row.unstable_key]
+        event = normalize_capture_event(
+            raw=full_event.preview_text,
+            rows=stable_rows,
             selector=selector,
             frame_path=frame_path,
             timestamp=now.timestamp(),
@@ -359,6 +499,7 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
         force_refresh = False
 
         if event.rows:
+            self._clear_fallback_commit_candidate()
             for row_change in reconciliation.row_changes:
                 live_row = get_live_row(self.live_capture_ledger, row_change.key)
                 if not live_row:
@@ -437,22 +578,34 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
                 self.capture_state.current_selector = selector
             self.capture_state.current_frame_path = frame_path
         else:
-            preview_result = apply_preview(
-                self.capture_state,
+            fallback_source_mode = (
+                source_mode if source_mode == "container" else "fallback"
+            )
+            preview_changed = self.capture_state.preview_text != event.preview_text
+            self.capture_state.preview_text = event.preview_text
+            self.capture_state.last_observed_raw = event.preview_text
+            self.capture_state.last_observer_event_at = now.timestamp()
+            if selector:
+                self.capture_state.current_selector = selector
+            if frame_path:
+                self.capture_state.current_frame_path = frame_path
+            changed = changed or preview_changed
+            # 실제 commit/refresh 는 안정 관측 뒤 `_commit_fallback_candidate` 가 담당한다.
+            if self._observe_fallback_commit_candidate(
                 event.preview_text,
                 now,
-                settings,
-                meta=PipelineSourceMeta(
-                    selector=selector,
-                    frame_path=frame_path,
-                    source_mode=source_mode or event.capture_mode,
-                ),
+                selector=selector,
+                frame_path=frame_path,
+                source_mode=fallback_source_mode,
+            ):
+                return True
+            self._set_preview_text(
+                utils.format_fallback_preview_text(
+                    event.preview_text,
+                    int(Config.FALLBACK_PREVIEW_MAX_CHARS),
+                )
             )
-            changed = changed or preview_result.changed
-            if preview_result.appended_entry:
-                appended_entries.append(preview_result.appended_entry)
-            elif preview_result.updated_entry:
-                updated_existing = True
+            return changed
 
         self._apply_capture_pipeline_refresh(
             preview_text=event.preview_text,

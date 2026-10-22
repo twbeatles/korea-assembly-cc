@@ -34,7 +34,7 @@ from pathlib import Path
 block_cipher = None
 
 
-def _load_version_from_readme(default: str = "16.14.15") -> str:
+def _load_version_from_readme(default: str = "16.14.16") -> str:
     spec_path = Path(globals().get("__file__", "subtitle_extractor.spec")).resolve()
     readme_path = spec_path.parent / "README.md"
     try:
@@ -107,6 +107,7 @@ HIDDEN_IMPORTS = [
     'core.hwpx_export',
     'core.export_text',
     'core.subtitle_row_split',
+    'core.subtitle_confirmation',
     'core.live_capture',
     'core.live_capture_impl',
     'core.live_capture_impl.ledger',
@@ -121,6 +122,7 @@ HIDDEN_IMPORTS = [
     'core.subtitle_pipeline',
     'core.subtitle_pipeline_impl',
     'core.subtitle_pipeline_impl.entries',
+    'core.subtitle_pipeline_impl.entry_policy',
     'core.subtitle_pipeline_impl.history',
     'core.subtitle_pipeline_impl.incremental',
     'core.subtitle_pipeline_impl.types',

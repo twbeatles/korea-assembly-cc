@@ -1,0 +1,110 @@
+{
+  "contractVersion": 1,
+  "updatedAt": "2026-10-22",
+  "description": "국회 의사중계 자막 수집 공유 계약. korea-assembly-cc(데스크톱)와 korea-assembly-cc-chrome(Chrome 확장)의 parity/ 폴더에 내용이 같은 사본을 둔다.",
+  "repositories": {
+    "desktop": "https://github.com/twbeatles/korea-assembly-cc",
+    "chrome": "https://github.com/twbeatles/korea-assembly-cc-chrome"
+  },
+  "site": {
+    "primaryHost": "assembly.webcast.go.kr",
+    "secondaryHostsUnresolved": ["webcast.assembly.go.kr"],
+    "playerPathPrefixes": ["/main/player", "/main/pressplayer"],
+    "liveListPath": "/main/service/live_list.asp",
+    "plenary": { "xcode": "10", "xcgcdPrefix": "DCM000010" },
+    "aiSubtitleServerPattern": "smiai.webcast.go.kr",
+    "generalSubtitleServerPattern": "smi(-hy|-dw)?\\d?\\.webcast\\.go\\.kr"
+  },
+  "dom": {
+    "layer": "#viewSubtit",
+    "container": "#viewSubtit .incont",
+    "row": "#viewSubtit .smi_word",
+    "aiRowSegmentClassPrefix": "stxt",
+    "aiSpeakerSpanIdPrefix": "segarr_",
+    "loadingIndicator": "#smiLoading .loadingmsg",
+    "buttons": {
+      "wrapper": "#smi_btn",
+      "ai": ".btn_subtit_ai",
+      "general": ".btn_subtit_def",
+      "any": ".btn_subtit"
+    },
+    "generalRowsHaveStableKey": false
+  },
+  "selectorCandidatesOrdered": [
+    "#viewSubtit .smi_word:last-child",
+    "#viewSubtit .smi_word",
+    "#viewSubtit .incont",
+    "#viewSubtit",
+    "#viewSubtit span",
+    ".subtitle_area",
+    ".ai_subtitle",
+    "[class*='subtitle']"
+  ],
+  "containerFallbackSelectors": [
+    "#viewSubtit .incont",
+    "#viewSubtit",
+    ".subtitle_area",
+    ".ai_subtitle",
+    "[class*='subtitle']"
+  ],
+  "speakerColors": {
+    "primary": "rgb(35, 124, 147)",
+    "secondary": "rgb(30, 30, 30)"
+  },
+  "unconfirmed": {
+    "filterEnabledByDefault": true,
+    "checksBackgroundColor": true,
+    "checksBackgroundImage": true,
+    "descendantSampleLimit": 96,
+    "containerFallbackAllowStreak": 6,
+    "knownHighlightBackgrounds": [
+      "rgb(207, 229, 247)",
+      "rgba(54, 160, 255, 0.2)"
+    ]
+  },
+  "placeholderTexts": ["로딩중", "loading"],
+  "pipeline": {
+    "suffixLength": 50,
+    "minCompactAnchor": 10,
+    "largeAppendMin": 200,
+    "recentDuplicateMinLength": 8,
+    "recentHistoryEntries": 12,
+    "recentHistoryCompactLength": 5000,
+    "recentResyncEntries": 5,
+    "previewResyncThreshold": 10,
+    "previewAmbiguousResyncThreshold": 6,
+    "confirmedCompactMaxLength": 50000,
+    "mergeGapSeconds": 5,
+    "fallbackMergeGapFactor": 0.4,
+    "keepaliveIntervalMs": 1000,
+    "subtitleResetGraceMs": 1000,
+    "liveLedgerMaxRows": 300,
+    "fallbackCommitObservationThreshold": 2,
+    "fallbackCommitStableMs": 400,
+    "fallbackInternalRawMaxChars": 4096,
+    "fallbackPreviewMaxChars": 400,
+    "commitStableRowsOnly": true
+  },
+  "intentionalDifferences": {
+    "mergeMaxChars": {
+      "chrome": 1000,
+      "desktop": 300,
+      "reason": "entry 분할 길이는 제품 정책(데스크톱은 TXT/HWP 문단 가독성)이다. 수집·추출 의미론에는 영향이 없다."
+    },
+    "customPrimarySelector": {
+      "chrome": "기본 후보 뒤(점수 10)",
+      "desktop": ".smi_word 후보 다음, container 후보 앞",
+      "reason": "데스크톱만 사용자 지정 셀렉터 입력 UI가 있다. 기본 후보 순서는 같다."
+    },
+    "stopMaterializesPreview": {
+      "chrome": false,
+      "desktop": true,
+      "reason": "데스크톱은 중지 시 마지막 preview 를 확정한다(PIPELINE_LOCK §4.6). Chrome 은 committed entry 만 저장한다."
+    },
+    "noiseFilterToggle": {
+      "chrome": "옵션으로 끌 수 있음(기본 on)",
+      "desktop": "항상 on",
+      "reason": "기본값 기준 결과는 같다."
+    }
+  }
+}

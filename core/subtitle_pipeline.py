@@ -30,6 +30,11 @@ from core.subtitle_pipeline_impl.history import (
     rebuild_confirmed_history,
     soft_resync_history,
 )
+from core.subtitle_pipeline_impl.entry_policy import (
+    is_speaker_boundary,
+    should_apply_keepalive,
+    should_merge_into_last_entry,
+)
 from core.subtitle_pipeline_impl.incremental import (
     _slice_from_compact_index,
     extract_incremental_text_from_history,
@@ -286,8 +291,7 @@ def apply_keepalive(
     if not last_entry:
         return PipelineResult(state, False, reason="no_entries")
 
-    raw_compact = utils.compact_subtitle_text(raw)
-    if raw_compact and raw_compact != last_entry.compact_text:
+    if not should_apply_keepalive(raw, last_entry.text):
         return PipelineResult(state, False, reason="raw_mismatch")
 
     last_entry.end_time = now
@@ -371,6 +375,9 @@ __all__ = [
     "commit_live_row",
     "apply_structured_entry",
     "apply_keepalive",
+    "is_speaker_boundary",
+    "should_apply_keepalive",
+    "should_merge_into_last_entry",
     "apply_reset",
     "finalize_session",
     "flush_pending_previews",

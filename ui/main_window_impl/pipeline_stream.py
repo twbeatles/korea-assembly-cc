@@ -678,6 +678,19 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
             return
 
         self._ensure_capture_runtime_state()
+        candidate = self.__dict__.get("_fallback_commit_candidate")
+        if isinstance(candidate, dict) and utils.compact_subtitle_text(
+            str(candidate.get("raw", ""))
+        ) == utils.compact_subtitle_text(raw):
+            # 같은 fallback raw 의 재관측 (Chrome observationCount 정합)
+            self._observe_fallback_commit_candidate(
+                str(candidate.get("raw", "")),
+                datetime.now(),
+                selector=str(candidate.get("selector", "") or ""),
+                frame_path=tuple(candidate.get("frame_path", ()) or ()),
+                source_mode=str(candidate.get("source_mode", "") or ""),
+            )
+            return
         result = apply_keepalive(self.capture_state, raw, datetime.now())
         if result.changed:
             return

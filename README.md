@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 (Korea Assembly CC) v16.14.15
+# 🏛️ 국회 의사중계 자막 추출기 (Korea Assembly CC) v16.14.16
 
 대한민국 국회 의사중계 웹사이트의 **실시간 AI 자막**을 수집·정리·검색하고 파일로 저장하는 PySide6 기반 데스크톱 프로그램입니다. 국회 회의와 발언을 실시간으로 기록하거나, 후속 검토를 위한 자막 파일이 필요한 기자·연구자·시민단체·일반 사용자를 위해 만들었습니다.
 
@@ -332,6 +332,14 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 ---
 
 ## 📝 변경 이력
+
+### v16.14.16 (2026-10-22)
+- **Chrome 확장 수집 알고리즘 정합 2차 + 공유 계약 `parity/`** — 확장 저장소와 같은 내용의 `parity/capture-contract.json`·`pipeline-vectors.json` 으로 두 구현을 테스트(`tests/test_parity_contract.py`)와 `scripts/check_parity_sync.py` 로 대조
+- **자막 본문 손실 수정** — `2026년` 처럼 `숫자4자리+년` 표현을 자막에서 지우던 동작 제거
+- **로딩 문구 차단** — 사이트의 `로딩중..`/`Loading...` 이 자막으로 저장되던 문제 수정
+- **일반 자막(본회의) 안정화** — 고정 키가 없는 행과 container 텍스트는 같은 텍스트가 2회 관측되거나 400ms 유지된 뒤에만 저장, 미확정 판정(배경 이미지·96개 샘플)과 container 차단 해제(연속 6회) 정합
+- **병합·keepalive 규칙 통일** — 화자 경계는 알려진 화자색일 때만, fallback 은 새 항목으로 분리, `speaker_changed` 설정, 종료 시각 연장은 화면 텍스트가 마지막 자막으로 끝날 때만
+- 회귀: `tests/test_parity_contract.py`, `tests/test_chrome_parity_20261022.py`
 
 ### v16.14.15 (2026-10-21)
 - **업데이터 교체 방식 변경(rename 스왑)** — 실행 중 exe 덮어쓰기(WinError 5) 대신 설치본→백업 이름 변경 후 새 파일을 목표 경로로 이동. 첫 이동 실패 시 설치본 유지, 낡은 백업은 덮어쓰기, 두 이동 사이 중단 시 다음 실행에서 백업 복구
