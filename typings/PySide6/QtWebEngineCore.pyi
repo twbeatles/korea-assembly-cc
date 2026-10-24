@@ -1,0 +1,13 @@
+from typing import Any
+
+
+class _QtMeta(type):
+    def __getattr__(cls, name: str) -> Any: ...
+
+
+class _QtObject(metaclass=_QtMeta):
+    def __init__(self, *args: Any, **kwargs: Any) -> None: ...
+    def __getattr__(self, name: str) -> Any: ...
+
+
+class QWebEnginePage(_QtObject): ...
