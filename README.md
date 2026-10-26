@@ -2,17 +2,20 @@
 
 대한민국 국회 의사중계 웹사이트의 **실시간 AI 자막**을 수집·정리·검색하고 파일로 저장하는 PySide6 기반 데스크톱 프로그램입니다. 국회 회의와 발언을 실시간으로 기록하거나, 후속 검토를 위한 자막 파일이 필요한 기자·연구자·시민단체·일반 사용자를 위해 만들었습니다.
 
-수집한 자막은 TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션으로 저장할 수 있습니다. Python과 Chrome을 설치한 뒤 아래 설치 방법의 명령으로 바로 실행할 수 있으며, 최신 배포본은 [GitHub Releases](https://github.com/twbeatles/korea-assembly-cc/releases)에서 받을 수 있습니다.
+수집한 자막은 TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션으로 저장할 수 있습니다. Python과 Chrome을 설치한 뒤 아래 설치 방법의 명령으로 바로 실행할 수 있으며, 최신 배포본은 [GitHub Releases](https://github.com/twbeatles/korea-assembly-cc/releases)에서 받을 수 있습니다.  
+별도 프로그램 설치 없이 브라우저에서 바로 사용하고 싶다면 [Chrome 확장 프로그램](https://chromewebstore.google.com/detail/khchppfkjljacdhohihlpkbbkddmoghk)을 이용할 수도 있습니다.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![PyQt6](https://img.shields.io/badge/GUI-PySide6-green)
 ![Selenium](https://img.shields.io/badge/Automation-Selenium-orange)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
+[![Chrome Web Store](https://img.shields.io/badge/Chrome%20웹%20스토어-확장프로그램-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/khchppfkjljacdhohihlpkbbkddmoghk)
 
 ---
 
 ## 📋 목차
 
+- [관련 프로젝트: Chrome 확장 프로그램](#-관련-프로젝트-chrome-확장-프로그램)
 - [주요 기능](#-주요-기능)
 - [활용 사례](#-활용-사례)
 - [설치 방법](#-설치-방법)
@@ -24,6 +27,31 @@
 - [빌드 (EXE)](#️-빌드-exe)
 - [개발 및 검증](#-개발-및-검증)
 - [변경 이력](#-변경-이력)
+
+---
+
+## 🌐 관련 프로젝트: Chrome 확장 프로그램
+
+별도의 Python 설치나 프로그램 다운로드 없이, **Chrome 웹 브라우저에서 원클릭으로 설치**하여 의사중계 시청과 동시에 우측 패널에서 자막을 실시간으로 확인하고 복사·저장할 수 있는 공식 확장 프로그램도 제공됩니다.
+
+- 🧩 **Chrome 웹 스토어:** [국회 AI 자막 추출기 설치하기](https://chromewebstore.google.com/detail/khchppfkjljacdhohihlpkbbkddmoghk)
+- 💻 **확장 소스코드 저장소:** [twbeatles/korea-assembly-cc-chrome (GitHub)](https://github.com/twbeatles/korea-assembly-cc-chrome)
+- **주요 특징:**
+  - **원클릭 설치:** Chrome 웹 스토어에서 바로 추가 가능 (별도 Python 환경 설정 불필요)
+  - **페이지 내 통합 패널:** 국회 의사중계 영상 바로 옆에 우측 패널로 자막 및 실시간 인식 내용 동시 표시
+  - **빠른 복사 및 내보내기:** 최근 N줄 즉시 복사, TXT, SRT, VTT, MD, CSV, JSON 내보내기 지원
+  - **크로스 플랫폼:** Windows, macOS, Linux 등 Chrome 브라우저가 실행되는 모든 환경 지원
+
+### 🔍 어떤 프로그램을 선택해야 할까요?
+
+| 비교 항목 | PC 데스크톱 프로그램 (현재 저장소) | Chrome 확장 프로그램 (korea-assembly-cc-chrome) |
+| :--- | :--- | :--- |
+| **형태** | Windows 독립 GUI 데스크톱 프로그램 (PySide6) | Chrome 브라우저 확장 프로그램 (Manifest V3) |
+| **설치 방법** | [GitHub Releases](https://github.com/twbeatles/korea-assembly-cc/releases)에서 EXE 다운로드 또는 Python 실행 | [Chrome 웹 스토어](https://chromewebstore.google.com/detail/khchppfkjljacdhohihlpkbbkddmoghk) 원클릭 설치 (가장 간편) |
+| **수집 환경** | 백그라운드(헤드리스) 또는 브라우저 자동 제어 수집 | 의사중계 시청 중 우측 페이지 패널에서 바로 수집 |
+| **내보내기 형식** | TXT · SRT · VTT · **DOCX · HWPX · HWP · RTF** · JSON | TXT · SRT · VTT · JSON · MD · CSV |
+| **저장소** | 로컬 파일 및 SQLite 데이터베이스 | 브라우저 로컬 스토리지 (IndexedDB) |
+| **추천 상황** | 영상 시청 없이 백그라운드에서 장시간 수집하거나 한글/워드 보고서 문서가 필요한 경우 | 중계 영상을 시청하며 간편하게 자막을 확인·복사·저장하려는 경우 |
 
 ---
 
