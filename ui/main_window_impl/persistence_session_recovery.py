@@ -2,7 +2,7 @@
 
 import uuid
 
-from core.file_io import canonical_path_key
+from core.file_io import canonical_path_key, read_limited_json_file
 from core.recovery_candidates import (
     discover_recovery_candidates,
     inspect_recovery_candidate,
@@ -50,7 +50,11 @@ class MainWindowPersistenceSessionRecoveryMixin(MainWindowHost):
             if not recovery_path.exists():
                 return None
             try:
-                data = json.loads(recovery_path.read_text(encoding="utf-8"))
+                data = read_limited_json_file(
+                    recovery_path,
+                    max_bytes=int(Config.URL_HISTORY_MAX_BYTES),
+                    label="recovery pointer",
+                )
             except Exception as e:
                 logger.warning(f"recovery state 파싱 오류: {e}")
                 self._clear_recovery_state()

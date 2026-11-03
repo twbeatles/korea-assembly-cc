@@ -168,7 +168,7 @@ class MainWindowViewSearchMixin(ViewSearchBase):
                 try:
                     matches.append(
                         SearchMatch(
-                            int(item.get("entry_index", -1) or -1),
+                            int(item.get("entry_index", -1)),
                             int(item.get("char_start", 0) or 0),
                             int(item.get("char_length", 0) or 0),
                         )
@@ -464,7 +464,7 @@ class MainWindowViewSearchMixin(ViewSearchBase):
             )
 
     def _check_keyword_alert(self, text: str):
-        if not self._alert_keywords_cache:
+        if not self.__dict__.get("_alert_keywords_cache"):
             return
 
         text_lower = text.lower()

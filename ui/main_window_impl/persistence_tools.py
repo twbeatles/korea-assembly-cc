@@ -2,6 +2,8 @@
 
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
+from core.file_io import read_limited_json_file
+from core.resource_budget import ResourceBudget, ResourceBudgetLimits, ResourceLimitExceeded
 
 
 class MainWindowPersistenceToolsMixin(MainWindowHost):
@@ -18,6 +20,8 @@ class MainWindowPersistenceToolsMixin(MainWindowHost):
                 return
 
             def continue_reflow() -> None:
+                source_entries = self.subtitles
+                snapshot_revision = self._get_session_revision()
                 prepared_entries = self._build_persistent_entries_snapshot()
                 if not prepared_entries:
                     self._show_toast("정리할 자막이 없습니다.", "warning")
@@ -31,13 +35,14 @@ class MainWindowPersistenceToolsMixin(MainWindowHost):
                     "1. 텍스트 내 타임스탬프([HH:MM:SS])를 감지하여 분리\n"
                     "2. 문장 부호(. ? !) 기준으로 줄 바꿈\n"
                     "3. 끊어진 문장 병합\n\n"
-                    "(주의: 되돌리기는 지원되지 않습니다.)",
+                    "(완료 후 Ctrl+Z로 되돌릴 수 있습니다.)",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
                 if reply == QMessageBox.StandardButton.No:
                     return
 
                 old_count = len(prepared_entries)
+                self._reflow_source_entries = source_entries
                 self._reflow_in_progress = True
                 self._set_status("줄넘김 정리 중...", "running")
 
@@ -49,6 +54,7 @@ class MainWindowPersistenceToolsMixin(MainWindowHost):
                             {
                                 "old_count": old_count,
                                 "subtitles": new_subtitles,
+                                "snapshot_revision": snapshot_revision,
                             },
                         )
                     except Exception as e:
@@ -58,6 +64,7 @@ class MainWindowPersistenceToolsMixin(MainWindowHost):
                 started = self._start_background_thread(background_reflow, "ReflowWorker")
                 if not started:
                     self._reflow_in_progress = False
+                    self._reflow_source_entries = None
                     self._set_status("줄넘김 정리 시작 거부 (종료 중)", "warning")
                     self._show_toast("종료 중이라 줄넘김 정리를 시작할 수 없습니다.", "warning")
                     return
@@ -72,6 +79,7 @@ class MainWindowPersistenceToolsMixin(MainWindowHost):
             sort_by_time: bool = True,
             existing_subtitles: list[SubtitleEntry] | None = None,
             dedupe_mode: str = "legacy_bucket",
+            strict: bool = False,
         ) -> list[SubtitleEntry]:
             """여러 세션 파일을 병합
 
@@ -85,25 +93,53 @@ class MainWindowPersistenceToolsMixin(MainWindowHost):
                 List[SubtitleEntry]: 병합된 자막 목록
             """
             all_entries: list[SubtitleEntry] = []
+            budget = ResourceBudget(ResourceBudgetLimits(
+                per_file_bytes=int(Config.SESSION_RESOURCE_PER_FILE_MAX_BYTES),
+                total_bytes=int(Config.SESSION_RESOURCE_TOTAL_MAX_BYTES),
+                max_entries=int(Config.SESSION_RESOURCE_MAX_ENTRIES),
+                max_segments=int(Config.SESSION_RESOURCE_MAX_SEGMENTS),
+            ))
 
             # 기존 자막 추가
             if existing_subtitles:
+                budget.consume_entries(len(existing_subtitles))
                 all_entries.extend(existing_subtitles)
 
             for path in file_paths:
                 try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-
-                    entries, skipped = self._deserialize_subtitles(
-                        data.get("subtitles", []),
-                        source=str(path),
+                    budget.consume_segment()
+                    file_size = Path(path).stat().st_size
+                    budget.consume_file(file_size, label=str(path))
+                    data = read_limited_json_file(
+                        path, max_bytes=budget.limits.per_file_bytes, label="병합 입력",
                     )
+                    if not isinstance(data, dict):
+                        raise ValueError("세션 JSON은 object여야 합니다.")
+                    if data.get("format") == "runtime_session_manifest_v1":
+                        loaded = self._load_runtime_manifest_payload(path, allow_salvage=False)
+                        entries = loaded["subtitles"]
+                        skipped = int(loaded.get("skipped", 0))
+                        usage = loaded.get("resource_usage", {})
+                        budget.consume_file(max(0, int(usage.get("total_bytes", file_size)) - file_size), label=str(path))
+                        budget.consume_segment(int(usage.get("segments", 0)))
+                        budget.consume_entries(len(entries))
+                    else:
+                        raw_entries = data.get("subtitles")
+                        if not isinstance(raw_entries, list):
+                            raise ValueError("subtitles 배열이 없습니다.")
+                        budget.consume_entries(len(raw_entries))
+                        entries, skipped = self._deserialize_subtitles(raw_entries, source=str(path))
+                    if strict and skipped:
+                        raise ValueError(f"손상된 자막 {skipped}개가 있습니다.")
                     all_entries.extend(entries)
                     if skipped:
                         logger.warning("자막 항목 %s개 건너뜀 (%s)", skipped, path)
 
+                except ResourceLimitExceeded:
+                    raise
                 except Exception as e:
+                    if strict:
+                        raise ValueError(f"병합 입력을 읽을 수 없습니다 ({Path(path).name}): {e}") from e
                     logger.warning(f"파일 로드 실패 ({path}): {e}")
 
             # 시간순 정렬

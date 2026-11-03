@@ -39,11 +39,25 @@ def read_limited_json_file(
     *,
     max_bytes: int,
     label: str = "JSON",
+    cancel_check: Optional[Callable[[], bool]] = None,
+    progress: Optional[Callable[[int, int], None]] = None,
 ) -> object:
     target = Path(path)
-    check_file_size(target, per_file_limit=max_bytes, label=label)
+    size = check_file_size(target, per_file_limit=max_bytes, label=label)
+    def check_cancelled() -> None:
+        if cancel_check is not None and cancel_check():
+            raise ResourceLimitExceeded("cancelled", limit=None, observed=None, label=label)
+    check_cancelled()
+    raw = bytearray()
     with open(target, "rb") as handle:
-        raw = handle.read(max_bytes + 1)
+        while len(raw) <= max_bytes:
+            check_cancelled()
+            chunk = handle.read(min(1024 * 1024, max_bytes + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if progress is not None:
+                progress(len(raw), max(1, size))
     if len(raw) > max_bytes:
         raise ResourceLimitExceeded(
             "file_bytes",
@@ -51,7 +65,10 @@ def read_limited_json_file(
             observed=len(raw),
             label=label,
         )
-    return json.loads(raw.decode("utf-8-sig"))
+    check_cancelled()
+    data = json.loads(raw.decode("utf-8-sig"))
+    check_cancelled()
+    return data
 
 
 def atomic_write_json(

@@ -4,6 +4,8 @@
 
 ## 1. 프로젝트 개요
 
+최신 감사·검증 기준은 [최종 감사](PROJECT_AUDIT_FINAL.md)와 [추가 감사](PROJECT_AUDIT_ADDITIONAL.md)를 참고한다. 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
+
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
 - **버전**: v16.14.16
 - **핵심 가치**: 
@@ -106,7 +108,8 @@ Raw Text(Observer/폴링) → preview 메시지 → _prepare_preview_raw(정규�
 - append/tail update는 `PipelineResult` delta 기반으로 UI 통계/카운트/렌더링을 증분 반영하며, 마지막 visible row 수정은 tail patch를 사용한다.
 - 세션 저장/자동 백업은 `snapshot_clone()` + streaming JSON writer를 사용하고, recovery state 파일에 최신 복구 가능 스냅샷을 기록한다.
 - DB 세션 저장은 `SubtitleEntry`의 `entry_id`/`source_*`/`speaker_*`/timing 메타데이터까지 포함하는 lossless round-trip을 목표로 유지한다.
-- `_finalize_subtitle()`는 호환용 entry point로 유지되며, 실제 append/update는 `_add_text_to_subtitles()`와 shared helper를 사용한다.
+- dict preview는 `commit_live_row`/`apply_preview`의 delta를 적용하고 `_publish_capture_commit()`에서 실시간 기록·키워드 알림을 수행한다. `PipelineResult.previous_text`는 기록/알림용 변경 전 텍스트이며 코어 증분 추출 의미론을 바꾸지 않는다. `_finalize_subtitle()`와 `_add_text_to_subtitles()`는 레거시 string/segments 호환 경로다.
+- Worker는 raw와 row key/text/speaker/frame/selector/source mode를 함께 비교한다. 새 stable row identity는 별도 발언으로 보존하며, 기존 row 수정은 저장된 baseline, 초기/fallback handoff는 snapshot global baseline을 사용한다. fallback 글로벌 히스토리/suffix 알고리즘은 유지한다.
 - 렌더링은 live `SubtitleEntry` 대신 immutable snapshot clone을 사용한다.
 
 ### 4.3 예외 처리
@@ -710,6 +713,16 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - **revision 저장**: 모든 세션 mutation은 `_session_revision`을 증가시킨다. 비동기 저장 완료는 시작 revision과 현재 revision이 같을 때만 dirty를 해제하며, 다르면 후속 종료/로드 action을 자동 실행하지 않는다.
 - **DB 저장 멱등성**: JSON snapshot header의 `save_operation_id`를 SQLite에도 전달한다. 동일 operation 재시도는 같은 DB 세션을 반환하며 persistence save는 임의 timeout으로 성공/실패를 오판하지 않는다.
 - **resource budget**: 일반 JSON, runtime manifest/segment/tail, salvage, DB hydrate는 `core/resource_budget.py`의 byte/entry 한도를 공유한다. DB row는 `fetchmany()` 기반으로 progress/cancel을 지원한다.
+- 일반 JSON도 bounded chunk reader와 변환 전 entry count 검사를 사용하고, 읽기/역직렬화 중 progress/cancel 및 종료 취소를 지원한다. 표준 JSON parser 실행 중에는 중단하지 않고 완료 후 취소를 확인한다. 완료 큐가 도착한 뒤 취소해도 기존 세션은 유지한다.
+- 일반 segment reader도 missing/skipped/count/digest 오류를 실패로 전달한다. 캐시는 file stat identity가 같을 때만 재사용하고 manifest fingerprint도 대조한다. 부분 복구는 명시적 salvage 경로로 구분한다. JSON 저장은 iterator 최종 count를 atomic replace 전에 검증한다.
+- 실시간 기록 정책: append는 timestamp, 확장은 `+ suffix`, 수정은 `[정정 entry_id] full text`. 변경 없는 관측·timing-only 갱신은 기록/알림을 반복하지 않는다. 수정에서 새로 도입된 알림 키워드만 다시 알린다.
+- updater staged 정리는 smoke/rollback 성공 경계 뒤 best-effort로 처리한다. Windows helper 생성 시 `recover-update-helper-*.cmd`도 미리 기록하며 `--recover-update`는 target이 없을 때만 backup을 복원한다. 기존 EXE를 덮어쓰지 않는다.
+- 추가 범위 감사: archive 검색의 index 0과 렌더 후 선택 영역을 보존한다. Python 검색 offset은 QTextCursor의 UTF-16 단위로 변환해 이모지 뒤 검색/DB focus도 정확하게 선택한다.
+- HWP COM 출력은 같은 디렉터리의 임시 `.hwp`에 저장하고 InsertText/SaveAs 실패·파일 크기를 확인한 뒤 교체한다. Quit 이후 교체하며 실패 시 원본을 보존한다. 한컴 실기기 호환성은 COM fake 회귀와 별개다.
+- 프리셋 추가/수정/삭제/가져오기는 새 사본을 저장하고 실패 시 메모리도 rollback한다. 사용자 프리셋 이름 충돌은 확인한다. `_save_committee_presets()`의 False는 실패이며 성공 알림/메뉴 갱신을 수행하지 않는다.
+- UI 병합은 `_merge_sessions(strict=True)`로 일부 파일/항목만 성공하는 결과를 적용하지 않는다. helper 기본값의 legacy tolerant 모드는 유지하되 resource budget 초과는 항상 실패한다. runtime manifest는 strict 복구 reader를 거친다.
+- background reflow 완료는 source entries identity와 revision을 확인하여 새 편집·세션 교체·수집을 덮어쓰지 않는다. 회귀: `tests/test_additional_audit_20261103.py`.
+- 감사 후속 회귀는 `tests/test_audit_remediation_20261103.py`와 세션/DB 통합 회귀를 CI 및 release verifier의 명시적 gate로 실행한다. 실제 Qt/오프라인 DOM 검증과 legacy fake host 테스트를 함께 유지한다.
 - **입력·Windows 계약**: 저장 중복 가드는 Windows case-insensitive canonical path key를 사용한다. 시작 URL/프리셋/히스토리는 HTTP/HTTPS와 각 기본 포트를 허용하고, 허용 player path·token·전체 길이를 검사한다. 업데이트 artifact URL은 HTTPS만 허용한다. history/preset/live payload도 크기를 제한한다.
 - **preview 복구·진단**: worker sequence gap 발생 시 최신 full DOM snapshot을 적용한다. drop/gap/salvage/reconnect 진단은 `CaptureQualityState`로 JSON/runtime/DB에 보존한다.
 - **복구 UX**: 자동 복구는 단일 최신 파일을 강제하지 않고 유효 후보를 정렬해 사용자 선택을 받는다. 취소와 로드 실패는 현재 세션을 변경하지 않는다.

@@ -1,289 +1,340 @@
 # Project Audit
 
-감사일: **2026-09-07 (Asia/Seoul)** · 대상: **v16.14.9 / main / 94a277a**
+**최종 상태:** [PROJECT_AUDIT_FINAL.md](PROJECT_AUDIT_FINAL.md)에 마지막 복구 경로 감사와 최종 검증을 기록했다. 아래 실행 수치는 각 감사 시점의 기록이다.
 
-## 후속 조치 (v16.14.10, 2026-09-07)
+감사일: **2026-11-03 (Asia/Seoul)** · 대상: **v16.14.16 / main / c607d15**
 
-아래는 이 감사 이후 구현한 수정이다. 원문 §1–9는 감사 시점의 기록으로 유지한다.
+**추가 범위 감사·수정:** [PROJECT_AUDIT_ADDITIONAL.md](PROJECT_AUDIT_ADDITIONAL.md). 검색·UTF-16 선택, HWP, 프리셋, 병합, stale 리플로우에서 확인한 ISSUE-006–012를 수정했다. 최신 전체 검증은 **701 passed / 2 skipped**, pyright **201 files / 0 errors / 0 warnings**, Windows ARM64 frozen 창 생성 smoke **exit 0**다. 아래 첫 후속 구현의 685개 결과는 그 이전 검증 기록이다.
 
-| 이슈 | 상태 | 구현 | 회귀 |
-|---|---|---|---|
-| ISSUE-001 Windows `os.kill(pid, 0)` | Fixed | `core/process_wait.py`, `scripts/apply_update.py`, dirty handshake + `_force_quit_for_update` | `tests/test_project_audit_20260907.py` |
-| ISSUE-002 manifest/tail 세대 불일치 | Fixed | 불변 `tail_checkpoint_{N}.json` 선기록, loader `entry_id` 경계 + warning | 동일 파일 |
-| ISSUE-003 다중 인스턴스 소유권 | Fixed | exclusive `run_{time}_{pid}_{token}`, `owner.json`, live-owner GC/복구 제외, TXT `"x"` | 동일 파일 |
-| ISSUE-004 cross-volume replace | Fixed | EXDEV 시 대상 디렉터리 복사 후 교체 | 동일 파일 + `tests/test_update_installer.py` |
-| 비중계 UX / 최초 retry | Fixed | `NoBroadcastError`, 최초 recoverable retry | 동일 파일 |
-| 위원회 정식명 | Fixed | `기후에너지환경노동위원회` + 구명칭 alias | 동일 파일 |
-| backup quality / JSON operation ID | Fixed | backup `capture_quality`, JSON `save_operation_id` | 동일 파일 |
+## 후속 구현 — 2026-11-03
 
-남은 한계: 두 물리 볼륨 실기기 교체, frozen helper가 살아 있는 GUI 부모를 기다리는 Windows 통합, 생중계 DOM E2E는 이번 검증에 포함하지 않았다.
+사용자의 후속 수정 요청에 따라 main 작업트리에서 아래 개선을 구현했다. **아래 §1–9는 c607d15에 대한 원 감사 기록이며, 수정 후 현재의 미해결 이슈 목록이 아니다.** 배포·푸시·버전 증가는 하지 않았다.
 
-기능 구현·런타임 안정성 중심의 일회 감사다. 기존 업데이트 중심 보고서를 현재 저장소 전체 범위의 보고서로 갱신했다. 원 감사 당시에는 **애플리케이션 코드·테스트·설정은 수정하지 않았다.** 아래 결과는 소스 추적, 격리 회귀 테스트, 임시 데이터 재현, 비중계 상태의 실제 사이트 관찰을 구분해서 기술한다.
+| 항목 | 현재 상태 | 구현 및 회귀 |
+|---|---|---|
+| ISSUE-001 | 수정·검증 | `PipelineResult.previous_text`와 `_publish_capture_commit()`으로 실제 stable/fallback commit의 TXT·알림 연결. append/확장/정정·중복 억제·쓰기 실패 검증 |
+| ISSUE-002 | 수정·검증 | missing/path/skipped/count/digest 오류를 일반 reader도 실패로 전달. stat 기반 cache 재검증, atomic replace 전 출력 count 확인. 기존 JSON/SRT·hydrate 상태 보존 검증 |
+| ISSUE-003 | 수정·검증 | raw+row identity/text/speaker/frame/selector/source mode signature. 새 stable identity는 별도 발언 baseline, 기존 row 수정/초기 handoff는 각각 ledger/global snapshot baseline. 같은 `네`의 다른 화자 보존 검증 |
+| ISSUE-004 | 수정·검증 | bounded byte reader·변환 전 entry budget·읽기/변환 진행/취소. 완료 큐 수신 전 취소와 종료 취소도 기존 세션 보존 |
+| ISSUE-005 | 수정·검증 | staged cleanup을 smoke/rollback 뒤 best-effort로 이동. 삭제 PermissionError의 성공/rollback 분기 검증 |
+| 일반 JSON progress/cancel gap | 구현 | 실제 Qt progress dialog, chunk/entry 사이 취소 확인. 표준 `json.loads` 실행 중에는 중단하지 않고 전후 확인하는 한계는 문서화 |
+| 업데이트 중단 후 복구 진입점 | 구현 | helper 옆 `recover-update-helper-*.cmd`를 교체 전에 생성. `--recover-update`로 target 부재 시에만 backup 복원. Unicode·batch 문자·CLI·기존 EXE 보존 회귀 |
+| DB 동시 operation ID | 보강 | 서로 다른 DatabaseManager의 선조회 race를 unique constraint가 결정한 뒤 loser는 rollback/재조회하여 동일 저장 ID 반환. barrier 동시 실행 회귀 |
+| 실제 사용자 경로 검증 부족 | 보강 | 실제 QApplication·Qt timer·오프라인 Chrome DOM→worker→JSON/SQLite→SRT→재로드. capture 중 archive manifest 전진/저장 snapshot 동시성 회귀 |
+| CI·문서·플랫폼 범위 | 반영 | 새 회귀를 CI/release gate에 포함. README/CLAUDE/PIPELINE_LOCK/릴리스 체크리스트 정합화. WebEngine 없는 환경은 DOM fixture만 skip, 명시적 Chrome fixture 선택 가능 |
+| 검증 저장소 격리 | 보강 | `--smoke-storage-dir`가 파일·DB뿐 아니라 QSettings도 임시 INI로 격리 |
+
+### 수정 후 검증
+
+- `.venv`에 프로젝트 핀 `PySide6==6.12.0`을 설치하여 AST 추출 없이 실제 GUI 경로로 검증했다.
+- 임시 소스 복사본에서 `KACC_TEST_BROWSER=chrome`, `QT_QPA_PLATFORM=offscreen`, `PYTHONUTF8=1`로 전체 pytest: **685 passed / 2 skipped**. 실제 Chrome 오프라인 DOM 검증도 이 결과에 포함된다.
+- 별도 `RUN_LIVE_SMOKE=1`의 실제 국회 live-list 계약: **1 passed**. 이것을 실제 생중계 자막 Selenium E2E로 간주하지 않는다.
+- pyright: **200 files / 0 errors / 0 warnings**.
+- Windows ARM64 PyInstaller EXE 빌드 성공. 임시 저장소의 frozen `--smoke --smoke-instantiate-window`: **exit 0**, resource/import/HWPX/preflight/창 생성 모두 성공.
+- frozen `--recover-update --update-no-relaunch`: **exit 0 / rolled_back**, 임시 백업 복원 확인.
+- 동일 볼륨의 임시 EXE 복사본을 실제 frozen helper로 교체: **exit 0 / applied**, 부모 종료 대기→hash/size→rename→새 EXE smoke→backup/staged 상태 확인. `LOCALAPPDATA`도 임시 디렉터리로 격리했다.
+- `git diff --check` 통과. 사용자 세션·DB 파일을 대상으로 시험하지 않았다. 임시 로그·빌드 자료는 `%LOCALAPPDATA%/Temp/kacc-remediation-zqd1fywk/`에 있다.
+
+### 남은 외부 검증
+
+실제 중계 중 reconnect/DOM 변경·장시간 운용, 서로 다른 **물리 볼륨**, 실제 공유 잠금/전원 차단 중 복구 launcher, 한컴오피스 COM 출력, Windows x64 frozen 및 macOS/Linux 실기기는 별도 확인이 필요하다. 서명된 업데이트의 공개 배포는 수행하지 않았다. source 테스트의 예외 주입·동일 볼륨 frozen 시험으로 이 검증을 대체했다고 주장하지 않는다.
+
+현재 코드 수준에서 감사의 5개 확정 결함은 수정되었고, 알려진 누락/오류 경계에 대한 회귀가 통과했다. 배포 전에는 위 실기기·실중계 항목을 릴리스 체크리스트로 확인한다. 원 감사의 High Risk 판정은 수정 전 상태에 대한 기록으로 보존한다.
+
+---
+
+기능 구현·런타임 안정성 중심의 일회 감사다. 기존 보고서를 감사 시점 코드 기준으로 갱신했다. **원 감사 당시** 애플리케이션 코드·테스트·설정은 변경하지 않았다. 아래 Confirmed는 명시한 코드 경계에서 확인했다는 뜻이며, 실제 생중계나 배포 EXE에서 모든 현상을 재현했다는 뜻은 아니다.
 
 ## 1. Executive Summary
 
-프로젝트는 실시간 캡처, 세션 편집·내보내기, DB 검색, 장애 복구까지 구현되어 있고, revision 기반 저장 완료 처리·원자적 파일 교체·DB transaction·worker 메시지 격리 등 방어 장치가 상당히 갖춰져 있다. 격리 실행한 전체 테스트는 **434 passed / 2 skipped**, 별도 pyright는 **158 files / 0 errors / 0 warnings**였다. 그러나 플랫폼 및 여러 파일에 걸친 복구 경계에 중요한 결함이 남아 있다.
+핵심 수집·편집·검색·내보내기·복구·업데이트 기능과 상당한 방어 장치가 구현되어 있다. 그러나 새 수집 파이프라인에서 기존 기능의 부수 효과가 빠졌고, 장시간 세션을 읽는 일반 경로와 복구 경로의 검증 수준이 다르다.
 
-**전체 위험도: High Risk.** 특히 Windows 업데이트 helper는 수정 전 운영 설치 경로로 신뢰하기 어렵다.
+**전체 위험도: High Risk.** 다음 5개 결함을 확인했다. Critical로 판단할 근거는 발견하지 않았다.
 
-| 우선순위 | 문제 | 심각도 / 신뢰도 |
-|---|---|---|
-| 1 | Windows에서 부모 생존 확인용 `os.kill(pid, 0)`이 부모를 강제 종료 | Critical / Confirmed |
-| 2 | runtime manifest와 tail checkpoint의 세대 불일치가 경고 없는 중복 복구로 이어짐 | High / Confirmed |
-| 3 | 복수 인스턴스의 runtime 디렉터리 충돌 및 다른 인스턴스 archive의 GC 선택 | High / Confirmed |
-| 4 | 비portable 설치 EXE와 AppData가 다른 볼륨이면 업데이트 교체 실패 | Medium / Likely |
+| 순서 | 문제 | 우선순위 | 신뢰도 |
+|---|---|---|---|
+| 1 | dict preview의 실제 commit 경로가 실시간 TXT 기록·키워드 알림을 호출하지 않음 | High | Confirmed |
+| 2 | 누락·변경된 runtime segment를 일반 저장/내보내기에서 검증하지 않아 불완전한 결과를 성공으로 저장 | High | Confirmed |
+| 3 | 텍스트가 같은 새 row·화자 변경을 worker가 preview 발행 전에 제거 | High | Confirmed |
+| 4 | 일반 세션 JSON 로드가 공통 entry 상한을 우회 | Medium | Confirmed |
+| 5 | 업데이트 교체 후 staged 파일 삭제 실패가 smoke·rollback을 건너뜀 | Medium | Confirmed |
 
-**데이터 손상·유실 가능성은 있다.** ISSUE-001은 아직 저장하지 않은 편집이나 진행 중 저장을 끊을 수 있고, ISSUE-002는 복구 데이터의 논리적 중복, ISSUE-003은 디스크에만 남은 archive의 덮어쓰기·삭제를 유발할 수 있다. 실제 사용자 데이터 손실을 관찰한 것은 아니다. SQLite 파일 자체의 물리적 손상은 확인하지 않았으며 WAL·transaction 보호도 존재한다.
+**데이터 누락·논리적 손상 가능성이 있다.** ISSUE-002는 이미 메모리에서 내려간 자막을 누락한 JSON/DB/export를 정상 결과로 취급할 수 있다. ISSUE-003은 수집 입력 자체를 놓치며, ISSUE-001은 실시간 저장 파일에 자막이 남지 않을 수 있다. 실제 사용자 데이터 유실이나 SQLite 파일의 물리적 손상을 관찰한 것은 아니다. DB transaction·FK·WAL·저장 operation ID와 파일 원자적 교체는 유효한 보호 장치다.
 
-가장 먼저 **업데이트의 정상 종료 대기**, **runtime 복구의 세대 일관성**, **프로세스 간 저장소 소유권**을 수정해야 한다. 비중계 상태에서 자막이 없는 현상 자체는 결함으로 분류하지 않았다.
+가장 먼저 실제 commit 경로의 실시간 저장·알림을 연결하고, runtime segment 읽기를 엄격하게 만들며, worker의 변경 판정을 구조화된 row 기준으로 수정해야 한다.
 
 ## 2. Project Understanding
 
-### 목적과 실행 환경
+### 목적·실행·규칙
 
-- 국회 인터넷의사중계 사이트의 AI 자막을 Selenium/Chrome으로 수집하는 PyQt6 데스크톱 앱이다. Windows를 주 대상으로 하며 README는 Python 3.10 이상, CI는 Windows/Python 3.12를 명시한다.
-- 소스 entrypoint: `국회의사중계 자막.py`의 `main()`. 일반 실행, `--smoke`, `--smoke-storage-preflight`, `--smoke-instantiate-window`, 배포 업데이트용 `--apply-update` 경로가 있다.
-- `README.md`, `CLAUDE.md`, `PIPELINE_LOCK.md`, 의존성·pytest·pyright 설정, PyInstaller spec 및 CI/release workflow를 확인했다. 저장소 루트의 물리적 `AGENTS.md`는 없었다. 사용자 제공 AGENTS 지침(CodeGraph 우선, main에서 작업)을 적용했다.
-- `PIPELINE_LOCK.md`는 글로벌 히스토리 + suffix 추출 의미론의 변경을 제한한다. 이번 감사에서는 변경하지 않았다.
+- 국회 의사중계 사이트의 AI 자막을 Selenium/Chrome으로 읽는 **PySide6 데스크톱 앱**이다. 직접 음성 인식하는 제품은 아니다.
+- 소스 실행: `python "국회의사중계 자막.py"`. Windows가 주 대상이며 HWP COM 출력은 Windows/한컴오피스 전용이다. README는 Python 3.10+를 안내한다.
+- entrypoint `main()`은 일반 GUI, `--smoke`, `--smoke-storage-preflight`, `--apply-update`를 분기한다. `--smoke-instantiate-window`는 생성자까지 확인하는 선택 경로다.
+- `README.md`, `CLAUDE.md`, `PIPELINE_LOCK.md`, 의존성·pytest·pyright 설정, PyInstaller spec, CI/release workflow를 확인했다. 루트에 물리적 `AGENTS.md`는 없으며 사용자 제공 AGENTS 지침을 적용했다. main에서 작업했고 별도 브랜치를 만들지 않았다.
+- `PIPELINE_LOCK.md`의 글로벌 히스토리/suffix 의미론 고정 규칙을 확인했다. 이번 감사는 해당 알고리즘을 변경하지 않는다.
 
-### 주요 모듈과 공유 상태
+### 핵심 모듈·공유 상태
 
-| 영역 | 주요 구현 | 상태·보호 장치 |
+| 영역 | 구현 | 핵심 상태/보호 |
 |---|---|---|
-| 초기화·종료 | `runtime_state.py`, `runtime_lifecycle.py`, `runtime_driver.py` | 저장소 preflight, dirty/revision, driver identity lock, background task registry |
-| 사이트 연결 | `capture_browser.py`, `capture_live.py`, `capture_dom.py`, `capture_observer.py` | URL/selector validation, live-list 선택, iframe 탐색, AI 활성화, 재연결 |
-| 캡처·정합 | `core/live_capture_impl/`, `core/subtitle_pipeline*.py`, `pipeline_state.py`, `pipeline_stream.py` | `capture_state.entries`, ledger, suffix history, preview sequence, subtitle lock |
-| 큐·UI | `main_window_common.py`, `pipeline_queue.py`, `pipeline_messages.py`, `view_*` | worker run ID, capture/control 큐 분리, terminal 보존, 증분 렌더링 |
-| 파일·복구 | `persistence_session.py`, `persistence_runtime_*.py`, `core/file_io.py` | snapshot clone, runtime segment/manifest/tail, fingerprint, resource budget |
-| DB | `core/database_impl/`, `database_worker.py`, `database_dialogs.py` | thread별 연결, lock, WAL, FK, operation ID unique index, transaction, FTS fallback |
-| 내보내기 | `persistence_exports.py`, `core/export_text.py`, `core/hwpx_export.py` | TXT/SRT/VTT/RTF/DOCX/HWPX/HWP, 형식별 sanitization, 원자적 저장 |
-| 업데이트 | `core/update_manifest.py`, `core/update_installer.py`, `ui/help.py`, `scripts/apply_update.py` | Ed25519, HTTPS, 만료·버전·크기·hash 검증, 승인, helper, EXE rollback |
+| 조립·시작·중지·종료 | `ui/main_window.py`, `runtime_lifecycle_*.py` | stop event, background thread registry, dirty session 보호 |
+| 브라우저 수집 | `capture_browser.py`, `capture_dom.py`, `capture_observer.py`, `capture_live.py` | driver identity/lock, selector/frame 탐색, Observer+probe, 재연결 |
+| 정합·commit | `core/live_capture_impl/`, `core/subtitle_pipeline.py`, `pipeline_state.py` | ledger row key, `capture_state.entries`, confirmed history, tail 변경 |
+| 큐·표시·검색·편집 | `pipeline_queue.py`, `pipeline_messages.py`, `pipeline_stream.py`, `view_*.py` | run ID, preview sequence, bounded queue, immutable snapshot, revision |
+| 세션·복구 | `persistence_session_*.py`, `persistence_runtime_*.py` | JSON, segment/manifest/tail checkpoint, digest, owner lease, resource budget |
+| DB | `core/database_impl/`, `database_worker.py` | thread별 SQLite 연결, RLock, transaction, FK, FTS fallback, operation ID |
+| 내보내기 | `persistence_exports_*.py`, `core/export_text.py`, `core/hwpx_export.py` | TXT/SRT/VTT/DOCX/HWPX/HWP/RTF, 원자적 파일 교체 |
+| 업데이트 | `core/update_manifest.py`, `core/update_installer.py`, `scripts/apply_update.py` | Ed25519, HTTPS, hash/size, 부모 종료 대기, rename 교체, smoke/rollback |
 
-`ui/main_window.py`는 mixin을 묶는 facade이고, `database.py`, `core/utils.py` 등은 호환 진입점을 유지한다. 타입용 선언과 테스트용 fake를 production 구현으로 판단하지 않았다.
+`self.subtitles`는 `capture_state.entries`의 alias다. UI가 큐에서 수집 결과를 적용하며, 백그라운드 저장은 clone한 active tail과 runtime manifest context를 사용한다. 장시간 수집은 2,000개 초과 시 오래된 prefix를 segment로 내리고 1,000개 tail을 유지하도록 설정되어 있다.
 
-### 저장 방식과 외부 의존성
+### 저장·외부 의존성
 
-개발 실행은 repo root, portable EXE는 EXE 디렉터리, 일반 배포 EXE는 `%LOCALAPPDATA%/AssemblySubtitle/Extractor`를 저장소로 쓴다. SQLite `subtitle_history.db`, 세션 JSON, backup JSON, runtime `manifest.json`/`segment_*.json`/`tail_checkpoint.json`, `session_recovery.json`, 실시간 TXT, URL history/preset JSON이 있다. 일반 설정은 QSettings, portable 설정은 INI다.
+- 개발 실행은 repo root, portable은 EXE 옆 `portable.flag`가 있는 디렉터리, 일반 frozen 실행은 `%LOCALAPPDATA%/AssemblySubtitle/Extractor`를 쓴다.
+- SQLite `subtitle_history.db`, 세션/백업 JSON, runtime `segment_*.json`·`manifest.json`·세대별 tail checkpoint, `session_recovery.json`, 실시간 TXT를 저장한다. 일반 설정은 QSettings, portable 설정은 INI다.
+- DB는 매 자막마다 자동 저장하는 방식이 아니라 세션 저장 시 JSON과 함께 저장하는 경로다. JSON 성공 후 DB 실패는 별도 경고로 처리한다.
+- 외부 의존성: PySide6, Selenium/Chrome/Selenium Manager, cryptography, 선택적 python-docx·pywin32/한컴오피스. 외부 서비스는 국회 player/live-list와 GitHub 업데이트 채널이다.
+- `requirements-dev.txt`가 단일 의존성 핀 파일이다. CI는 Windows/Python 3.15, release workflow는 Windows/Python 3.12를 사용한다.
 
-외부 실행 의존성은 PyQt6, Selenium/Chrome/Selenium Manager, cryptography다. DOCX는 python-docx, HWP는 pywin32와 한컴오피스가 필요하며 HWPX는 자체 구현이다. 네트워크 의존성은 국회 사이트와 목록 API, GitHub 업데이트 manifest·release asset이다. DB 저장은 수집 매 건 자동 insert가 아니라 **세션 저장 시 JSON과 함께 수행**되는 경로다.
-
-### 핵심 사용자 실행 흐름
+### 사용자 실행 흐름
 
 ```text
-main → storage preflight → QApplication/MainWindow → timers/DB/설정/복구 후보
+main → 저장소 preflight → QApplication/MainWindow → 설정·DB·복구 후보 → event loop
 
-시작/F5 → _start → URL·selector 검증 + 기존 세션 보호
- → _begin_extraction_run → runtime archive + worker
- → _open_capture_driver_session → Chrome/page → live-list xcgcd 보완
- → AI 자막 활성화 → Observer/structured DOM probe
- → run_id가 붙은 capture queue → _apply_structured_preview_payload
- → ledger/reconciliation + pipeline → capture_state.entries mutation
- → revision/통계/렌더링 + 선택적 realtime TXT + runtime segment flush
+F5/시작 → _start → URL/selector 검증 + dirty/교체 확인
+ → _begin_extraction_run → runtime archive 생성 + worker
+ → Chrome/session → live URL 보완 → AI 자막 활성화 → Observer/structured probe
+ → worker preview(dict) → run ID/sequence 큐 → _handle_message
+ → _apply_structured_preview_payload
+ → stable row: reconcile_live_capture → commit_live_row
+ → unstable/container: 안정 관측 timer/keepalive → _commit_fallback_candidate → apply_preview
+ → capture_state.entries 변경 → revision·통계·렌더·runtime segment
+ [이 실제 흐름에서 실시간 TXT·키워드 알림 연결 누락: ISSUE-001]
 
-중지 → stop_event → pending preview drain → finalize → worker finished → UI 복구
+중지 → stop_event → pending preview drain → finalize → worker 대기/driver 정리 → UI 복원
 
-세션 저장 → snapshot + revision + runtime context → background JSON atomic write
- → recovery pointer → DB worker → transaction/operation ID → control queue
- → revision 일치 시 dirty 해제, 불일치 시 후속 destructive action 취소
+세션 저장 → tail clone + revision/runtime context → background JSON atomic write
+ → recovery pointer → DB worker → save_session transaction/operation ID
+ → control queue → revision 일치 시 dirty 해제/후속 액션
 
-JSON/runtime/DB 불러오기 → byte/entry budget 또는 DB fetchmany
- → deserialize·fingerprint·취소 검사 → control queue → 사용자 확인 → 세션 교체
+일반 JSON 불러오기 → 크기 stat → json.load → SubtitleEntry.from_dict → UI 세션 교체
+runtime 복구 → manifest/budget/path/fingerprint 검증 → strict 실패 또는 salvage 경고
+DB 불러오기 → metadata + fetchmany → budget/progress/cancel → UI 적용
 
-검색/편집/병합 → 전체 세션 읽기 또는 hydrate → 결과 이동/편집/정렬·dedupe
- → dirty revision 증가 → 파일 내보내기/세션 저장
+export → tail clone + manifest context → segment/tail 순회 → 형식 변환 → atomic replace → toast
+검색 → archived segment + active tail → match index → 해당 window 렌더/선택
+편집·삭제·병합 → 필요 시 hydrate → 사용자 작업 → dirty revision
 
-업데이트 확인 → 서명 manifest 검증 → 다운로드·hash 검증 → 사용자 설치 승인
- → 복사된 helper EXE → 부모 종료 대기 → EXE 교체 → smoke/rollback → 다음 시작 결과 안내
+업데이트 → 서명/만료/버전 검증 → 다운로드 hash/size → 사용자 승인
+ → helper → 부모 종료 대기 → 같은 볼륨 staging → rename 교체 → smoke/rollback → 결과/재시작
 ```
 
 ## 3. Audit Coverage & Limitations
 
-### 확인 범위
+### 실제 확인 범위
 
-CodeGraph MCP `codegraph_explore`를 실제 사용했다. entrypoint/캡처/저장/DB/runtime/update를 먼저 질의하고, 이름이 확인된 구체 함수로 재질의했다. 대표 관계는 다음과 같다.
+CodeGraph MCP를 사용해 entrypoint 관련 경로, 수집/큐/ledger/pipeline, 저장/DB/export/hydrate, 복구 checkpoint, 시작/중지/종료, URL policy·파일 I/O·업데이트를 조사했다. 특히 다음 호출 관계와 영향 범위를 확인했다.
 
-- `_begin_extraction_run → _start_runtime_session_archive → _cleanup_orphan_runtime_archives`
-- `_extraction_worker → _open_capture_driver_session / _check_driver_health / _detect_live_broadcast`
-- `_drain_pending_previews → _process_preview_queue_message → _process_raw_text`
-- `_maybe_schedule_runtime_segment_flush → control message → _handle_runtime_segment_flush_done → manifest/tail write`
-- `_write_session_snapshot → _run_db_task_sync → DatabaseSessionMixin.save_session`
-- `_start_db_session_load → get_session_metadata / iter_session_subtitles → _complete_loaded_session`
-- `_handle_update_install_ready → launch_update_helper → scripts.apply_update.main → _wait_for_parent / apply_staged_update`
+- `_start → _begin_extraction_run → _extraction_worker` 및 브라우저 초기화/재연결.
+- `preview → _handle_message/_process_preview_queue_message → _apply_structured_preview_payload → reconcile_live_capture/commit_live_row`.
+- `_commit_fallback_candidate → apply_preview → _apply_capture_pipeline_refresh`.
+- `_write_session_snapshot → _iter_full_session_entries → _load_runtime_segment_entries`; 동일 reader의 export·검색·hydrate 사용.
+- `_run_after_full_session_hydrated`의 편집·복사·병합 caller, segment flush와 tail/manifest 저장, recovery strict/salvage의 별도 검증.
+- `save_session`의 operation ID 조회·unique index·transaction/rollback, `delete_session`의 lineage latest 복원.
+- `apply_update.main → apply_staged_update → copy/hash/rename/smoke/rollback`.
 
-CodeGraph가 동적 `getattr` 후보로 production 메서드와 테스트 fake를 함께 제시한 부분은 실제 import·caller로 구별했다. 일부 초기 응답에 pending-sync 경고, source gap/출력 절단이 있었고 한글 entrypoint도 충분히 반환되지 않아 해당 범위는 직접 소스 열람으로 보완했다. 그래프의 caller 개수를 완전한 도달성 증명으로 사용하지 않았다.
+CodeGraph가 한국어 entrypoint 파일을 찾지 못한 경우 직접 읽었다. 응답에서 생략된 긴 함수의 후반부, 비색인 설정·문서, 특정 보호 장치의 전체 호출 여부만 직접 열람/rg로 보완했다. AST/타입용 Protocol·호환 shim·테스트 fake를 운영 구현으로 오인하지 않았다. 그래프에 관련 없는 `main` 후보 등이 섞이는 한계가 있어 보고서에는 소스로 확인한 관계만 기록했다.
 
-### 실제 실행한 검증
+### 실행한 검증
 
-| 검증 | 결과와 조건 |
+Git 추적 파일을 별도 임시 디렉터리로 복사하여 **현재 repo의 `.venv/Scripts/python.exe`(Python 3.15.1 ARM64)**로 실행했다. 의존성 설치는 하지 않았다.
+
+| 실행 | 실제 결과 |
 |---|---|
-| 전체 pytest | **434 passed, 2 skipped, 18.34s**. Python wrapper에서 Config의 저장 경로를 새 임시 디렉터리로 바꾸고 `pytest.main(['-q', '--tb=short', '--basetemp=<temp>/pytest'])` 실행. `QT_QPA_PLATFORM=offscreen` 사용 |
-| Skip 사유 | live contract는 `RUN_LIVE_SMOKE` 미설정으로 skip. subprocess를 사용할 수 있어 in-process 전용 fallback 분기 검증이 skip. live 테스트가 통과했다고 해석하지 않음 |
-| 정적 검사 | `python -m pyright --outputjson`: **158 files / 0 errors / 0 warnings**, pyright 1.1.411 |
-| runtime 복구 재현 | 실제 manifest/tail writer와 loader를 임시 A/B 데이터에 적용: `ids=['A','A','B'], warnings=[], skipped=0` |
-| 복수 인스턴스 경계 | 시간을 고정하고 두 독립 MainWindow 상태의 archive 시작 메서드를 호출: 동일 root, 서로 다른 token. GC는 `shutil.rmtree`를 recorder로 대체해 10초 미만 archive가 삭제 대상으로 선택됨을 확인; 실제 삭제는 실행하지 않음 |
-| updater 대기 호출 | `os.kill`을 recorder로 대체: `_wait_for_parent(987654)`가 `(987654, 0)` 호출. 실제 OS signal·프로세스 강제 종료는 실행하지 않음 |
-| Qt 반증 실험 | 작은 offscreen QMainWindow에서 `QApplication.quit()`이 `closeEvent`를 호출하고 `ignore()`를 존중함을 확인. 강제 fallback은 그 실험의 event loop에만 `app.exit()` 호출 |
-| 사이트 drift CLI | `python scripts/check_live_list_drift.py`: `ok=false`, 연결 오류 **WinError 10053**. 원본 API 계약 검증 미완료 |
+| `python -m pytest -q --tb=short` | PySide6 미설치로 collection 중단: 20 errors / 14 skipped. 테스트 본문 전체 실행 못함 |
+| `python -m pytest -q --tb=line --continue-on-collection-errors` | **287 passed / 6 failed / 24 skipped / 20 errors**, 13.69초 |
+| `python -m pyright --outputjson` | **199 files / 0 errors / 0 warnings** |
+| 임시 `audit-repro.py` | 아래 6개 assertion 시나리오 통과 |
 
-로컬 환경은 Python **3.14.7**, PyQt6 **6.11.0**, Selenium **4.48.0**, pytest **9.1.1**, cryptography **50.0.1**, python-docx **1.2.0**이었다. requirements-dev.txt 핀(Python CI 3.12, PyQt6 6.10.2, Selenium 4.40.0 등)과 다르다. 설치 없이 기존 환경으로 검사했으므로 **핀 환경 재현·배포 EXE 검증을 대체하지 않는다.**
+pytest의 6 failures와 20 collection errors는 출력상 모두 PySide6 import 실패 또는 그에 따른 smoke 실패였다. 이를 제품 결함 26개로 계산하지 않았다. skipped에는 의존성 부족에 따른 모듈 skip 등이 포함되며, 실중계 검증을 통과했다는 의미가 아니다. 정적 분석은 저장소 stub을 사용하므로 **pyright 성공이 실제 Qt import/GUI 실행을 보장하지 않는다.**
 
-테스트 저장소: `%TEMP%/kacc-audit-20260907-zwaeqlqf`. 추가 재현 데이터: `%TEMP%/kacc-audit-probes-nxicxyoj`. 감사 작업은 기존 사용자 세션/DB를 입력으로 사용하거나 수정하지 않았다.
+재현은 다음 결과를 확인했다.
 
-### 현재 사이트 확인 — 비중계 상태 중점
+```text
+MISSING_SEGMENT: reported_count=2, actual_count=1, texts=['tail']
+CHANGED_SEGMENT: ['changed', 'tail']  # 잘못된 digest를 가진 segment도 일반 reader에서 사용
+JSON_BUDGET_BYPASS: limit=1, loaded=2, session_load_done
+UPDATE_CLEANUP_FAILURE: target='new', backup='old', smoke_calls=0
+IDENTICAL_TEXT_NEW_ROW: probe_count=2, preview_count=1, emitted_keys=['row1']
+STRUCTURED_SIDE_EFFECTS: committed_entries=1, realtime_write_calls=0, alert_calls=0
+```
 
-2026-09-07 인앱 브라우저로 [국회 사이트 메인](https://assembly.webcast.go.kr/main/)을 직접 열었다.
+Qt를 import할 수 없어 GUI 관련 재현은 **원본 메서드 AST를 수정 없이 추출·실행**했다. 저장 reader/JSON writer와 모델, structured ledger·commit은 실제 코어 구현을 사용했다. GUI 표시·timer·브라우저 입력 등은 최소 host stub으로 대체했다. worker 재현은 결정적 clock·두 probe·종료 event를 사용했고, 업데이트는 실제 함수에 staged `unlink`만 PermissionError로 주입했다. AST 추출 검증은 전체 MainWindow 통합 테스트가 아니므로 이 한계를 각 결과 해석에 적용해야 한다.
 
-- 본회의는 **10:37 산회**. 메인 위원회 목록에 현재 생중계 플레이어 링크가 없고 다른 위원회는 영상회의록 링크를 제공했다.
-- README 예제인 [xcode=10 플레이어](https://assembly.webcast.go.kr/main/player.asp?xcode=10)는 **“잘못된 요청입니다.”** alert를 띄웠고, 닫으면 메인으로 이동했다. 비중계 시 서버 동작으로 확인했으며, 생중계 시간에도 동일하게 실패한다고 일반화하지 않았다.
-- 사이트 위원회 선택 목록의 정식 이름은 **기후에너지환경노동위원회**였지만 Config에는 **기후환경노동위원회**가 남아 있다. 화면의 약칭 `기후노동위`는 현재 코드에도 있다. 명칭 갱신은 필요하지만 이 사실만으로 xcode=62가 잘못되었다고 판단하지 않았다.
-- [live_list.asp](https://assembly.webcast.go.kr/main/service/live_list.asp) 직접 열기는 브라우저 `ERR_BLOCKED_BY_CLIENT`, Python 경로는 10053, web 조회도 접근 실패했다. 환경 차단인지 API 조건인지 분리하지 못했으므로 API 폐기·사이트 장애로 보고하지 않는다.
-- 현재 실제 플레이어 DOM/AI 버튼/자막 스트림을 확보하지 못했다. `.btn_subtit_ai`, `.btn_subtit_def`, `.smi_word`, iframe 및 다중 화자 구조의 **현재 live 적합성은 미확인**이다. 비중계 페이지에서 selector가 없다는 이유로 selector 교체를 권하지 않는다.
+임시 검증 자료: `%LOCALAPPDATA%/Temp/kacc-functional-audit-6uof99bk/`의 `audit-repro.py`, `audit-pytest.log`, `audit-pyright.json`. 저장소에 테스트 파일을 추가하지 않았다.
 
-### 미검증 범위
+### 미확인 환경·한계
 
-실제 중계 중 수집→저장 E2E, 장시간 Chrome 구동, 실제 네트워크 단절·재개, pinned Python 3.12 환경, frozen EXE helper 설치, 두 물리 볼륨 간 업데이트, Linux/macOS 실행, 실제 한컴 COM 및 문서 앱 렌더링, 수 시간 부하·전원 차단, GitHub release 운영 권한·secret은 검증하지 않았다. 로컬 회귀는 stub/fake 경로도 포함하며 GUI 사용자 조작 전체를 보증하지 않는다.
+- PySide6를 갖춘 전체 pytest/실제 GUI 생성·조작, 실제 Chrome/생중계 DOM·iframe·네트워크 장애 E2E는 실행하지 못했다.
+- 한컴오피스 COM, frozen EXE 재빌드/실행, 실행 중 Windows EXE 잠금, 실제 두 물리 볼륨 업데이트, macOS/Linux 실기기는 확인하지 못했다.
+- 사용자 DB·기존 session/backup 내용, 실제 credential은 읽지 않았다. 대규모 OOM·전원 차단·실제 프로세스 강제 종료 실험은 하지 않았다.
+- 기존 보고서의 Fixed 표기는 현행 버그의 근거로 재사용하지 않았다. 이번 평가는 현재 소스와 이번 실행 결과에 한정한다. 전수 함수 감사나 모든 race의 부재를 보증하지 않는다.
 
 ## 4. High-Risk Issues
 
-확정 및 근거가 강한 조건부 결함만 수록했다. 섹션 이름과 별개로 각 이슈의 실제 심각도를 표기한다.
+확정된 High 3개와 안정성에 직접 영향을 주는 Medium 2개를 기록한다. Speculative 항목은 이 절에 넣지 않았다.
 
-### [ISSUE-001] Windows 업데이트 helper가 부모 종료를 기다리는 대신 강제 종료한다
+### [ISSUE-001] 실제 dict preview commit에서 실시간 저장·키워드 알림이 실행되지 않음
 
-- **위치:** `scripts/apply_update.py:12-22` `_wait_for_parent`; `ui/main_window_impl/ui/help.py:267-329` `_handle_update_install_ready`; `core/update_installer.py:219-253` `launch_update_helper`.
-- **우선순위:** Critical
-- **신뢰도:** Confirmed — production 호출과 플랫폼 API 계약 확인. 실제 강제 종료 실험은 하지 않았다.
-- **문제:** `os.kill(parent_pid, 0)`을 POSIX의 생존 확인처럼 사용한다. Windows에서는 CTRL_C/CTRL_BREAK 이외의 signal 값이 `TerminateProcess`로 처리되므로 0도 종료 요청이다. [Python 공식 os.kill 문서](https://docs.python.org/3/library/os.html#os.kill)
-- **발생 조건:** Windows 배포 EXE에서 업데이트 설치를 승인하고 helper가 시작될 때 부모가 아직 종료되지 않은 경우. 다운로드 중 편집, 닫기 시 저장·취소 확인, 트레이 최소화, background 작업 대기 때문에 부모가 살아 있는 상황은 현실적이다.
-- **영향:** 정상 close/drain/dirty 보호가 끝나기 전에 프로세스가 종료될 수 있다. 저장되지 않은 편집과 미flush 자막 유실, 진행 중 저장 중단 가능성이 있다. 이미 commit된 SQLite 데이터의 파괴까지 확인한 것은 아니다.
-- **근거:** UI는 helper에 `parent_pid=os.getpid()`를 전달한 **후** `QApplication.quit()`을 호출한다. helper의 `main()`은 `_wait_for_parent()`를 먼저 실행한다. recorder 실험 결과는 `[(987654, 0)]`이었다. 기존 helper 테스트는 비양수 PID와 실패 결과 저장만 확인해 Windows의 살아 있는 부모 경로를 다루지 않는다.
-- **반증 확인:** 다운로드 전 dirty 확인, 설치 직전 `is_running` 가드, Qt `closeEvent`, 저장 revision 검사가 있다. Qt quit은 실제로 closeEvent를 호출하는 것으로 반증했으므로 “Qt가 종료 이벤트를 우회한다”는 주장은 제외했다. 문제는 별도 helper가 그 정상 종료를 기다리지 않고 끊는 데 있다. Ed25519·hash·EXE rollback은 부모 메모리의 미저장 내용을 복원하지 않는다.
-- **호출/영향 범위:** CodeGraph의 `help._handle_update_install_ready → launch_update_helper → scripts.apply_update.main → _wait_for_parent` 경로. frozen `--apply-update` 진입에 연결되어 있고 dead code가 아니다.
-- **권장 수정 방향:** Windows에서는 종료 권한이 아닌 synchronize 권한의 process handle과 `WaitForSingleObject` 등으로 기다린다. 접근 거부를 “이미 종료”로 취급하지 않는다. 앱이 저장·종료를 확정한 뒤 helper와 handshake하고 timeout이면 교체를 중단한다.
-- **필요한 회귀 테스트:** mock Windows adapter가 생존 확인 중 terminate/signal을 호출하지 않을 것; 부모가 저장 완료를 기다리는 동안 helper도 기다릴 것; 종료 취소·tray·timeout이면 설치하지 않을 것. 별도 Windows 통합 환경에서는 테스트 전용 부모의 정상 종료 marker가 쓰인 후에만 교체가 시작되어야 한다.
-
-### [ISSUE-002] manifest와 tail checkpoint의 불일치가 경고 없이 자막을 중복 복구한다
-
-- **위치:** `ui/main_window_impl/persistence_runtime_segments.py:124-203` `_handle_runtime_segment_flush_done`; `persistence_runtime_archive.py:235-277,546-574`; `persistence_runtime_manifest.py:22-258` `_load_runtime_manifest_payload`.
+- **위치:** `ui/main_window_impl/pipeline_messages.py:260`, `pipeline_state.py:167`, `pipeline_state.py:231`, `pipeline_state.py:449`; 비교 경로 `pipeline_stream.py:143`·`:153`.
 - **우선순위:** High
-- **신뢰도:** Confirmed — 실제 writer/loader를 사용한 임시 데이터 재현.
-- **문제:** segment 확정 후 **manifest를 먼저**, tail checkpoint를 다음에 쓴다. 두 원자적 파일 저장 사이에 프로세스가 중단되거나 tail 쓰기가 실패하면 새 manifest와 이전 tail이 남는다. loader는 각 파일 fingerprint만 검사하고 두 파일의 `archived_count`·세대 관계를 맞추지 않은 채 이어 붙인다.
-- **발생 조건:** 이전 checkpoint에 `[A,B]`, 새 segment에 `[A]`가 있고 새 manifest는 archived_count=1인데 tail 교체 전에 중단되는 경우. 2,000개 초과 시 발생하는 실제 segment flush에서 같은 구조가 만들어진다.
-- **영향:** `[A,B]`가 `[A,A,B]`로 복구된다. 검색·개수·TXT/SRT/VTT/JSON 및 후속 DB 저장까지 중복이 전파될 수 있다. 복구 성공 안내만 보이므로 사용자가 무결성을 오인할 수 있다.
-- **근거:** production writer로 `tail archived_count=0, entries=[A,B]`와 `manifest archived_count=1, segment=[A]`를 만들고 `allow_salvage=True`로 읽었다. 출력: `ids=['A','A','B'], warnings=[], skipped=0`. 서로 다른 텍스트 A/B와 고정 entry ID를 사용했다.
-- **반증 확인:** temp+fsync+replace는 **각 파일**의 파손을 막는다. fingerprint는 각 파일 내용과 일치하므로 모두 통과한다. run ID/token은 같은 실행의 서로 다른 checkpoint를 구분하지 못한다. loader의 `all_entries.extend(...)` 두 지점 사이에 세대 검증·중복 경계 조정이 없고 `_complete_loaded_session`도 해당 리스트를 그대로 적용한다. salvage는 정상 파싱되는 두 파일의 세대 불일치를 교정하지 않는다.
-- **호출/영향 범위:** CodeGraph의 segment worker → control message → flush completion → manifest/tail 저장 및 recovery/session load → `_complete_loaded_session`. archive 전체 검색·내보내기·DB 저장 경로에 연결된다.
-- **권장 수정 방향:** 세대별 불변 tail 파일을 쓰고 manifest가 그 정확한 checkpoint를 참조하도록 한 뒤 manifest를 commit 지점으로 사용한다. loader는 count/index/token/generation의 조합을 검증하고 혼합 세대는 조용히 성공시키지 않는다. 단순 텍스트 dedupe는 실제 반복 발언을 지우므로 해결책으로 쓰지 않는다.
-- **필요한 회귀 테스트:** segment·manifest·tail 교체의 각 경계에서 예외 주입. 새 manifest+옛 tail 입력은 정확한 `[A,B]`로 복구하거나 명시적 불일치 경고/안전한 거부가 나와야 하며, 정상 동일 텍스트의 서로 다른 발언은 보존해야 한다.
+- **신뢰도:** Confirmed
+- **문제:** worker는 dict preview를 발행한다. 해당 handler는 structured/fallback core에 직접 commit한 뒤 통계·렌더·dirty·복구만 반영한다. 실시간 파일 기록과 키워드 검사는 기존 `_append_text_to_subtitles_shared()`에만 연결되어 있어 이 경로에서 호출되지 않는다.
+- **발생 조건:** 실시간 저장 또는 알림 키워드를 활성화한 상태에서 현재 worker의 dict preview를 수신한다. stable row와 안정 관측 fallback 모두 같은 refresh 경로를 쓴다.
+- **영향:** 화면/세션에는 자막이 존재하지만 실시간 TXT에는 기록되지 않고 감지 알림도 오지 않을 수 있다. 장시간 무인 수집·키워드 모니터링의 명시된 기능이 실패한다. JSON/DB 수동 저장 전체가 실패한다는 뜻은 아니다.
+- **근거:** 실제 ledger/`commit_live_row`와 원본 UI commit/refresh 메서드로 stable row 1개가 entries에 추가됨을 확인했지만 realtime writer·alert spy 호출은 모두 0이었다. 전체 호출 검색에서도 두 기능 호출은 기존 stream helper에만 있었다. fallback `_commit_fallback_candidate()`도 해당 helper를 호출하지 않는다.
+- **반증 확인:** 상위 `_handle_message()`는 dict preview 처리 직후 return한다. preview drain도 직접 structured handler를 호출한다. timer/keepalive는 fallback commit 또는 timing을 갱신할 뿐 파일 기록·알림을 보완하지 않는다. 코어 모듈은 GUI 파일/알림을 소유하지 않으므로 framework가 자동 수행하지 않는다. 레거시 string/segments 경로에 기능이 남아 있다는 점은 확인했으나 현재 dict 운영 경로를 보호하지 못한다.
+- **호출/영향 범위:** `_extraction_worker → preview → _handle_message → _apply_structured_preview_payload → commit_live_row` 또는 `_commit_fallback_candidate → apply_preview → _apply_capture_pipeline_refresh`. 실시간 TXT와 alert 기능에 영향. CodeGraph가 확인한 `_write_realtime_line`·`_check_keyword_alert` caller는 stream helper 계열이다.
+- **권장 수정 방향:** 실제 commit delta 처리에 실시간 출력·키워드 검사를 연결한다. append와 기존 row 보정을 구분하여 중복 알림/전체 문장 반복 기록 정책을 명시한다. 파일 I/O는 subtitle lock 밖에 둔다.
+- **필요한 회귀 테스트:** realtime ON/키워드 `예산` 상태에서 stable dict row와 unstable fallback을 각각 commit하면 TXT에 내용이 있고 알림이 1회 발생해야 한다. 동일 snapshot·keepalive 재수신으로 같은 문장 전체가 중복 기록되지 않아야 한다. write PermissionError는 run 저장 중단 경고로 표시되어야 한다.
 
-### [ISSUE-003] 여러 앱 인스턴스의 runtime 저장소 소유권이 분리되지 않는다
+### [ISSUE-002] 일반 runtime reader가 누락·손상 segment를 성공 결과로 흘려보냄
 
-- **위치:** `ui/main_window_impl/persistence_runtime_archive.py:384-496`; `runtime_state.py:318-339`; `runtime_driver.py:224-246` 실시간 파일 생성; `국회의사중계 자막.py` 일반 시작 경로.
+- **위치:** `ui/main_window_impl/persistence_runtime_segments.py:327`, `:384`, `:463`; `persistence_runtime_readers.py:31`; `persistence_session_save.py:118`.
 - **우선순위:** High
-- **신뢰도:** Confirmed — 경로 충돌과 GC 선택을 재현. 실제 타 인스턴스 파일 삭제는 수행하지 않았다.
-- **문제:** runtime root가 `run_<초 단위 시각>_<프로세스 내부 run_id>`이고 `mkdir(exist_ok=True)`를 쓴다. UUID token은 생성되지만 경로에는 포함되지 않는다. GC도 다른 프로세스가 사용하는 archive인지 확인하지 않고 현재 객체 root·단일 recovery pointer·최근 3개/연령만 본다.
-- **발생 조건:** 같은 storage root의 두 프로세스가 같은 초에 첫 추출을 시작하면 같은 root를 선택한다. 시작 시각이 달라도 A가 긴 세션을 캡처하는 동안 B에서 여러 세션을 시작하면 A의 archive가 최근 3개 밖으로 밀릴 수 있다. 단일 인스턴스 강제 장치는 entrypoint와 관련 코드에서 찾지 못했다.
-- **영향:** 같은 이름의 manifest/segment/tail 덮어쓰기 또는 다른 프로세스의 디스크 archive 삭제. active tail에서 이미 제거된 오래된 자막은 별도 세션 저장이 없다면 잃을 수 있다. 실시간 TXT도 초 단위 이름에 `open(...,'w')`여서 동시 시작에 같은 충돌 유형이 있다.
-- **근거:** 2026-09-07 12:00:00으로 고정해 두 독립 상태에서 `_start_runtime_session_archive(1)`을 호출하면 `same_root=True, tokens_differ=True`. 별도 GC 재현은 생성 후 10초 이내 네 디렉터리 중 최근 3개 밖의 `run-0`을 삭제 대상으로 선택했다. 삭제 함수는 recorder로 교체했다.
-- **반증 확인:** `_runtime_archive_token`은 자기 프로세스로 돌아오는 메시지의 stale 여부를 검사한다. OS 파일 소유권을 예약하지는 않는다. subtitle lock과 background registry도 프로세스 내부 장치다. SQLite lock은 JSON/디렉터리 GC를 보호하지 않는다. “7일” 설정도 최근 N개 밖의 archive에는 유예로 동작하지 않는다. 정상 종료된 오래된 archive의 의도적 보존 정책 자체를 버그라고 한 것은 아니다.
-- **호출/영향 범위:** CodeGraph의 `MainWindow.__init__ → _cleanup_orphan_runtime_archives`, `_begin_extraction_run → _start_runtime_session_archive`, 이후 runtime readers/export/search. 동시에 여러 위원회를 수집하는 사용 방식에 영향이 있다.
-- **권장 수정 방향:** 다중 실행을 지원할지 결정한다. 지원한다면 UUID 기반 독점 디렉터리 생성, active owner/lease 또는 process lock, 인스턴스별 recovery 상태, 사용 중 archive를 제외하는 GC를 함께 구현한다. 실시간 파일은 고유명+exclusive create를 쓴다. 지원하지 않으면 storage root별 단일 인스턴스를 명시적으로 강제한다.
-- **필요한 회귀 테스트:** 같은 시각·같은 run ID의 두 프로세스가 서로 다른 파일을 쓸 것; A 수집/검색/export 중 B가 4회 이상 세션을 바꿔도 A archive를 GC 대상으로 선택하지 않을 것; 죽은 owner만 정책에 따라 회수할 것.
+- **신뢰도:** Confirmed
+- **문제:** `_load_runtime_segment_entries()`는 파일이 없으면 빈 리스트를 반환한다. 일반 segment reader는 JSON을 역직렬화할 뿐 manifest/file의 count·entry ID·digest를 대조하지 않는다. 손상 항목 skipped 수도 호출자에 전달하지 않는다. 저장 count는 실제 출력 수가 아닌 manifest count+tail로 계산한다.
+- **발생 조건:** archive 이후 디스크 segment가 삭제·이동되거나, 읽을 수 있는 JSON 형태로 내용이 변경/일부 손상된다. 외부 정리·파일 조작·저장장치 문제 등이 조건이며 정상 무결 파일에서 항상 발생하는 결함은 아니다. 메모리 segment cache에 남아 있지 않은 경우가 특히 해당한다.
+- **영향:** 과거 자막을 빠뜨리거나 변경된 자막을 JSON/DB/export로 전달하고 성공 처리할 수 있다. hydrate도 불완전한 리스트를 현재 세션으로 교체할 수 있다. 이후 저장본만 믿고 종료하면 누락분의 복구 가능성이 줄어든다.
+- **근거:** manifest 1개+tail 1개, segment 파일 없음 조건에서 실제 atomic JSON writer가 tail 1개만 저장했지만 반환값 `saved_count=2`였다. 다음에는 잘못된 digest와 변경된 텍스트를 가진 유효 segment JSON을 reader가 그대로 반환했다.
+- **반증 확인:** `_load_runtime_manifest_payload()`의 strict/salvage는 경로·fingerprint를 검사한다. 그러나 이미 실행 중인 세션의 저장/export/hydrate는 그 loader를 거치지 않는다. 원자적 writer는 예외가 발생해야 기존 파일을 보존하는데 빈 리스트 반환은 예외가 아니다. DB transaction도 입력 generator가 불완전하다는 것을 판별하지 못한다. path traversal 방어는 있으나 파일 완전성 검사를 대체하지 않는다.
+- **호출/영향 범위:** CodeGraph: `_write_session_snapshot → _iter_full_session_entries → _load_runtime_segment_entries`. 같은 reader를 text/timed export·전체 snapshot·검색 window·hydrate가 사용한다. JSON·DB·문서 출력과 장시간 세션 편집에 영향.
+- **권장 수정 방향:** 일반 읽기는 missing/불일치/skipped 발생 시 명시적으로 실패하게 한다. fingerprint 검증과 cache 정책을 통일하고, 부분 복구는 사용자가 선택한 salvage 경로로만 허용한다. 실제 직렬화 count를 검증한 뒤 저장 성공/dirty 해제를 판단한다.
+- **필요한 회귀 테스트:** 정상 segment를 만든 뒤 삭제, text 변조, entry 일부 손상, 잘못된 count/digest를 각각 주입한다. 일반 저장/export/hydrate는 실패하고 기존 출력·현재 세션을 보존해야 한다. salvage만 경고와 누락 통계를 반환해야 한다. 캐시 hit/miss/eviction도 각각 검증한다.
 
-### [ISSUE-004] 다른 볼륨에 설치된 일반 EXE의 자동 업데이트가 실패한다
+### [ISSUE-003] compact 텍스트만 비교하여 새 row·화자 메타데이터 변경을 누락
 
-- **위치:** `core/update_installer.py:61-69` `resolve_update_staging_root`, `166-216` `apply_staged_update`; `ui/main_window_impl/ui/help.py` 다운로드 경로.
+- **위치:** `ui/main_window_impl/capture_browser.py:637` `_extraction_worker()`의 preview/keepalive 분기; `pipeline_state.py:419`.
+- **우선순위:** High
+- **신뢰도:** Confirmed
+- **문제:** probe의 `text_compact`가 바뀔 때만 structured preview를 발행한다. row key·화자 channel/color·frame/selector 변경은 발행 조건에 없다. 같은 글자의 새 row는 텍스트-only keepalive로 대체되거나 아무 메시지도 발행하지 않는다.
+- **발생 조건:** 중간 empty/reset을 관측하지 않은 상태에서 서로 다른 stable row 또는 화자가 같은 텍스트를 말한다. 예: `row1/primary: 네` 다음 `row2/secondary: 네`. DOM이 한 번에 교체되거나 polling 사이에 전환하면 현실적으로 도달 가능하다. 화면 누적 문구 자체가 변하는 일반 추가는 해당하지 않는다.
+- **영향:** 새 발언 또는 화자 변경이 ledger/pipeline에 전달되지 않는다. 다음 텍스트 변화 때 row가 사라져 있으면 영구 누락되고, 이후 나타나더라도 타이밍/화자 정보가 지연된다. 공백 보정만 있는 row 수정도 compact 비교 때문에 전달되지 않는다.
+- **근거:** 원본 worker를 두 개의 위 probe로 실행해 정상 `finished.success=True`를 확인했다. probe 2회에 preview는 row1 1회만 발행됐다. 하위 `reconcile_live_capture()`는 새 key와 speaker 변경을 변경사항으로 처리할 수 있지만 입력을 받지 못한다.
+- **반증 확인:** Observer text change는 그 자체를 structured preview로 보내지 않고 probe를 수행하게 한다. trusted reset을 관측하면 이전 compact가 비워져 보호되지만, 모든 row 교체가 clear/reset을 발생시킨다는 보장은 없다. keepalive에는 row identity가 없고 기존 entry timing/fallback 관측만 처리한다. run ID/sequence gap 복구는 애초 발행되지 않은 preview를 검출하지 못한다.
+- **호출/영향 범위:** `_read_subtitle_probe_by_selectors → worker gate → _build_preview_payload_from_probe → queue → _apply_structured_preview_payload → reconcile_live_capture`. 수집 원본·speaker/timing 및 그 후 모든 저장 결과에 영향.
+- **권장 수정 방향:** stable row의 key 순서·text·speaker 정보·frame/selector/source mode를 포함한 변경 signature를 사용한다. 완전히 같은 관측만 keepalive로 처리하고 텍스트 fallback 중복 제거 정책은 별도로 유지한다.
+- **필요한 회귀 테스트:** raw 동일/row key 변경, key 동일/speaker 변경, frame 변경, 공백 보정은 preview를 발행해야 한다. 모든 구조·텍스트가 같은 반복 probe는 중복 commit 없이 keepalive만 발생해야 한다. Observer ON/OFF를 모두 검증한다.
+
+### [ISSUE-004] 일반 JSON 로드가 공통 entry budget을 적용하지 않음
+
+- **위치:** `ui/main_window_impl/persistence_session_load.py:35`, `:70`, `:108`, `:169`; `core/config_impl/app_config.py:103`.
 - **우선순위:** Medium
-- **신뢰도:** Likely — 코드와 OS 계약이 명확하지만 두 실제 볼륨에서 재현하지 않았다.
-- **문제:** 비portable staging은 AppData 아래인데 적용은 `os.replace(staged_path, target_path)`로 바로 수행한다. 대상 EXE와 staging이 다른 볼륨일 때의 복사·재검증 경로가 없다.
-- **발생 조건:** `D:/Apps/app.exe`로 설치/실행하고 `portable.flag`가 없으며 AppData는 C:에 있는 경우 등.
-- **영향:** 다운로드와 검증·승인까지 끝나도 교체에서 실패한다. 일반적으로 원 EXE/backup은 보존되어 수동 설치가 가능하므로 Critical/High로 올리지 않았다.
-- **근거:** staging resolver는 nonportable에서 install_dir를 사용하지 않고, `_validate_apply_paths`는 backup.parent만 target.parent와 비교한다. [Python 공식 os.replace 문서](https://docs.python.org/3/library/os.html#os.replace)는 파일시스템 간 이동 실패 가능성을 명시한다.
-- **반증 확인:** portable 분기는 같은 설치 디렉터리 아래 staging이라 해당 조건을 피한다. hash/size 검증과 rollback은 실패 후 보호일 뿐 cross-volume 교체를 구현하지 않는다. 기존 성공 테스트는 같은 tmp_path 안의 파일을 쓴다.
-- **호출/영향 범위:** CodeGraph의 download worker → staging resolver → helper → apply_staged_update. ISSUE-001의 종료 대기를 먼저 고친 후 검증해야 한다.
-- **권장 수정 방향:** target과 같은 볼륨의 고유 임시 파일로 복사하고 fsync·hash를 다시 검증한 다음 같은 디렉터리에서 원자적으로 교체한다. 준비 실패는 부모 종료 이전에 안내한다.
-- **필요한 회귀 테스트:** source/destination volume이 다른 조건과 EXDEV/Windows not-same-device 예외를 테스트한다. 복사 중 공간 부족이면 기존 EXE가 그대로 남아야 하고, 성공 시 새 EXE hash와 smoke 성공을 확인해야 한다.
+- **신뢰도:** Confirmed
+- **문제:** 일반 JSON 경로는 시작 전 100 MiB file stat만 검사하고 `json.load()` 후 전체 항목을 `SubtitleEntry`로 변환한다. `SESSION_RESOURCE_MAX_ENTRIES=150,000`이나 ResourceBudget을 적용하지 않는다.
+- **발생 조건:** byte 상한 이내이면서 entry 상한을 초과하는 세션 파일을 사용자가 불러온다. 작은 자막 항목 다수를 가진 파일이면 가능하다.
+- **영향:** runtime/DB에서 거절하는 크기의 세션이 일반 JSON에서는 로드된다. 대량 object 생성·전체 UI 적용으로 메모리 사용과 응답 지연이 커질 수 있다. 실제 OOM은 재현하지 않았으므로 강제 종료·데이터 유실을 확정하지 않는다.
+- **근거:** 공통 상한을 1로 낮춘 격리 시험에서 유효 자막 2개의 작은 JSON을 원본 `_start_session_load_from_path()`로 처리했고 `session_load_done`에 2개가 전달됐다. 기본 150,000을 실제 초과하는 부하 실험 대신 동일 분기의 저비용 검증을 사용했다.
+- **반증 확인:** runtime manifest loader와 DB/hydrate에 ResourceBudget이 존재하지만 일반 JSON 분기에서는 호출하지 않는다. `_deserialize_subtitles()`는 항목 유효성 검사와 skip만 수행하며 개수/취소 검사는 없다. 외부 try/except는 명시적 budget 거절을 대신하지 못한다. 파일 byte 제한은 있으므로 무제한 파일 읽기라고 표현하지 않는다.
+- **호출/영향 범위:** `_load_session → _start_session_load_from_path → json.load → _deserialize_subtitles → session_load_done → _complete_loaded_session`. 일반 JSON·일반 backup 복구와 대량 UI 상태 교체에 영향.
+- **권장 수정 방향:** 일반 JSON도 공통 byte/entry budget을 적용하고 entry 생성 전에 개수를 검사한다. 장기 작업에는 진행/취소를 제공하고 실패 시 기존 세션을 보존한다. stat 이후 실제 읽기 크기도 제한하는 bounded reader 사용을 검토한다.
+- **필요한 회귀 테스트:** 상한 2에서 2개 성공/3개 실패, byte 상한 이내의 많은 작은 entry 거절, 취소 시 현재 세션 보존. runtime/DB/일반 JSON의 동일 상한 결과를 비교한다.
+
+### [ISSUE-005] 업데이트 staged 삭제 오류가 smoke와 rollback 경계를 벗어남
+
+- **위치:** `core/update_installer.py:345` `apply_staged_update()`; `scripts/apply_update.py:44`.
+- **우선순위:** Medium
+- **신뢰도:** Confirmed
+- **문제:** 새 EXE를 target에 설치한 직후 `staged_path.unlink()`를 smoke/rollback try 블록 바깥에서 실행한다. 삭제가 실패하면 교체 완료 상태에서 예외가 전파되어 smoke도 rollback도 실행하지 않는다.
+- **발생 조건:** staged 파일은 읽기/복사 가능하지만 삭제가 거부된다. Windows 공유 잠금·읽기 전용 속성·일시적 보안 프로그램 잠금 등이 가능한 조건이다. 실제 보안 프로그램에서 재현한 것은 아니며 PermissionError를 주입했다.
+- **영향:** helper는 failed/exit 1로 보고하지만 실제 target은 새 버전이고 old backup만 남는다. 새 EXE의 런타임 유효성을 검사하지 않았고 자동 재시작도 생략된다. 서명/hash 검증 우회나 임의 코드 설치를 확인한 결함은 아니다.
+- **근거:** 임시 target=`old`, staged=`new`, 올바른 hash/size로 실제 `apply_staged_update()`를 호출하고 staged unlink만 거부했다. 결과 target=`new`, backup=`old`, smoke call=0, PermissionError였다.
+- **반증 확인:** 앞선 rename 실패 처리와 이후 smoke 실패 rollback은 존재한다. 다만 삭제 줄이 그 사이의 보호되지 않은 위치다. script의 외부 catch는 실패 결과 JSON만 쓰며 복원하지 않는다. `missing_ok=True`는 파일 부재만 허용하며 PermissionError를 무시하지 않는다.
+- **호출/영향 범위:** `main --apply-update → scripts.apply_update.main → apply_staged_update → staged unlink`. 사용자 승인 후 frozen 업데이트 설치·실패 상태 보고·재시작 경로에 영향.
+- **권장 수정 방향:** smoke/rollback을 핵심 transaction 경계로 삼고 staged 정리는 성공 후 best-effort/retry로 처리한다. 정리 실패를 설치 실패로 혼동하지 않으며 실제 target 상태와 결과 상태를 일치시킨다.
+- **필요한 회귀 테스트:** staged unlink PermissionError 상태에서도 smoke가 반드시 실행되어야 한다. smoke 실패라면 old로 복원하고 rolled_back을 기록한다. smoke 성공이면 target=new/applied를 유지하고 staged 정리만 경고/재시도해야 한다.
 
 ## 5. Potential Functional Gaps
 
-- **Confirmed Gap — 비중계·준비 상태의 명확한 UX:** 목록 선택의 종료/예정 확인은 이미 있다. 다만 일반 시작은 player에 먼저 접근하고 자막 요소를 기다린다. 현재 관찰된 alert→메인 복귀 상태를 “현재 중계 없음 / 예약 대기 / 사이트 구조 오류”로 일관되게 구별하는 경로와 실제 사이트 회귀가 부족하다. `_resolve_active_selector`는 후보마다 최대 20초 기다린다. 전체 지연 시간을 측정하지 않았으므로 특정 초 수를 장애 수치로 제시하지 않는다.
-- **Confirmed Gap — 최초 접속 실패 자동 재시도:** `_extraction_worker`의 최초 `_open_capture_driver_session` 실패는 terminal failure로 종료한다. 최대 5회 재연결 루프는 이미 수집 루프에 진입한 뒤의 오류에 적용된다. 일시적인 최초 네트워크 오류도 재시도하려는 제품 요구라면 별도 초기 연결 retry를 추가해야 한다. 현재 비중계 상태를 무조건 재시도해야 한다는 의미는 아니다.
-- **Confirmed Gap — 사이트 정식 위원회 명칭 동기화:** `core/config.py:409,434,468-469`의 `기후환경노동위원회`를 현재 사이트의 `기후에너지환경노동위원회`와 조정할 필요가 있다. 표시·자동 태그·파일명/메타데이터 정합 문제이며 잘못된 방송 수집으로 확정하지 않는다. 기존 사용자 preset 이름의 호환 alias도 고려한다.
-- **Confirmed Gap — 일반 backup 품질 metadata:** `persistence_session.py:725-736`의 일반 backup header에는 capture_quality가 없다. runtime checkpoint와 수동 세션 JSON에는 있다. 이 분기가 실행된 backup의 진단 round-trip을 보강해야 한다. 기본 추출은 runtime root를 사용하므로 모든 자동 백업에서 진단이 사라진다고 일반화하지 않는다.
-- **Likely Gap — save operation의 재시작 후 재시도:** DB의 동일 ID 멱등 저장은 구현되어 있지만 JSON에는 operation ID가 기록되지 않는다. 앱 재시작 후 실패한 JSON→DB 저장을 같은 operation으로 재개하는 durable 재시도 절차는 확인하지 못했다. 사용자의 새 저장은 원래 별도 계보 revision일 수 있으므로 그 자체를 중복 버그로 분류하지 않는다.
-- **추정 — 실제 사이트 자막 활성화 완료 판정:** 활성화 JS는 버튼 click 성공 또는 레이어 표시를 성공으로 반환하는 경로도 있다. 네트워크 구독 성공·첫 row 수신과 구분한 상태가 유용할 수 있다. 실제 live DOM과 지연을 확보하지 못했으므로 현재 AI 활성화가 깨졌다고 판단하지 않는다.
+- **Confirmed Gap — 실제 commit과 기능 검증의 연결 부족:** realtime writer·keyword alert 단위 회귀는 존재하지만 dict preview에서 출발한 정상 수집 흐름이 그 기능에 도달하는 검증이 부족하다. ISSUE-001처럼 개별 함수 통과와 제품 기능 동작이 분리될 수 있다.
+- **Confirmed Gap — 일반 JSON 로드의 progress/cancel:** DB/hydrate에는 점진 처리/취소가 있지만 일반 JSON background load는 전체 parse/역직렬화 후 결과를 전달한다. ISSUE-004의 budget 수정과 함께 작업 중 취소/종료 응답성을 보완할 필요가 있다.
+- **Likely Gap — 업데이트 중단 후 사용자 복구 경로:** 두 rename 사이에 helper가 중단되면 target이 없어질 수 있다. `_recover_interrupted_replacement()`는 다음 apply 호출 시 복원하지만 사용자가 기존 shortcut으로 앱을 열 수 없으면 그 호출에 도달하기 어렵다. 영구 데이터 유실로 확정하지 않으며 별도 launcher/안내·잔존 helper 재실행 절차의 실제 사용자 검증이 필요하다.
+- **추정 — OS/아키텍처 지원 축:** 현재 Windows 중심 CI와 소스 portability helper만으로 macOS/Linux/Windows ARM64의 GUI·Chrome·frozen 제품 전체를 지원한다고 볼 수 없다. 지원 확대 자체는 enhancement이며 현재 Windows 핵심 기능 버그로 분류하지 않는다.
 
 ## 6. Documentation Mismatches
 
-| 문서 설명 | 실제 구현 / 수정할 문서 방향 |
+| 문서 설명 | 실제 구현/판정 |
 |---|---|
-| CLAUDE의 “URL은 HTTPS 기본 포트” 계약 | `core/url_policy.py:46-61`은 HTTP/HTTPS 양쪽과 각 기본 포트를 허용한다. 실제 정책을 명시하거나 정책을 바꾼 뒤 문서를 맞춰야 한다. 업데이트 URL은 별도로 HTTPS 검증됨 |
-| CLAUDE의 “JSON snapshot의 save_operation_id를 SQLite에도 전달” | operation ID는 worker 결과와 DB에 있으나 `_write_session_snapshot` JSON header에는 없다. 영속 JSON 계약과 메모리 내 저장 context를 구분해야 한다 |
-| README/CLAUDE의 일반적 “연결 실패 자동 재연결” | 최초 driver/page/selector 초기화 실패는 즉시 종료하고, 이미 연결된 수집 루프의 오류에 retry가 적용된다. 시작 실패와 운영 중 단절을 나눠 설명해야 한다 |
-| README의 “SQLite DB에 자동 저장” | 기능 본문만 읽으면 실시간 연속 저장으로 오해할 수 있다. 구현과 CLAUDE는 세션 저장 시 JSON과 함께 DB 저장한다. 무저장 장기 수집의 복구 근거는 runtime 파일이다 |
-| 복구·저장 안정성 설명 | 개별 파일 원자성과 revision 보호는 사실이나 다중 파일 generation 일관성·다중 프로세스 소유권까지 보장하지 않는다. ISSUE-002/003 해결 전 보장 범위를 제한해야 한다 |
+| README 주요 기능: 수집 중 즉시 실시간 저장·키워드 알림 | dict commit 경로에서 부수 효과 누락. ISSUE-001 |
+| README 및 CLAUDE 마지막 resource budget 설명: 일반 JSON/runtime/DB가 공통 byte·entry 상한 공유 | 일반 JSON에는 entry budget 없음. ISSUE-004 |
+| CLAUDE의 segment/tail load fingerprint 검증 설명 | recovery manifest strict/salvage에는 있으나 일반 실행 중 segment reader에는 없음. ISSUE-002. 적용 범위를 구분해야 함 |
+| CLAUDE §4.2: 실제 append/update는 `_add_text_to_subtitles()`와 shared helper 사용 | dict preview는 `commit_live_row`/`apply_preview`로 직접 수정. 레거시 경로 설명이 현재 운영 흐름 전체를 설명하지 못함 |
+| README 옵션은 시작 전에만 변경 가능이라는 일괄 설명 | 바로 아래 timestamp 간격은 수집 중 변경 가능으로 명시. 범위를 한정할 필요가 있는 문서 내 모순 |
 
-README의 과거 변경 이력에 있는 테스트 개수는 당시 기록이므로 현재 434개와 다르다는 이유로 오류로 지적하지 않았다. Windows 전용 HWP, 선택 패키지, source/portable/AppData 저장소 구분은 대체로 구현과 일치한다.
+CLAUDE의 일부 **변경 이력**에 남은 PyQt6 표기는 과거 이력일 수 있으므로 현재 runtime import 결함으로 분류하지 않았다. PySide6 미설치는 이번 로컬 환경 상태이며 requirements 파일에 누락된 의존성이라는 뜻은 아니다. 이전 감사의 해결 완료 이슈는 현행 미해결 이슈로 재등록하지 않았다.
 
 ## 7. Recommended Fix Plan
 
 ### Phase 1 — Immediate
 
-1. **ISSUE-001:** Windows 부모 대기 API 교체와 정상 종료 handshake를 먼저 구현한다. helper 출시 검증에서 살아 있는 테스트 부모와 저장 지연을 필수 시나리오로 둔다.
-2. **ISSUE-002:** checkpoint generation 설계와 혼합 세대 복구 검사부터 추가한다. legacy 파일은 안전하게 경계를 판별할 수 없는 경우 경고하며, text-only dedupe로 조용히 고치지 않는다.
-3. **ISSUE-003:** storage root별 단일 실행 또는 명시적 multi-instance 소유권을 확정한다. 그 결정과 동시에 archive GC의 active owner 보호를 구현한다.
+1. **ISSUE-001:** structured/fallback commit delta가 실시간 출력·알림을 수행하도록 연결하고 실제 dict preview 회귀를 먼저 고정한다.
+2. **ISSUE-002:** 일반 segment reader에서 missing/무결성 오류를 실패로 전달한다. 불완전한 저장이 성공/clean 상태가 되는 것을 차단한다.
+3. **ISSUE-003:** worker가 텍스트와 구조 메타데이터를 함께 비교하도록 수정한다. 새 발언 identity가 텍스트 중복 필터에 제거되지 않게 한다.
 
 ### Phase 2 — Stability
 
-- **ISSUE-004:** 대상 볼륨에서 준비·검증·교체하도록 updater staging을 보완한다.
-- 비중계/산회, alert, API 실패, selector drift, 최초 접속 실패를 구분하는 사용자 상태와 timeout/cancel을 보완한다.
-- 현재 사이트 위원회 명칭, 일반 backup 진단 metadata, 문서상의 저장·재시도 계약을 정리한다.
-- 파일별 원자적 쓰기와 복구 가능한 multi-file commit을 구분하고, disk-full/permission 실패를 사용자에게 명시한다.
+1. **ISSUE-004:** JSON/runtime/DB의 공통 budget과 취소 정책을 일치시킨다.
+2. **ISSUE-005:** 업데이트 cleanup과 설치 transaction 경계를 정리하고 오류별 결과 상태를 검증한다.
+3. PySide6가 있는 환경에서 전체 pytest와 constructor smoke를 다시 실행한다. 현재 로컬 결과를 성공 baseline으로 사용하지 않는다.
+4. 실제 Chrome에서 재연결·same-text row 교체·중지 drain을 확인하고, Windows EXE·COM·비ASCII 경로 테스트를 수행한다.
 
 ### Phase 3 — Structural
 
-- runtime snapshot의 generation·reader·GC 소유권을 하나의 저장 프로토콜로 정리한다. UI mixin의 임의 호출 순서가 무결성 계약을 대신하지 않도록 한다.
-- parent waiter, filesystem mover, clock, live-list transport를 좁은 인터페이스로 분리하여 실제 OS 동작과 fake를 각각 검증한다.
-- frozen helper·실제 Windows 파일시스템·실제 사이트의 계약 테스트를 기존 빠른 fixture 테스트와 별도 게이트로 운영한다. 기존 suffix 추출 의미론의 임의 변경은 피한다.
+- commit delta의 UI 통계·dirty·복구·realtime·alert 적용 책임을 한 지점에서 검증 가능하게 만든다. 글로벌 히스토리/suffix 의미론 변경은 별도 승인을 받은 작업으로 취급한다.
+- runtime reader의 strict/salvage 및 cache 무결성 정책을 공유해 저장·복구·검색의 검증 차이를 줄인다.
+- fake host 단위 테스트와 실제 QApplication/worker/storage 통합 테스트의 역할을 구분한다. public facade 호환성 테스트는 유지한다.
+- 문서의 일반 보장과 경로별 보장을 구분하고, 수집 입력부터 저장물까지 확인하는 회귀를 release gate에 포함한다.
 
-실제 수정·배포·branch 생성은 수행하지 않았다.
+이 감사에서는 위 수정이나 설정 변경을 실행하지 않았다.
 
 ## 8. Test Recommendations
 
-| 유형 / 대상 | 입력·상황 | 기대 결과 |
+| 분류 | 입력/장애 조건 | 기대 결과 |
 |---|---|---|
-| Unit — ISSUE-001 | Windows parent wait adapter에 살아 있는 handle, 접근 거부, timeout, 종료 handle을 각각 제공 | terminate 호출 0회; 접근 거부는 실패로 노출; 실제 종료만 성공 |
-| Integration — ISSUE-001 | 테스트 부모가 임시 JSON 저장 완료 신호를 지연하고 helper가 설치 승인 후 대기 | 완료·정상 종료 전에 EXE 교체하지 않음; 부모 종료 취소 시 설치 중단 |
-| Regression — Qt 종료 | dirty 세션/취소 선택, tray ON, active background save 후 quit | closeEvent 보호 유지, helper가 강제 종료하지 않음. Qt quit 우회로 오판하는 테스트를 만들지 않음 |
-| Unit/Integration — ISSUE-002 | segment=[A], manifest archived=1, 이전 tail archived=0/[A,B] | `[A,A,B]` 무경고 성공 금지; 정합 복구 `[A,B]` 또는 명확한 오류 |
-| Concurrency — ISSUE-002 | 자동 checkpoint와 segment flush를 barrier로 각 쓰기 지점에서 교차 실행 | 재시작 시 한 generation만 복구; count/index/fingerprint 일치 |
-| Regression — 정당한 반복 발언 | 다른 entry ID를 가진 동일 문장 두 개와 경계 중복 ID를 함께 입력 | 다른 실제 발언은 유지하고 세대 경계 중복만 처리 |
-| Concurrency — ISSUE-003 | 동일 시각·run ID의 두 프로세스, A가 수집 중 B의 반복 시작/종료 | 고유 root/TXT, 서로의 파일 보존, active archive는 GC 제외 |
-| Platform-specific — ISSUE-004 | C: staging, 다른 실제 볼륨의 disposable EXE fixture; 복사 중 공간 부족 | 동일 볼륨 최종 교체, 원본 보존, 성공 hash/smoke 일치. 실제 사용자 EXE는 사용하지 않음 |
-| E2E — 현재 비중계 사이트 | 목록 non-live, 기본 xcode URL의 alert→메인 복귀 | “현재 중계 없음” 등 적절한 상태, 제한된 대기, 중지 응답, 빈 세션의 성공 수집 오인 방지 |
-| E2E — 실제 생중계 | 대상 위원회 1개 선택→xcgcd 확정→AI ON→짧은 발언/화자 전환→중지→JSON/DB/SRT | 다른 위원회 선택 없음; 화자·순서·마지막 발언 보존; SRT 첫 cue 0 기준; JSON/DB 내용 일치 |
-| Integration — API 실패 | timeout, HTTP 5xx, HTML 응답, invalid JSON, 2MB 초과, 다중 후보 | 오류 원인 표시, 다른 방송 임의 선택 금지, 늦은 응답이 닫힌 dialog를 변경하지 않음 |
-| Regression — 저장 revision | 저장 snapshot 이후 편집/수집, DB 작업 지연 후 완료 | 새 변경 dirty 유지, 종료/로드 자동 재개 금지, 같은 operation ID 재시도는 한 DB 세션 |
-| Integration — DB | insert 중 예외, FK 대상 삭제, FTS 사용 불가, load cancel | 부분 세션 commit 없음; FK 정합; literal 검색 fallback; 취소 전 현재 세션 유지 |
-| Unit/Integration — 입력·복구 budget | 100MB 초과 JSON, 150,000개 초과 세션, ../·절대 segment 경로, 손상 파일 | 한도·경로 거부, 원 세션 유지, salvage 제외 내역 표시 |
-| Regression — 문서·metadata | 기후노동위 선택, 일반 backup의 quality count, 새 operation JSON 저장 | 사이트 정식 명칭/alias 일치, 의도한 metadata round-trip, 문서와 JSON 계약 일치 |
-| Platform-specific — 출력 | 한글·emoji·제어 문자·CRLF·긴 경로, 읽기 전용 대상, HWP COM 없음 | 형식별 유효 파일/안내·fallback, 기존 파일 보존, 실패를 성공으로 표시하지 않음 |
-| Release — 실제 환경 | requirements 핀 Python 3.12 + clean frozen build + disposable storage | source/constructor/storage smoke와 helper 통합 통과, private/public key 일치, 업데이트 결과 지속성 |
+| Unit / ISSUE-001 | stable dict row에 알림 키워드 포함, realtime ON | append 1개·realtime 기록·알림 각각 발생. 동일 snapshot 반복은 중복 알림/전체 줄 중복 없음 |
+| Integration / ISSUE-001 | unstable/container preview → 400ms 안정 timer 또는 재관측 → 실제 fallback commit | UI 자막과 realtime 파일의 내용이 일치하고 해당 키워드 알림 발생 |
+| Regression / ISSUE-002 | segment+tail 저장 직전 segment 삭제, cached/uncached 각각 | 저장 실패·오류 경로 노출·기존 출력 byte 동일·현재 dirty 유지·DB 신규 불완전 세션 없음 |
+| Integration / ISSUE-002 | 유효 JSON의 text/digest/count 변경 또는 일부 invalid entry | 일반 reader 거절; 명시적 salvage만 누락 경고와 정확한 count 반환 |
+| End-to-End / ISSUE-003 | 로컬 browser fixture에서 같은 `네`의 row1/primary → row2/secondary를 clear 없이 교체 | 두 구조 변화가 worker 큐에 도달하고 row identity·speaker/timing이 정확히 반영 |
+| Regression / ISSUE-003 | raw 동일 + color/frame/selector 변경; 완전히 동일한 probe 반복 | metadata 변경은 preview, 완전 동일 관측은 keepalive. stale run 결과는 무시 |
+| Unit·Integration / ISSUE-004 | entry 상한 N, 파일은 byte 상한 이내, N/N+1개 정상 항목 | N 성공/N+1 typed limit 오류. UI 교체 전에 거절하고 이전 세션 보존 |
+| Integration / ISSUE-004 | JSON·DB·runtime에서 같은 개수·누적 bytes, 중도 cancel | 상한 판정 일치·취소 완료·worker 종료·현재 세션 보존 |
+| Regression / ISSUE-005 | staged 삭제 PermissionError + smoke 성공/실패 | smoke 반드시 실행. 성공은 applied/new, 실패는 rolled_back/old; cleanup 실패가 상태를 왜곡하지 않음 |
+| Concurrency | segment flush와 snapshot 저장/backup을 barrier로 겹침 | 각 저장물이 하나의 완전한 prefix+tail을 포함하고 entry ID 중복/누락 없음 |
+| Concurrency | DB 저장 중 같은 operation ID 재시도·서로 다른 manager 동시 저장 | 최종 logical save 1개, transient 충돌은 명시 처리, lineage latest·자막 count 일관 |
+| End-to-End | 입력 URL → 검증 → Chrome fixture → preview → stop → JSON/DB/export → 재로드 | text·ID·source/speaker·start/end metadata 일치, 마지막 pending 자막 보존 |
+| Integration | JSON 기록 성공 뒤 DB insert trigger로 실패 주입 | JSON 완전 유지·DB rollback·사용자 DB 경고·동일 operation ID 재시도 시 중복 없음 |
+| Regression | capture 중 async 저장 후 추가 편집/새 자막 수신 | 저장 결과는 snapshot revision, 새 변경은 dirty 유지, destructive deferred action 실행 안 됨 |
+| Platform-specific | Windows 한글/공백/긴 경로·read-only staged·실행 EXE 잠금 | 파일명/인코딩 정상, 오류 메시지/기존 파일 보존, updater rollback 상태 정확 |
+| Platform-specific | portable/일반 frozen, 서로 다른 설치·AppData 볼륨 | 지정 root에만 쓰고 update local staging·clean child env·재시작 정상 |
+| Platform-specific | HWP COM 미설치 또는 SaveAs 실패 | 문서화된 HWPX 대체/실패 안내, 기존 파일 손상 없음 |
+| Runtime·Network | 최초 접속 오류·연결 단절·live-list timeout·중지 직전 지연 응답 | 의도한 재시도 횟수/상태 표시, 취소 가능, 오래된 run/result가 새 세션에 섞이지 않음 |
 
-위 표는 **추가로 실행해야 할 검증 계획**이다. 이번에 실행한 검증은 §3에 한정된다.
+실제 GUI 통합 회귀는 `MainWindow.__new__` 또는 AST 추출만으로 대체하지 않는다. `QT_QPA_PLATFORM=offscreen` QApplication을 사용하는 테스트와 실제 Chrome fixture를 함께 두며, destructive fault injection은 임시 데이터에서만 수행한다.
 
 ## 9. Final Assessment
 
-| 영역 | 평가 | 근거 |
+| 항목 | 평가 | 근거 |
 |---|---|---|
-| Functional Correctness | Needs Work | 주요 기능과 회귀는 동작하지만 복구 중복과 조건부 업데이트 실패가 남음 |
-| Runtime Stability | Needs Work | 큐/종료 관리가 있으나 Windows helper 강제 종료가 정상 lifecycle을 끊을 수 있음 |
-| Data Integrity | High Risk | runtime 세대 불일치 및 다중 프로세스 archive 덮어쓰기·GC 위험. DB transaction 자체는 보호됨 |
-| Error Resilience | Needs Work | 다수 예외/fallback은 있으나 경고 없는 혼합 checkpoint 복구와 초기 접속 실패 대응이 부족 |
-| Cross-platform Robustness | Needs Work | 주 대상 Windows의 process API 오용, cross-volume 경계 미처리; 타 OS 실검증 없음 |
-| Test Confidence | Acceptable | 434 pass와 pyright 0 errors는 유의미하나 OS·frozen helper·live DOM·multi-process 검증을 대신하지 못함 |
+| Functional Correctness | **Needs Work** | 실제 dict commit의 realtime/alert 단절과 same-text row 입력 누락 |
+| Runtime Stability | **Needs Work** | budget의 경로별 차이와 업데이트 중간 예외. GUI 실행 검증도 현재 환경에서 제한 |
+| Data Integrity | **High Risk** | 일반 runtime reader가 불완전한 장시간 세션을 정상 저장물로 만들 수 있음 |
+| Error Resilience | **Needs Work** | atomic write·transaction·recovery 방어는 있으나 조용한 segment 생략과 updater cleanup 경계가 남음 |
+| Cross-platform Robustness | **Acceptable** | Windows 중심 목적에 맞는 경로/프로세스 helper와 HWP fallback 존재. 실제 frozen·ARM64·다른 OS 검증은 미완료 |
+| Test Confidence | **Needs Work** | 287개 통과·pyright 무진단이나 전체 pytest 미통과. legacy helper 단위 테스트가 실제 신규 commit 경로의 결함을 놓침 |
 
-**실제로 먼저 수정할 3개:**
+**실제로 먼저 수정할 문제 3개:**
 
-1. **ISSUE-001 — Windows 업데이트 부모 대기에서 `os.kill(pid, 0)` 제거 및 정상 종료 handshake.**
-2. **ISSUE-002 — runtime manifest/tail을 동일 generation으로 commit·복구.**
-3. **ISSUE-003 — 프로세스별 runtime 파일 소유권과 active archive GC 보호.**
+1. **ISSUE-001:** 실제 dict preview commit에 실시간 TXT 기록·키워드 알림을 연결한다.
+2. **ISSUE-002:** runtime segment 누락·무결성 불일치가 정상 저장/내보내기로 이어지지 못하게 한다.
+3. **ISSUE-003:** worker 변경 판정에 row identity·화자·source metadata를 포함한다.

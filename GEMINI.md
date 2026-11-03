@@ -4,6 +4,8 @@
 
 ## 1. 프로젝트 개요
 
+최신 감사·검증 기준은 [최종 감사](PROJECT_AUDIT_FINAL.md)와 [추가 감사](PROJECT_AUDIT_ADDITIONAL.md)를 참고한다. 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
+
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
 - **버전**: v16.14.16
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스

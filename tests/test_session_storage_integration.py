@@ -178,3 +178,35 @@ def test_async_save_freezes_entries_while_capture_changes(stored_session, tmp_pa
     loaded = win.db.load_session(info["db_session_id"])
     assert loaded is not None
     assert [row["text"] for row in loaded["subtitles"]] == [entry.text for entry in expected]
+
+
+def test_snapshot_remains_complete_while_archive_manifest_advances(stored_session, tmp_path):
+    win, expected, tail, messages, _recovery = stored_session
+    captured_root, captured_manifest = win._snapshot_runtime_stream_context()
+    entered, release = threading.Event(), threading.Event()
+    context = win._build_session_save_context
+    def pause_before_read():
+        entered.set()
+        assert release.wait(timeout=5)
+        return context()
+    win._build_session_save_context = pause_before_read
+    output = tmp_path / "concurrent.json"
+    try:
+        assert win._start_async_session_snapshot_save(str(output), tail,
+            runtime_root=captured_root, runtime_manifest=captured_manifest)
+        assert entered.wait(timeout=5)
+        # Publish the previously active tail as the next immutable segment,
+        # just as the UI's flush-completion handler does during capture.
+        segment = captured_root / "segment_0002.json"
+        fingerprint = win._build_runtime_entries_fingerprint(tail)
+        file_io.atomic_write_json(segment, {"subtitles": [entry.to_dict() for entry in tail], **fingerprint})
+        win._runtime_segment_manifest.append({"path": segment.name, **fingerprint})
+        tail.clear()
+    finally:
+        release.set()
+    kind, info = messages.get(timeout=10)
+    assert kind == "session_save_done", info
+    assert info["saved_count"] == len(expected)
+    serialized = json.loads(output.read_text(encoding="utf-8"))["subtitles"]
+    assert serialized == [entry.to_dict() for entry in expected]
+    assert len({row["entry_id"] for row in serialized}) == len(expected)

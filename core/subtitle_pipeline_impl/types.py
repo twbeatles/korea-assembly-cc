@@ -41,6 +41,7 @@ class PipelineResult:
     appended_entry: Optional[SubtitleEntry] = None
     updated_entry: Optional[SubtitleEntry] = None
     reason: str = ""
+    previous_text: str = ""
 
 @dataclass(slots=True)
 class IncrementalExtractResult:

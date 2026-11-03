@@ -271,7 +271,7 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                 )
 
 
-    def _save_committee_presets(self):
+    def _save_committee_presets(self) -> bool:
             """프리셋을 파일에 저장"""
             try:
                 data = {"presets": self.committee_presets, "custom": self.custom_presets}
@@ -281,9 +281,33 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                     ensure_ascii=False,
                     indent=2,
                 )
+                return True
             except Exception as e:
                 logger.warning(f"프리셋 저장 오류: {e}")
                 self._report_user_visible_warning(f"프리셋 저장 실패: {e}")
+                return False
+
+    def _commit_preset_changes(self, committee: dict, custom: dict) -> bool:
+            """Publish preset edits only when the complete file was saved."""
+            previous = (self.committee_presets, self.custom_presets)
+            self.committee_presets, self.custom_presets = committee, custom
+            try:
+                saved = self._save_committee_presets()
+            except Exception as exc:
+                self._report_user_visible_warning(f"프리셋 저장 실패: {exc}")
+                saved = False
+            if saved is False:
+                self.committee_presets, self.custom_presets = previous
+                return False
+            return True
+
+    def _confirm_preset_overwrite(self, name: str) -> bool:
+            ui = _ui_public()
+            return ui.QMessageBox.question(
+                self, "프리셋 덮어쓰기 확인", f"'{name}' 프리셋이 이미 있습니다. 덮어쓰시겠습니까?",
+                ui.QMessageBox.StandardButton.Yes | ui.QMessageBox.StandardButton.No,
+                ui.QMessageBox.StandardButton.No,
+            ) == ui.QMessageBox.StandardButton.Yes
 
 
     def _build_preset_menu(self):
@@ -361,16 +385,21 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
             )
 
             if ok and url.strip():
-                normalized_url, error = self._validate_preset_url(url)
-                if normalized_url is None:
+                entry, error = self._coerce_preset_entry(name, url)
+                if entry is None:
                     _ui_public().QMessageBox.warning(
                         self,
                         "프리셋 URL 오류",
                         error or "올바른 프리셋 URL을 입력하세요.",
                     )
                     return
-                self.custom_presets[name] = normalized_url
-                self._save_committee_presets()
+                name, normalized_url = entry
+                if name in self.custom_presets and not self._confirm_preset_overwrite(name):
+                    return
+                custom = dict(self.custom_presets)
+                custom[name] = normalized_url
+                if not self._commit_preset_changes(dict(self.committee_presets), custom):
+                    return
                 self._build_preset_menu()
                 self._show_toast(f"프리셋 '{name}' 추가됨", "success")
 
@@ -417,8 +446,10 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                     _ui_public().QMessageBox.StandardButton.Yes | _ui_public().QMessageBox.StandardButton.No,
                 )
                 if reply == _ui_public().QMessageBox.StandardButton.Yes:
-                    del self.custom_presets[name]
-                    self._save_committee_presets()
+                    custom = dict(self.custom_presets)
+                    del custom[name]
+                    if not self._commit_preset_changes(dict(self.committee_presets), custom):
+                        return
                     self._build_preset_menu()
                     self._show_toast(f"프리셋 '{name}' 삭제됨", "warning")
 
@@ -443,8 +474,8 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                     _ui_public().QMessageBox.warning(self, "프리셋 이름 오류", "프리셋 이름을 입력하세요.")
                     return
 
-                normalized_url, error = self._validate_preset_url(new_url)
-                if normalized_url is None:
+                entry, error = self._coerce_preset_entry(normalized_name, new_url)
+                if entry is None:
                     _ui_public().QMessageBox.warning(
                         self,
                         "프리셋 URL 오류",
@@ -452,10 +483,15 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                     )
                     return
 
-                # 기존 프리셋 삭제 후 새로 추가 (이름이 변경되었을 수 있으므로)
-                del self.custom_presets[name]
-                self.custom_presets[normalized_name] = normalized_url
-                self._save_committee_presets()
+                normalized_name, normalized_url = entry
+                if (normalized_name != name and normalized_name in self.custom_presets
+                        and not self._confirm_preset_overwrite(normalized_name)):
+                    return
+                custom = dict(self.custom_presets)
+                del custom[name]
+                custom[normalized_name] = normalized_url
+                if not self._commit_preset_changes(dict(self.committee_presets), custom):
+                    return
                 self._build_preset_menu()
                 self._show_toast(f"프리셋 '{normalized_name}' 수정됨", "success")
 
@@ -509,6 +545,8 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
 
                     imported_count = 0
                     skipped_count = 0
+                    committee = dict(self.committee_presets)
+                    custom = dict(self.custom_presets)
 
                     if "committee" in data and isinstance(data["committee"], dict):
                         for name, url in data["committee"].items():
@@ -517,8 +555,8 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                                 skipped_count += 1
                                 continue
                             normalized_name, normalized_url = preset_entry
-                            if self.committee_presets.get(normalized_name) != normalized_url:
-                                self.committee_presets[normalized_name] = normalized_url
+                            if committee.get(normalized_name) != normalized_url:
+                                committee[normalized_name] = normalized_url
                                 imported_count += 1
 
                     # 사용자 정의 프리셋 가져오기 (기존 것에 추가)
@@ -529,12 +567,13 @@ class MainWindowUIHistoryPresetsMixin(MainWindowHost):
                                 skipped_count += 1
                                 continue
                             normalized_name, normalized_url = preset_entry
-                            if self.custom_presets.get(normalized_name) != normalized_url:
-                                self.custom_presets[normalized_name] = normalized_url
+                            if custom.get(normalized_name) != normalized_url:
+                                custom[normalized_name] = normalized_url
                                 imported_count += 1
 
                     if imported_count > 0:
-                        self._save_committee_presets()
+                        if not self._commit_preset_changes(committee, custom):
+                            return
                         self._build_preset_menu()
                         message = f"프리셋 {imported_count}개 가져오기 완료!"
                         if skipped_count > 0:

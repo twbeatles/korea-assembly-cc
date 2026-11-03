@@ -59,6 +59,8 @@ COALESCED_CONTROL_MESSAGE_TYPES = {
     "runtime_segment_flush_done",
     "runtime_segment_flush_failed",
     "session_load_done",
+    "session_load_progress",
+    "session_load_cancelled",
     "session_load_failed",
     "session_load_json_error",
     "session_save_done",

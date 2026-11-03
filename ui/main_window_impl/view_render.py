@@ -239,8 +239,15 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         start = entry_start
         end = entry_end
         if char_start is not None and char_length is not None:
-            start = min(max(entry_start, entry_start + int(char_start)), entry_end)
-            end = min(max(start, start + int(char_length)), entry_end)
+            # Search uses Python code-point offsets; QTextCursor positions are
+            # UTF-16 units, so supplementary characters take two positions.
+            text = self._get_global_entry_text(entry_index)
+            offset = max(0, int(char_start))
+            length = max(0, int(char_length))
+            before = len(text[:offset].encode("utf-16-le", errors="surrogatepass")) // 2
+            selected = len(text[offset:offset + length].encode("utf-16-le", errors="surrogatepass")) // 2
+            start = min(entry_start + before, entry_end)
+            end = min(start + selected, entry_end)
 
         cursor = self.subtitle_text.textCursor()
         cursor.setPosition(start)
@@ -434,7 +441,12 @@ class MainWindowViewRenderMixin(ViewRenderBase):
         self._last_render_layout_key = layout_key
 
         auto_scroll_check = getattr(self, "auto_scroll_check", None)
-        if auto_scroll_check is not None and auto_scroll_check.isChecked() and not preserve_scroll:
+        search_matches = self.__dict__.get("search_matches", [])
+        search_idx = int(self.__dict__.get("search_idx", 0))
+        if search_matches and 0 <= search_idx < len(search_matches):
+            match = search_matches[search_idx]
+            self._select_rendered_entry_span(match.entry_index, match.char_start, match.char_length)
+        elif auto_scroll_check is not None and auto_scroll_check.isChecked() and not preserve_scroll:
             self.subtitle_text.moveCursor(QTextCursor.MoveOperation.End)
 
         if preserve_scroll:

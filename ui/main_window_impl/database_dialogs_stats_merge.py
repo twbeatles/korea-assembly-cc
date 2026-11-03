@@ -113,15 +113,19 @@ class MainWindowDatabaseDialogsStatsMergeMixin(MainWindowHost):
                 def apply_merge(
                     existing_subtitles: list[SubtitleEntry] | None = None,
                 ) -> None:
-                    merged = self._merge_sessions(
-                        file_paths,
-                        remove_duplicates=remove_dup_check.isChecked(),
-                        sort_by_time=sort_check.isChecked(),
-                        existing_subtitles=existing_subtitles,
-                        dedupe_mode=str(
-                            dedupe_mode_combo.currentData() or "legacy_bucket"
-                        ),
-                    )
+                    try:
+                        merged = self._merge_sessions(
+                            file_paths,
+                            remove_duplicates=remove_dup_check.isChecked(),
+                            sort_by_time=sort_check.isChecked(),
+                            existing_subtitles=existing_subtitles,
+                            dedupe_mode=str(dedupe_mode_combo.currentData() or "legacy_bucket"),
+                            strict=True,
+                        )
+                    except Exception as exc:
+                        logger.warning("세션 병합 중단: %s", exc)
+                        QMessageBox.warning(dialog, "병합 실패", f"현재 자막을 유지합니다.\n{exc}")
+                        return
 
                     if merged:
                         self._store_destructive_undo_snapshot()

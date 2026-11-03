@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, QTimer
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
 from core.resource_budget import ResourceBudget, ResourceLimitExceeded
+from core.file_io import read_limited_json_file
 
 QProgressDialog = cast(Any, getattr(QtWidgets, "QProgressDialog"))
 
@@ -333,8 +334,13 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
         ) -> list[SubtitleEntry]:
             segment_path = Path(path)
             cache_key = str(segment_path.resolve())
+            stat = segment_path.stat()
+            file_state = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+            cached_states = self.__dict__.get("_runtime_segment_cache_file_states", {})
+            cached_metadata = self.__dict__.get("_runtime_segment_cache_metadata", {})
             cache_map = self.__dict__.get("_runtime_segment_cache_entries_by_key", {})
-            if isinstance(cache_map, dict) and cache_key in cache_map:
+            if (isinstance(cache_map, dict) and cache_key in cache_map
+                    and cached_states.get(cache_key) == file_state and cache_key in cached_metadata):
                 entries = cache_map[cache_key]
                 if budget is not None:
                     budget.consume_file(segment_path.stat().st_size, label=source or segment_path.name)
@@ -348,12 +354,24 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
                 self._runtime_segment_cache_entries = entries
                 return entries
 
-            _data, entries, _skipped = self._read_runtime_entries_file(
+            data, entries, skipped = self._read_runtime_entries_file(
                 segment_path,
                 source=source or cache_key,
                 budget=budget,
             )
+            if skipped:
+                raise ValueError(f"{segment_path.name} 무결성 불일치: 손상 항목 {skipped}개")
+            error = self._runtime_entries_integrity_error(entries, data, source=segment_path.name)
+            if error:
+                raise ValueError(error)
             self._cache_runtime_segment_entries(cache_key, entries)
+            states = dict(self.__dict__.get("_runtime_segment_cache_file_states", {}))
+            metadata = dict(self.__dict__.get("_runtime_segment_cache_metadata", {}))
+            states[cache_key] = file_state
+            # Keep only metadata, never a second copy of the JSON subtitles.
+            metadata[cache_key] = {key: value for key, value in data.items() if key != "subtitles"}
+            self._runtime_segment_cache_file_states = {key: states[key] for key in self._runtime_segment_cache_keys if key in states}
+            self._runtime_segment_cache_metadata = {key: metadata[key] for key in self._runtime_segment_cache_keys if key in metadata}
             return entries
 
     def _cache_runtime_segment_entries(
@@ -391,16 +409,19 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
             file_path = Path(path)
             if budget is not None:
                 budget.consume_file(file_path.stat().st_size, label=source or file_path.name)
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            data = read_limited_json_file(
+                file_path, max_bytes=int(Config.SESSION_RESOURCE_PER_FILE_MAX_BYTES),
+                label=source or file_path.name,
+            )
             if not isinstance(data, dict):
                 raise ValueError(f"지원하지 않는 JSON 구조: {file_path.name}")
+            raw_entries = data.get("subtitles", [])
+            if budget is not None and isinstance(raw_entries, (list, tuple)):
+                budget.consume_entries(len(raw_entries))
             entries, skipped = self._deserialize_subtitles(
                 data.get("subtitles", []),
                 source=source or str(file_path),
             )
-            if budget is not None:
-                budget.consume_entries(len(entries))
             return data, entries, skipped
 
     def _try_load_runtime_entries_file(
@@ -473,10 +494,10 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
                 else self.__dict__.get("_runtime_session_root")
             )
             if runtime_root is None:
-                return []
+                raise ValueError("runtime segment root가 없습니다.")
             relative_path = str(segment_info.get("path", "") or "").strip()
             if not relative_path:
-                return []
+                raise ValueError("runtime segment path가 없습니다.")
             try:
                 segment_path, relative_path = self._resolve_runtime_relative_path(
                     Path(runtime_root),
@@ -485,14 +506,20 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
                 )
             except ValueError:
                 logger.warning("runtime segment path 거부: %s", relative_path)
-                return []
+                raise
             if not segment_path.exists():
-                return []
-            return self._load_segment_file_entries(
+                raise FileNotFoundError(f"runtime segment가 없습니다: {relative_path}")
+            entries = self._load_segment_file_entries(
                 segment_path,
                 source=f"runtime_segment:{relative_path}",
                 budget=budget,
             )
+            if "entry_count" in segment_info and len(entries) != int(segment_info["entry_count"]):
+                raise ValueError(f"{relative_path} 무결성 불일치: entry_count")
+            error = self._runtime_entries_integrity_error(entries, segment_info, source=relative_path)
+            if error:
+                raise ValueError(error)
+            return entries
 
     def _get_runtime_segment_search_texts(
             self,
@@ -515,11 +542,11 @@ class MainWindowRuntimeSegmentsMixin(MainWindowHost):
                 return []
             cache_key = str(segment_path.resolve())
             search_cache = dict(self.__dict__.get("_runtime_segment_search_text_cache", {}))
-            if cache_key in search_cache:
-                return search_cache[cache_key]
+            # Validate file identity/integrity even when search text is cached.
+            entries = self._load_runtime_segment_entries(segment_info)
             texts = [
                 self._normalize_subtitle_text_for_option(entry.text).lower()
-                for entry in self._load_runtime_segment_entries(segment_info)
+                for entry in entries
             ]
             search_cache[cache_key] = texts
             self._runtime_segment_search_text_cache = search_cache

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import json
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, Callable, cast
 
@@ -492,6 +493,7 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
             last_connection_check = time.time() - Config.DRIVER_HEALTH_CHECK_INTERVAL
             worker_last_raw_text = ""
             worker_last_raw_compact = ""
+            worker_last_probe_signature = ""
             reconnect_attempt = 0
             consecutive_health_failures = 0
             last_keepalive_emit = 0.0
@@ -576,6 +578,7 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                                     )
                                     worker_last_raw_text = ""
                                     worker_last_raw_compact = ""
+                                    worker_last_probe_signature = ""
                                     last_keepalive_emit = 0.0
                                 elif any(
                                     not self._coerce_observer_reset_event(change)
@@ -634,12 +637,15 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                                 )
                                 last_observer_retry = now
 
-                            if text and text_compact and text_compact != worker_last_raw_compact:
+                            preview_payload = self._build_preview_payload_from_probe(probe) if text else {}
+                            probe_signature = json.dumps(preview_payload, sort_keys=True, ensure_ascii=False)
+                            if text and text_compact and probe_signature != worker_last_probe_signature:
                                 worker_last_raw_text = text
                                 worker_last_raw_compact = text_compact
+                                worker_last_probe_signature = probe_signature
                                 last_keepalive_emit = now
                                 self.message_queue.put(
-                                    ("preview", self._build_preview_payload_from_probe(probe))
+                                    ("preview", preview_payload)
                                 )
                             elif (
                                 text
@@ -655,6 +661,7 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                                 )
                                 worker_last_raw_text = ""
                                 worker_last_raw_compact = ""
+                                worker_last_probe_signature = ""
                                 last_keepalive_emit = 0.0
 
                         last_check = now
@@ -732,6 +739,7 @@ class MainWindowCaptureBrowserMixin(CaptureBrowserBase):
                                 last_observer_retry = now
                                 worker_last_raw_text = ""
                                 worker_last_raw_compact = ""
+                                worker_last_probe_signature = ""
                                 last_keepalive_emit = 0.0
                                 consecutive_health_failures = 0
                                 continue

@@ -242,9 +242,11 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
                             "InsertText", hwp.HParameterSet.HInsertText.HSet
                         )
                         hwp.HParameterSet.HInsertText.Text = value
-                        hwp.HAction.Execute(
+                        inserted = hwp.HAction.Execute(
                             "InsertText", hwp.HParameterSet.HInsertText.HSet
                         )
+                        if inserted is not None and not inserted:
+                            raise RuntimeError("한글 본문 입력이 실패했습니다.")
 
                     # 가능하면 숨김 창 — 실패 시 Visible=True 폴백
                     try:
@@ -291,9 +293,11 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
                     )
                     hwp.HParameterSet.HFileOpenSave.filename = filepath
                     hwp.HParameterSet.HFileOpenSave.Format = "HWP"
-                    hwp.HAction.Execute(
+                    saved = hwp.HAction.Execute(
                         "FileSaveAs_S", hwp.HParameterSet.HFileOpenSave.HSet
                     )
+                    if saved is not None and not saved:
+                        raise RuntimeError("한글 파일 저장 명령이 실패했습니다.")
                 finally:
                     if hwp_obj is not None:
                         try:
@@ -310,11 +314,19 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
                 last_error: Exception | None = None
                 stop_event = self.__dict__.get("stop_event")
                 for attempt in range(2):
+                    temporary_path: Path | None = None
                     try:
-                        do_save(filepath)
-                        saved_path = Path(filepath)
+                        target = Path(filepath)
+                        fd, temporary_name = tempfile.mkstemp(
+                            prefix=f".{target.stem}.", suffix=".hwp", dir=str(target.parent),
+                        )
+                        os.close(fd)
+                        temporary_path = Path(temporary_name)
+                        do_save(str(temporary_path))
+                        saved_path = temporary_path
                         if not saved_path.exists() or saved_path.stat().st_size <= 0:
                             raise RuntimeError("저장된 파일을 확인할 수 없습니다.")
+                        os.replace(temporary_path, target)
                         return
                     except Exception as e:
                         last_error = e
@@ -324,6 +336,12 @@ class MainWindowPersistenceExportsDocumentsMixin(MainWindowHost):
                                 break
                         else:
                             time.sleep(1)
+                    finally:
+                        if temporary_path is not None:
+                            try:
+                                temporary_path.unlink(missing_ok=True)
+                            except OSError:
+                                logger.debug("HWP 임시 파일 정리 실패: %s", temporary_path, exc_info=True)
                 if last_error is None:
                     last_error = RuntimeError("HWP 저장이 완료되지 않았습니다.")
                 # UI 다이얼로그만 사용 — 백그라운드 에러 토스트와 이중 통지 방지

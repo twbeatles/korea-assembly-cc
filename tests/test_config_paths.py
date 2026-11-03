@@ -303,6 +303,7 @@ def test_entrypoint_smoke_instantiate_window_outputs_json_in_process(tmp_path, m
 
     assert exit_code == 0, stdout
     _assert_window_smoke_payload(json.loads(stdout), target)
+    assert (target / "settings.ini").is_file()
 
 
 @pytest.mark.requires_subprocess

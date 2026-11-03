@@ -113,6 +113,7 @@ def apply_preview(
     if not candidate_text:
         return PipelineResult(state, preview_changed, reason="preview_filtered")
 
+    previous_text = state.entries[-1].text if state.entries else ""
     entry, appended_new, previous_compact = _append_or_merge_entry(
         state,
         candidate_text,
@@ -134,6 +135,7 @@ def apply_preview(
         appended_entry=entry if appended_new else None,
         updated_entry=entry,
         reason=f"preview_{extraction.reason}",
+        previous_text="" if appended_new else previous_text,
     )
 
 def commit_live_row(
@@ -197,6 +199,7 @@ def commit_live_row(
             changed,
             updated_entry=entry,
             reason="row_update",
+            previous_text=before_text,
         )
 
     entry, appended_new, previous_compact = _append_or_merge_entry(

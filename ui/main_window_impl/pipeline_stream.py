@@ -46,7 +46,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         return left + " " + right
 
     def _write_realtime_line(self, line: str) -> None:
-        if not line or not self.realtime_file:
+        if not line or not self.__dict__.get("realtime_file"):
             return
         try:
             self.realtime_file.write(line)

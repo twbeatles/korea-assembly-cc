@@ -119,6 +119,17 @@ class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
                 int(item.get("entry_count", 0) or 0)
                 for item in manifest_items
             ) + len(snapshot_entries)
+            def checked_serialized_items():
+                actual_count = 0
+                for item in self._iter_full_session_serialized_items(
+                    snapshot_entries, runtime_root=runtime_root, runtime_manifest=manifest_items,
+                ):
+                    actual_count += 1
+                    yield item
+                if actual_count != saved_count:
+                    raise ValueError(
+                        f"세션 자막 수 불일치: expected={saved_count}, actual={actual_count}"
+                    )
             utils.atomic_write_json_stream(
                 path,
                 head_items=[
@@ -131,11 +142,7 @@ class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
                     ("capture_quality", capture_quality),
                 ],
                 sequence_key="subtitles",
-                sequence_items=self._iter_full_session_serialized_items(
-                    snapshot_entries,
-                    runtime_root=runtime_root,
-                    runtime_manifest=manifest_items,
-                ),
+                sequence_items=checked_serialized_items(),
                 ensure_ascii=False,
             )
             self._record_recovery_snapshot(

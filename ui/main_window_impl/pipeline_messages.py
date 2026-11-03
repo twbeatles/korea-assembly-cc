@@ -252,6 +252,8 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 "session_save_done",
                 "session_save_failed",
                 "session_load_done",
+                "session_load_cancelled",
+                "session_load_progress",
                 "session_load_failed",
                 "session_load_json_error",
             ):
@@ -443,14 +445,17 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 pipeline_mod.QMessageBox.critical(self, "오류", f"세션 저장 실패: {err}")
 
             elif msg_type == "session_load_done":
-                self._session_load_in_progress = False
+                if self._finish_session_load():
+                    self._set_status("세션 불러오기를 취소했습니다.", "warning")
+                    return
                 payload = data if isinstance(data, dict) else {}
                 if not self._complete_loaded_session(payload):
                     if not payload.get("_cancelled"):
                         self._set_status("세션 불러오기 실패", "error")
 
             elif msg_type == "session_load_json_error":
-                self._session_load_in_progress = False
+                if self._finish_session_load():
+                    return
                 info = data if isinstance(data, dict) else {}
                 path = str(info.get("path", ""))
                 err = str(info.get("error", "JSON 파싱 오류"))
@@ -488,14 +493,32 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self._set_status("세션 불러오기 실패 (JSON 오류)", "error")
 
             elif msg_type == "session_load_failed":
-                self._session_load_in_progress = False
+                if self._finish_session_load():
+                    return
                 err = data.get("error") if isinstance(data, dict) else str(data)
                 self._set_status(f"세션 불러오기 실패: {err}", "error")
                 pipeline_mod.QMessageBox.critical(self, "오류", f"불러오기 실패: {err}")
 
+            elif msg_type == "session_load_progress":
+                self._handle_session_load_progress(data if isinstance(data, dict) else {})
+
+            elif msg_type == "session_load_cancelled":
+                self._finish_session_load()
+                self._set_status("세션 불러오기를 취소했습니다.", "warning")
+
             elif msg_type == "reflow_done":
                 self._reflow_in_progress = False
                 payload = data if isinstance(data, dict) else {}
+                source_entries = self.__dict__.get("_reflow_source_entries")
+                self._reflow_source_entries = None
+                if "snapshot_revision" in payload and (
+                    self.is_running
+                    or source_entries is not self.__dict__.get("subtitles")
+                    or int(payload["snapshot_revision"]) != self._get_session_revision()
+                ):
+                    self._set_status("자막이 변경되어 이전 줄넘김 정리 결과를 적용하지 않았습니다.", "warning")
+                    self._show_toast("자막이 변경되었습니다. 줄넘김 정리를 다시 실행하세요.", "warning")
+                    return
                 new_subtitles = payload.get("subtitles", [])
                 old_count = int(payload.get("old_count", len(self.subtitles)) or 0)
                 if not isinstance(new_subtitles, list) or not new_subtitles:
@@ -515,6 +538,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
 
             elif msg_type == "reflow_failed":
                 self._reflow_in_progress = False
+                self._reflow_source_entries = None
                 err = data.get("error") if isinstance(data, dict) else str(data)
                 self._set_status(f"줄넘김 정리 실패: {err}", "error")
                 self._show_toast(f"줄넘김 정리 실패: {err}", "error", 4000)

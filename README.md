@@ -171,7 +171,7 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 
 ### 3단계: 옵션 설정
 
-추출 **시작 전**에만 변경할 수 있습니다.
+URL·선택자·실시간 저장·헤드리스 모드는 추출 **시작 전**에 설정합니다. 표시 옵션과 타임스탬프 간격은 수집 중에도 변경할 수 있습니다.
 
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
@@ -193,6 +193,8 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 ### 5단계: 저장
 
 추출 완료 후 파일명이 자동으로 제안됩니다.
+
+HWP 저장이 실패하면 기존 파일은 유지됩니다. 세션 병합은 선택한 파일 중 읽을 수 없거나 손상된 파일이 있으면 현재 자막을 유지하고 원인을 안내합니다. 일반 세션 JSON과 runtime manifest를 병합할 수 있으며, 전체 입력에 공통 크기·자막 수 제한이 적용됩니다. 프리셋은 파일 저장에 성공한 뒤 반영되며, 이름 변경으로 다른 사용자 프리셋을 덮어쓸 때는 확인합니다.
 
 | 메뉴 | 단축키 | 형식 |
 |------|--------|------|
@@ -344,12 +346,20 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 
 업데이트 채널의 기본 manifest URL과 공개키는 배포 빌드에 내장됩니다. 개발 실행에서는 자동 설치를 하지 않으며, 업데이트 helper는 다음 시작 시 성공·rollback·실패 결과를 알려줍니다. 첫 updater 도입 이전 버전은 GitHub Releases에서 수동 설치가 필요합니다.
 
+업데이트 도중 전원 차단 등으로 기존 바로가기가 실행되지 않으면, 일반 설치는 `%LOCALAPPDATA%\AssemblySubtitle\Extractor\updates`, portable은 EXE 옆 `.updates`에서 해당 업데이트의 `recover-update-helper-*.cmd`를 실행하세요. 이 복구 진입점은 EXE 교체 전에 만들어지며, 설치 EXE가 없을 때만 같은 디렉터리의 백업을 복원하고 재실행합니다. 이미 설치 EXE가 있으면 덮어쓰지 않습니다. 이 복구 파일은 이번 개선을 포함해 빌드한 버전부터 생성됩니다.
+
+실시간 TXT는 새 자막을 시각과 함께 기록하고, 같은 자막의 확장은 `+ 추가 내용`, AI 정정은 `[정정 자막ID] 수정된 전체 내용`으로 남깁니다. 같은 관측·keepalive는 중복 기록하지 않습니다. 최종 정리본이 필요하면 수집 후 TXT 또는 세션 JSON을 저장하세요. 일반 JSON 불러오기는 공통 byte·entry 상한을 검사하며 진행 표시와 취소를 지원합니다. JSON 문법 파싱 자체는 완료 후 취소를 확인합니다.
+
+Windows가 기본 지원 대상입니다. Windows ARM64에서는 소스 GUI·Chrome과 frozen EXE 창 생성 smoke를 검증했습니다. 실제 한컴 COM, Windows x64 빌드와 macOS/Linux는 별도 실기기 검증이 필요합니다. QtWebEngine이 없는 테스트 환경에서는 DOM fixture만 skip됩니다. 설치된 Chrome으로 같은 오프라인 검증을 실행하려면 PowerShell에서 `$env:KACC_TEST_BROWSER='chrome'; python -m pytest tests/test_capture_chrome_parity_p1.py tests/test_audit_remediation_20261103.py -q`를 사용하세요. 이 경로는 Selenium Manager가 드라이버를 준비할 때 네트워크를 사용할 수 있습니다.
+
 자세한 아키텍처·개발 가이드·파이프라인 고정 규칙은 아래 문서를 참고하세요.
 
 | 문서 | 내용 |
 |------|------|
 | [CLAUDE.md](CLAUDE.md) | 아키텍처, 핵심 규칙, 개발 가이드 |
 | [PROJECT_AUDIT.md](PROJECT_AUDIT.md) | 기능 감사·리스크·조치 현황 |
+| [PROJECT_AUDIT_FINAL.md](PROJECT_AUDIT_FINAL.md) | 최종 복구 경로 점검·수정·테스트·빌드 검증 |
+| [PROJECT_AUDIT_ADDITIONAL.md](PROJECT_AUDIT_ADDITIONAL.md) | 검색·문서 출력·프리셋·병합·편집 추가 감사 및 수정 |
 | [PROJECT_AUDIT_EXTENDED.md](PROJECT_AUDIT_EXTENDED.md) | 보안·동시성·성능·CI·패키징 확장 감사 |
 | [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | 릴리스·서명·프라이버시·CI 배포 체크리스트 |
 | [docs/CHROME_EXTENSION_PARITY.md](docs/CHROME_EXTENSION_PARITY.md) | Chrome 확장과 수집 계약 정합 |

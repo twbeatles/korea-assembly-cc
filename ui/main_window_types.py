@@ -53,6 +53,7 @@ if TYPE_CHECKING:
         _last_processed_raw: str
         _stream_start_time: float | None
         subtitles: list[SubtitleEntry]
+        _reflow_source_entries: list[SubtitleEntry] | None
         keywords: list[str]
         alert_keywords: list[str]
         _alert_keywords_cache: list[tuple[str, str]]
@@ -343,6 +344,9 @@ if TYPE_CHECKING:
             self,
             serialized_items: object,
             source: str = "",
+            *,
+            cancel_check: Callable[[], bool] | None = None,
+            progress: Callable[[int, int], None] | None = None,
         ) -> tuple[list[SubtitleEntry], int]: ...
         def _complete_loaded_session(self, payload: dict[str, Any]) -> bool: ...
         def _do_search(self) -> None: ...
@@ -551,6 +555,7 @@ if TYPE_CHECKING:
             sort_by_time: bool = True,
             existing_subtitles: list[SubtitleEntry] | None = None,
             dedupe_mode: str = "legacy_bucket",
+            strict: bool = False,
         ) -> list[SubtitleEntry]: ...
         def _nav_search(self, delta: int) -> None: ...
         def _update_search_count_label(

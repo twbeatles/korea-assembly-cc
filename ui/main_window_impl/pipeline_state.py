@@ -24,6 +24,7 @@ from core.models import CaptureSessionState, ObservedSubtitleRow, SubtitleEntry
 from core.subtitle_pipeline import (
     LiveRowCommitMeta,
     PipelineSourceMeta,
+    PipelineResult,
     apply_preview,
     apply_reset,
     commit_live_row,
@@ -42,6 +43,36 @@ PipelineStateBase = PipelineStateHost if TYPE_CHECKING else object
 
 
 class MainWindowPipelineStateMixin(PipelineStateBase):
+    def _publish_capture_commit(self, result: PipelineResult) -> None:
+        """Publish text changes after commit, outside the subtitle lock.
+
+        Appends are timestamped, extensions contain only their suffix, and AI
+        corrections are explicit replacement records. Timing-only updates do
+        not write or alert again.
+        """
+        entry = result.appended_entry or result.updated_entry
+        if entry is None or entry.text == result.previous_text:
+            return
+        text = entry.text
+        previous = result.previous_text
+        if result.appended_entry is not None:
+            line = f"[{entry.timestamp.strftime('%H:%M:%S')}] {text}\n"
+        elif text.startswith(previous):
+            line = f"+ {text[len(previous):].strip()}\n"
+        else:
+            line = f"[정정 {entry.entry_id}] {text}\n"
+        self._write_realtime_line(line)
+        if not previous:
+            self._check_keyword_alert(text)
+        else:
+            # Corrected text can introduce a keyword across the changed span.
+            # Alert only for keywords absent from the prior committed version.
+            keywords = self.__dict__.get("_alert_keywords_cache", [])
+            introduced = [original for original, lowered in keywords
+                          if lowered in text.lower() and lowered not in previous.lower()]
+            if introduced:
+                self._check_keyword_alert(" ".join(introduced))
+
     def _bind_subtitles_to_capture_state(self) -> None:
         state = self.__dict__.get("capture_state")
         if not isinstance(state, CaptureSessionState):
@@ -183,6 +214,7 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
                 source_mode=str(candidate.get("source_mode", "") or "fallback"),
             ),
         )
+        self._publish_capture_commit(preview_result)
         appended_entries = (
             [preview_result.appended_entry] if preview_result.appended_entry else []
         )
@@ -490,6 +522,8 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             frame_path=frame_path,
             timestamp=now.timestamp(),
         )
+        was_structured = self.live_capture_ledger.capture_mode == "structured"
+        initial_baseline = self.capture_state.confirmed_compact
         reconciliation = reconcile_live_capture(self.live_capture_ledger, event)
         self.live_capture_ledger = reconciliation.ledger
         settings = self._current_capture_settings()
@@ -507,7 +541,10 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
 
                 baseline_compact = live_row.baseline_compact
                 if baseline_compact is None:
-                    baseline_compact = self.capture_state.confirmed_compact
+                    # A new stable identity is a distinct utterance, even if it
+                    # repeats the previous row verbatim. Initial/fallback handoff
+                    # still uses the captured global baseline to avoid replay.
+                    baseline_compact = "" if was_structured and row_change.is_new else initial_baseline
 
                 meta = LiveRowCommitMeta(
                     selector=live_row.selector or selector,
@@ -545,6 +582,7 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
                         ),
                     )
 
+                self._publish_capture_commit(result)
                 changed = changed or result.changed
                 if result.appended_entry:
                     appended_entries.append(result.appended_entry)

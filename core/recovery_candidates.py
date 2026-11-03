@@ -34,6 +34,18 @@ def _timestamp(value: str, path: Path) -> float:
             return 0.0
 
 
+def _resolve_candidate_resource(root: Path, name: str) -> Path:
+    relative = Path(name)
+    if not name or relative.anchor:
+        raise ValueError("recovery resource must use a relative path")
+    resolved = (root / relative).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("recovery resource is outside the archive") from exc
+    return resolved
+
+
 def inspect_recovery_candidate(
     path: str | Path,
     *,
@@ -66,13 +78,14 @@ def inspect_recovery_candidate(
                     continue
                 entry_count += max(0, int(item.get("entry_count", 0) or 0))
                 relative_path = str(item.get("path", "") or "")
-                if not relative_path or not (candidate_path.parent / relative_path).is_file():
+                segment_path = _resolve_candidate_resource(candidate_path.parent, relative_path)
+                if not segment_path.is_file():
                     warnings.append(f"missing segment: {relative_path or '<empty>'}")
             tail_name = str(
                 raw.get("tail_checkpoint", "tail_checkpoint.json")
                 or "tail_checkpoint.json"
             )
-            tail_path = candidate_path.parent / tail_name
+            tail_path = _resolve_candidate_resource(candidate_path.parent, tail_name)
             if tail_path.is_file():
                 try:
                     tail = read_limited_json_file(
