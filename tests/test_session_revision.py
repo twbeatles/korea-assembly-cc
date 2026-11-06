@@ -56,6 +56,7 @@ def test_reset_session_revision_establishes_new_baseline() -> None:
 
 def test_async_save_result_carries_snapshot_revision() -> None:
     win = _build_window()
+    win._build_session_save_context = lambda: ("", "", 0)
     snapshot_revision = win._mark_session_dirty()
     win._session_save_in_progress = False
     win._set_status = lambda *_args, **_kwargs: None

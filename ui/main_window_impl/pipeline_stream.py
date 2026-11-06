@@ -356,19 +356,21 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
 
         remaining = _budget_remaining()
         if remaining > 0:
-            drained += self._drain_coalesced_worker_messages(
-                max_items=remaining,
-                allowed_types=set(self._PREVIEW_DRAIN_MESSAGE_TYPES),
-                handler=preview_handler,
-            )
-
-        remaining = _budget_remaining()
-        if remaining > 0:
             drained += self._drain_overflow_passthrough_items(
                 max_items=remaining,
                 handler=preview_handler,
                 allowed_types=set(self._PREVIEW_DRAIN_MESSAGE_TYPES),
                 requeue_others=requeue_others,
+            )
+
+        remaining = _budget_remaining()
+        if remaining > 0:
+            # The coalesced preview is the newest complete DOM snapshot; apply
+            # it after older overflow resets/segments, before terminal retire.
+            drained += self._drain_coalesced_worker_messages(
+                max_items=remaining,
+                allowed_types=set(self._PREVIEW_DRAIN_MESSAGE_TYPES),
+                handler=preview_handler,
             )
 
         if not unlimited and limit is not None and drained >= int(limit):

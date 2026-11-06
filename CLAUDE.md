@@ -4,7 +4,9 @@
 
 ## 1. 프로젝트 개요
 
-최신 감사·검증 기준은 [최종 감사](PROJECT_AUDIT_FINAL.md)와 [추가 감사](PROJECT_AUDIT_ADDITIONAL.md)를 참고한다. 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
+2026-11-05 감사 후속: 세션 저장은 파일 선택 후 entries·manifest·revision을 확보하고, `SessionSaveSnapshot`으로 메타데이터까지 UI 스레드에서 고정한다. 종료 메시지는 pending preview 소진 후 run을 폐기하며, 최종 fallback은 일반 live commit의 기록·알림·dirty·tail 갱신 경로를 사용한다. structured preview는 이미 확정된 row이므로 snapshot/종료에서 suffix fallback으로 재생하지 않는다. 수동 복구 메뉴는 포인터 없이도 동작하고, 후보 검색은 취소 가능한 background worker에서 후보 수·경로 수·전체 읽기 budget을 적용한다. 회귀: `tests/test_audit_followup_20261105.py`. 최신 실행 결과와 외부 검증 한계는 `PROJECT_AUDIT.md`의 후속 구현 기록을 따른다.
+
+최신 감사·검증 기준은 [PROJECT_AUDIT.md](PROJECT_AUDIT.md)의 후속 구현 기록을 참고한다. 과거 개별 감사 문서는 Git 이력에 보존하며, 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
 - **버전**: v16.14.16
@@ -334,7 +336,7 @@ korea-assembly-cc/
 - **종료 가드**: `_exit_in_progress`로 종료 중 start/파괴적 액션 차단
 - **hydrate**: `HYDRATE_MAX_ENTRIES` 상한, 엔트리 단위 cancel, result_token 슬롯 전달
 - **검색 UI**: 결과 절단 시 `상위 N건+` 표시
-- **CI/문서**: `.github/workflows/ci.yml`, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT_EXTENDED.md`
+- **CI/문서**: `.github/workflows/ci.yml`, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT.md` (과거 확장 감사는 Git 이력)
 - **회귀 기준선**: `pytest -q` 332 pass / 2 skipped, `pyright` 0 errors
 - **회귀 파일**: `tests/test_project_audit_20260729.py`, `tests/test_project_audit_extended_20260729.py`
 

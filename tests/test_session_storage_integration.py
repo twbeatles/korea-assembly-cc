@@ -152,14 +152,14 @@ def test_async_save_freezes_entries_while_capture_changes(stored_session, tmp_pa
     win, expected, tail, messages, _recovery = stored_session
     entered = threading.Event()
     release = threading.Event()
-    context = win._build_session_save_context
+    write_snapshot = win._write_session_snapshot
 
-    def paused_context():
+    def paused_write(*args, **kwargs):
         entered.set()
         assert release.wait(timeout=5), "test failed to release save worker"
-        return context()
+        return write_snapshot(*args, **kwargs)
 
-    win._build_session_save_context = paused_context
+    win._write_session_snapshot = paused_write
     win._mark_session_dirty()
     target = tmp_path / "async.json"
     try:
@@ -184,12 +184,12 @@ def test_snapshot_remains_complete_while_archive_manifest_advances(stored_sessio
     win, expected, tail, messages, _recovery = stored_session
     captured_root, captured_manifest = win._snapshot_runtime_stream_context()
     entered, release = threading.Event(), threading.Event()
-    context = win._build_session_save_context
-    def pause_before_read():
+    write_snapshot = win._write_session_snapshot
+    def pause_before_read(*args, **kwargs):
         entered.set()
         assert release.wait(timeout=5)
-        return context()
-    win._build_session_save_context = pause_before_read
+        return write_snapshot(*args, **kwargs)
+    win._write_session_snapshot = pause_before_read
     output = tmp_path / "concurrent.json"
     try:
         assert win._start_async_session_snapshot_save(str(output), tail,

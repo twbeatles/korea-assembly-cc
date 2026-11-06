@@ -82,6 +82,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 - 저장 도중 편집·수집이 계속되어도 revision 기준으로 미저장 변경을 정확히 유지하고, DB 재시도는 operation ID로 중복 저장 방지
 - 대용량 JSON/runtime/DB 세션은 공통 byte·entry budget과 점진 DB 로드(progress/cancel)를 적용
 - 5분마다 자동 백업(일반 세션: `backup_*.json`, 장시간 추출: runtime manifest/tail 복구 포인터), 비정상 종료 후 재시작 시 여러 복구 후보를 비교·선택
+- 복구 포인터가 없거나 손상되면 `파일 → 백업에서 세션 복구...`에서 기존 백업을 검색합니다. 후보 검색은 백그라운드에서 실행하고 취소할 수 있으며, 취소·실패 시 현재 세션을 유지합니다. 정상 종료 후에는 자동 복구창을 반복 표시하지 않습니다.
 - DB 히스토리에서 같은 세션의 저장 계보 (`[최신]`, `[이전 저장본 n/N]`) 확인
 
 ### ⚙️ 편의 기능
@@ -111,7 +112,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 
 ### 1. Python 설치
 
-Python **3.10 이상**에서 동작합니다. CI는 **3.15** 단일 버전, 로컬 개발은 3.10–3.15 범위를 지원합니다.  
+Python **3.10 이상**에서 동작합니다. 전체 CI는 Windows/Python **3.15**이며, 호환성 작업은 Windows/3.10과 macOS·Linux/3.15에서 핵심 회귀·격리 저장소 창 생성 smoke를 실행하도록 구성했습니다. 실제 CI 통과 여부는 해당 실행 결과로 확인하세요.
 개발·검증·빌드 시 `requirements-dev.txt` 핀을 그대로 설치하세요.  
 [Python 공식 사이트](https://www.python.org/downloads/)에서 다운로드하세요.
 
@@ -307,7 +308,7 @@ HWP 저장이 실패하면 기존 파일은 유지됩니다. 세션 병합은 �
 ```bash
 pip install pyinstaller
 pyinstaller subtitle_extractor.spec
-# dist/국회의사중계자막추출기 v16.14.11.exe
+# dist/국회의사중계자막추출기 v16.14.16.exe
 ```
 
 **Portable 모드**: EXE 파일 옆에 `portable.flag` 파일을 만들어두면 로그·세션·DB·설정을 EXE 폴더에 저장합니다.  
@@ -357,10 +358,7 @@ Windows가 기본 지원 대상입니다. Windows ARM64에서는 소스 GUI·Chr
 | 문서 | 내용 |
 |------|------|
 | [CLAUDE.md](CLAUDE.md) | 아키텍처, 핵심 규칙, 개발 가이드 |
-| [PROJECT_AUDIT.md](PROJECT_AUDIT.md) | 기능 감사·리스크·조치 현황 |
-| [PROJECT_AUDIT_FINAL.md](PROJECT_AUDIT_FINAL.md) | 최종 복구 경로 점검·수정·테스트·빌드 검증 |
-| [PROJECT_AUDIT_ADDITIONAL.md](PROJECT_AUDIT_ADDITIONAL.md) | 검색·문서 출력·프리셋·병합·편집 추가 감사 및 수정 |
-| [PROJECT_AUDIT_EXTENDED.md](PROJECT_AUDIT_EXTENDED.md) | 보안·동시성·성능·CI·패키징 확장 감사 |
+| [PROJECT_AUDIT.md](PROJECT_AUDIT.md) | 현재 감사·수정 상태, 실행한 검증과 남은 실기기 확인. 과거 개별 감사 문서는 Git 이력에 보존 |
 | [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | 릴리스·서명·프라이버시·CI 배포 체크리스트 |
 | [docs/CHROME_EXTENSION_PARITY.md](docs/CHROME_EXTENSION_PARITY.md) | Chrome 확장과 수집 계약 정합 |
 | [docs/HWPX_EXPORT_ANALYSIS.md](docs/HWPX_EXPORT_ANALYSIS.md) | HWPX 내보내기 설계·스키마 방침 |
@@ -370,6 +368,13 @@ Windows가 기본 지원 대상입니다. Windows ARM64에서는 소스 GUI·Chr
 ---
 
 ## 📝 변경 이력
+
+### 감사 후속 수정 (2026-11-05, 배포 버전 유지)
+
+- 파일 선택 후 저장 데이터·archive manifest·revision을 함께 확보하고 메타데이터까지 고정하여, 저장 중 새 발언을 저장 완료로 오판하지 않도록 수정했습니다.
+- 종료 메시지 전에 대기 자막을 반영하고, 마지막 fallback의 실시간 기록·키워드 알림·미저장 상태·복구 정보를 갱신합니다. 이미 확정된 structured row의 중복 snapshot도 차단했습니다.
+- 포인터 없이 실행할 수 있는 수동 복구 메뉴와 취소 가능한 백그라운드 후보 검색을 추가했습니다. 후보 수·읽기 용량·탐색 경로에 전체 상한을 적용합니다.
+- 새 회귀를 CI·릴리스 검증기에 포함하고 최소 Python 및 다른 OS의 소스 호환성 작업을 추가했습니다. 로컬 전체 테스트는 **723 passed / 3 skipped**, pyright는 **202 files / 0 errors / 0 warnings**였습니다. 원격 CI·실기기 미확인 항목은 [감사 문서](PROJECT_AUDIT.md)에 구분했습니다.
 
 ### v16.14.16 (2026-10-22)
 - **Chrome 확장 수집 알고리즘 정합 2차 + 공유 계약 `parity/`** — 확장 저장소와 같은 내용의 `parity/capture-contract.json`·`pipeline-vectors.json` 으로 두 구현을 테스트(`tests/test_parity_contract.py`)와 `scripts/check_parity_sync.py` 로 대조

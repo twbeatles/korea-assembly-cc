@@ -45,6 +45,8 @@ COALESCED_WORKER_MESSAGE_ORDER = (
     "keepalive",
 )
 COALESCED_CONTROL_MESSAGE_TYPES = {
+    "recovery_scan_done",
+    "recovery_scan_progress",
     "db_task_error",
     "db_task_result",
     "hydrate_cancelled",

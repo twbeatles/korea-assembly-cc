@@ -4,7 +4,9 @@
 
 ## 1. 프로젝트 개요
 
-최신 감사·검증 기준은 [최종 감사](PROJECT_AUDIT_FINAL.md)와 [추가 감사](PROJECT_AUDIT_ADDITIONAL.md)를 참고한다. 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
+최신 감사·검증 기준은 [PROJECT_AUDIT.md](PROJECT_AUDIT.md)의 후속 구현 기록을 참고한다. 과거 개별 감사 문서는 Git 이력에 보존하며, 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
+
+2026-11-05 후속 수정은 파일 선택 후 저장 snapshot·revision·메타데이터 고정, terminal 이전 pending preview 소진, 최종 fallback의 TXT·알림·dirty·tail 갱신, structured row의 snapshot 중복 방지다. `파일 → 백업에서 세션 복구...`는 포인터 없이도 동작하며, 백그라운드 후보 검색에 취소·후보 수·전체 읽기·경로 수 budget을 적용한다. 회귀는 `tests/test_audit_followup_20261105.py`, 파이프라인 계약은 `PIPELINE_LOCK.md`를 따른다. 로컬 전체 pytest는 723 passed / 3 skipped, pyright는 202 files / 0 errors / 0 warnings였다. 실제 중계 장시간 운용·HWP 저장·다른 OS의 원격 CI 결과는 별도 확인한다.
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
 - **버전**: v16.14.16
@@ -23,7 +25,7 @@
 
 ## 2. 기술 스택
 
-- **언어**: Python 3.10+ (CI 3.15, 로컬 3.10–3.15)
+- **언어**: Python 3.10+ (전체 CI Windows/3.15, 소스 호환성 Windows/3.10·macOS/Linux/3.15; 원격 실행 결과는 별도 확인)
 - **GUI**: PySide6 (Qt)
 - **웹 자동화**: Selenium + Chrome WebDriver
 - **동시성**: threading, bounded `queue.Queue` wrapper (`MainWindowMessageQueue`)
@@ -493,7 +495,7 @@ pip install -r requirements-dev.txt
 - soft_resync 정합 시 긴 compact 유지, orphan segment/runtime archive 연령 GC
 - 로그 INFO 기본·`safe_log_text`, 종료 중 `_exit_in_progress` 가드
 - hydrate 상한·result_token 전달, 검색 `상위 N건+` UI
-- GitHub Actions CI, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT_EXTENDED.md`
+- GitHub Actions CI, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT.md` (과거 확장 감사는 Git 이력)
 - 회귀: `pytest -q` 332 pass / 2 skipped, `pyright` 0 errors
 
 ## 9.9.4a v16.14.8 PROJECT_AUDIT 후속 개선 (2026-07-22)

@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import uuid
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Mapping
 
 from core.file_io import canonical_path_key
 from core.recovery_candidates import (
@@ -10,6 +13,54 @@ from core.recovery_candidates import (
 from ui.dialogs import RecoveryCandidateDialog
 from ui.main_window_common import *
 from ui.main_window_types import MainWindowHost
+
+
+@dataclass(frozen=True)
+class SessionSaveSnapshot:
+    """Detached entries and read-only context, captured without yielding to Qt.
+
+    Entries are owned clones; workers must treat them as read-only. Runtime
+    segments are immutable files pinned by this snapshot's root and manifest.
+    """
+
+    entries: tuple[SubtitleEntry, ...]
+    revision: int
+    runtime_root: Path | None
+    manifest: tuple[Mapping[str, Any], ...]
+    url: str
+    committee: str
+    duration: int
+    created_at: str
+    lineage_id: str
+    parent_session_id: int | None
+    capture_quality: Mapping[str, int]
+    operation_id: str
+    version: str
+
+    @classmethod
+    def capture(
+        cls, host: Any, entries: list[SubtitleEntry], *,
+        runtime_root: Path | None = None,
+        runtime_manifest: list[dict[str, Any]] | None = None,
+        operation_id: str | None = None,
+    ) -> "SessionSaveSnapshot":
+        url, committee, duration = host._build_session_save_context()
+        manifest = runtime_manifest if runtime_manifest is not None else list(
+            host.__dict__.get("_runtime_segment_manifest", [])
+        )
+        return cls(
+            entries=tuple(entry.clone() for entry in entries),
+            revision=host._get_session_revision(),
+            runtime_root=runtime_root if runtime_root is not None else host.__dict__.get("_runtime_session_root"),
+            manifest=tuple(MappingProxyType(dict(item)) for item in manifest),
+            url=url, committee=committee, duration=duration,
+            created_at=datetime.now().isoformat(),
+            lineage_id=host._ensure_session_lineage_id(),
+            parent_session_id=host.__dict__.get("current_db_session_id"),
+            capture_quality=MappingProxyType(dict(host._get_capture_quality_payload())),
+            operation_id=str(operation_id or "").strip() or uuid.uuid4().hex,
+            version=Config.VERSION,
+        )
 
 
 class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
@@ -51,9 +102,13 @@ class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
             if on_success is not None:
                 self._set_pending_deferred_action(action_name, on_success)
 
-            snapshot_entries = [entry.clone() for entry in prepared_entries]
-            snapshot_revision = self._get_session_revision()
-            save_operation_id = uuid.uuid4().hex
+            snapshot = SessionSaveSnapshot.capture(
+                self, prepared_entries, runtime_root=runtime_root,
+                runtime_manifest=runtime_manifest,
+            )
+            snapshot_entries = list(snapshot.entries)
+            snapshot_revision = snapshot.revision
+            save_operation_id = snapshot.operation_id
             self._session_save_in_progress = True
             self._set_status("세션 저장 중...", "running")
 
@@ -66,6 +121,7 @@ class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
                         save_operation_id=save_operation_id,
+                        save_snapshot=snapshot,
                     )
                     info["snapshot_revision"] = snapshot_revision
                     info["save_operation_id"] = save_operation_id
@@ -102,19 +158,20 @@ class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
             runtime_root: Path | None = None,
             runtime_manifest: list[dict[str, Any]] | None = None,
             save_operation_id: str | None = None,
+            save_snapshot: SessionSaveSnapshot | None = None,
         ) -> dict[str, Any]:
             """현재 세션 스냅샷을 JSON(+선택적 DB)으로 동기 저장한다."""
-            snapshot_entries = [entry.clone() for entry in prepared_entries]
-            current_url, committee_name, duration = self._build_session_save_context()
-            created_at = datetime.now().isoformat()
-            operation_id = str(save_operation_id or "").strip() or uuid.uuid4().hex
-            capture_quality = self._get_capture_quality_payload()
-            lineage_id = self._ensure_session_lineage_id()
-            manifest_items = (
-                runtime_manifest
-                if runtime_manifest is not None
-                else list(self.__dict__.get("_runtime_segment_manifest", []))
+            snapshot = save_snapshot or SessionSaveSnapshot.capture(
+                self, prepared_entries, runtime_root=runtime_root,
+                runtime_manifest=runtime_manifest, operation_id=save_operation_id,
             )
+            snapshot_entries = list(snapshot.entries)
+            runtime_root = snapshot.runtime_root
+            current_url, committee_name, duration = snapshot.url, snapshot.committee, snapshot.duration
+            created_at, operation_id = snapshot.created_at, snapshot.operation_id
+            capture_quality = dict(snapshot.capture_quality)
+            lineage_id = snapshot.lineage_id
+            manifest_items = [dict(item) for item in snapshot.manifest]
             saved_count = sum(
                 int(item.get("entry_count", 0) or 0)
                 for item in manifest_items
@@ -133,12 +190,13 @@ class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
             utils.atomic_write_json_stream(
                 path,
                 head_items=[
-                    ("version", Config.VERSION),
+                    ("version", snapshot.version),
                     ("created", created_at),
                     ("url", current_url),
                     ("committee_name", committee_name),
                     ("lineage_id", lineage_id),
                     ("save_operation_id", operation_id),
+                    ("snapshot_revision", snapshot.revision),
                     ("capture_quality", capture_quality),
                 ],
                 sequence_key="subtitles",
@@ -169,10 +227,10 @@ class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
                             "prepared_entries": snapshot_entries,
                             "runtime_root": runtime_root,
                             "runtime_manifest": [dict(item) for item in manifest_items],
-                            "version": Config.VERSION,
+                            "version": snapshot.version,
                             "duration_seconds": duration,
                             "lineage_id": lineage_id,
-                            "parent_session_id": self.__dict__.get("current_db_session_id"),
+                            "parent_session_id": snapshot.parent_session_id,
                             "save_operation_id": operation_id,
                             "capture_quality": capture_quality,
                         }
@@ -224,6 +282,10 @@ class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
             """준비된 세션 스냅샷을 사용자 선택 경로에 동기 저장한다."""
             runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             snapshot_revision = self._get_session_revision()
+            snapshot = SessionSaveSnapshot.capture(
+                self, prepared_entries, runtime_root=runtime_root,
+                runtime_manifest=runtime_manifest,
+            )
             if not prepared_entries and not runtime_manifest:
                 QMessageBox.warning(self, "알림", "저장할 내용이 없습니다.")
                 return None
@@ -246,10 +308,11 @@ class MainWindowPersistenceSessionSaveMixin(MainWindowHost):
                         include_db=True,
                         runtime_root=runtime_root,
                         runtime_manifest=runtime_manifest,
+                        save_snapshot=snapshot,
                     )
                 except TypeError as exc:
                     err_text = str(exc)
-                    if "runtime_root" not in err_text and "runtime_manifest" not in err_text:
+                    if not any(key in err_text for key in ("runtime_root", "runtime_manifest", "save_snapshot")):
                         raise
                     info = self._write_session_snapshot(
                         path,

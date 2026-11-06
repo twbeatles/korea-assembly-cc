@@ -203,16 +203,25 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
         if not bool(getattr(self, "is_running", False)):
             return False
 
-        preview_result = apply_preview(
-            self.capture_state,
-            str(candidate.get("raw", "")),
-            now,
-            self._current_capture_settings(),
-            meta=PipelineSourceMeta(
+        return self._commit_fallback_preview(
+            str(candidate.get("raw", "")), now,
+            PipelineSourceMeta(
                 selector=str(candidate.get("selector", "") or ""),
                 frame_path=tuple(candidate.get("frame_path", ()) or ()),
                 source_mode=str(candidate.get("source_mode", "") or "fallback"),
             ),
+        )
+
+    def _commit_fallback_preview(
+        self, raw: str, now: datetime, meta: PipelineSourceMeta,
+    ) -> bool:
+        """Commit live fallback text, including final text after stop_event."""
+        preview_result = apply_preview(
+            self.capture_state,
+            raw,
+            now,
+            self._current_capture_settings(),
+            meta=meta,
         )
         self._publish_capture_commit(preview_result)
         appended_entries = (
@@ -362,6 +371,10 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
 
     def _build_prepared_capture_state(self) -> CaptureSessionState:
         self._ensure_capture_runtime_state()
+        # A structured preview is display text for rows already committed by
+        # identity. Replaying it through suffix fallback can duplicate a row.
+        if self.live_capture_ledger.capture_mode == "structured":
+            return self.capture_state.snapshot_clone()
         return flush_pending_previews(
             self.capture_state,
             datetime.now(),
@@ -370,8 +383,22 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
 
     def _materialize_pending_preview(self) -> None:
         self._ensure_capture_runtime_state()
-        self.capture_state = self._build_prepared_capture_state()
-        self._sync_capture_state_entries(force_refresh=False)
+        self._clear_fallback_commit_candidate()
+        state = self.capture_state
+        if self.live_capture_ledger.capture_mode == "structured":
+            return
+        changed = self._commit_fallback_preview(
+            state.preview_text, datetime.now(),
+            PipelineSourceMeta(
+                selector=state.current_selector,
+                frame_path=state.current_frame_path,
+            ),
+        )
+        if changed and not self.is_running:
+            self._start_backup_snapshot_write(
+                self._build_persistent_entries_snapshot(),
+                worker_name="FinalRecoverySnapshotWorker",
+            )
 
     def _build_prepared_entries_snapshot(self) -> list[SubtitleEntry]:
         return self._build_prepared_capture_state().entries

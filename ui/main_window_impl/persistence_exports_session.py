@@ -47,6 +47,10 @@ class MainWindowPersistenceExportsSessionMixin(MainWindowHost):
                 return
             if not path:
                 return
+            # The modal file chooser can process capture/segment-flush events.
+            # Capture entries and archive context only after it has returned.
+            prepared_entries = self._build_persistent_entries_snapshot()
+            runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
             self._start_async_session_snapshot_save(
                 path,
                 prepared_entries,

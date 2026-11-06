@@ -239,6 +239,18 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
     def _handle_message(self, msg_type, data):
         pipeline_mod = _pipeline_public()
         try:
+            # Terminal delivery is a barrier for the active run's data, even
+            # when it bypassed the full worker queue. Keep the run alive until
+            # normal, overflow and coalesced previews have reached the state.
+            if msg_type in {"finished", "error", "subtitle_not_found"} and (
+                self.__dict__.get("message_queue") is not None
+            ):
+                was_stopping = self._is_stopping
+                self._is_stopping = True
+                try:
+                    self._drain_pending_previews(requeue_others=True)
+                finally:
+                    self._is_stopping = was_stopping
             # stop 중에도 finished/error는 멱등 흡수한다(큐에서 dequeue 후 유실 방지).
             if self._is_stopping and msg_type not in (
                 "db_task_result",
@@ -256,6 +268,8 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 "session_load_progress",
                 "session_load_failed",
                 "session_load_json_error",
+                "recovery_scan_done",
+                "recovery_scan_progress",
             ):
                 return
             if msg_type == "preview" and isinstance(data, dict):
@@ -328,6 +342,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     self._retire_capture_run()
                     self.worker = None
                     return
+                self._materialize_pending_preview()
                 self._retire_capture_run()
                 self.worker = None
                 self.progress.hide()
@@ -386,6 +401,12 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     f"수집 완료 — {summary}" if summary else "수집 완료",
                     "success",
                 )
+
+            elif msg_type == "recovery_scan_done":
+                self._handle_recovery_scan_done(data)
+
+            elif msg_type == "recovery_scan_progress":
+                self._handle_recovery_scan_progress(data)
 
             elif msg_type == "session_save_done":
                 self._session_save_in_progress = False

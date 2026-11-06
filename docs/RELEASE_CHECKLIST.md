@@ -134,4 +134,35 @@ pyinstaller --clean subtitle_extractor.spec
 ### 최종 감사 회귀 (2026-11-03)
 
 - [ ] `tests/test_recovery_candidates.py`: 크기 초과 포인터 거절, archive 밖 tail/segment 참조 거절, 정상 후보 정렬·중복 제거·누락 경고 유지
-- [ ] [최종 감사](../PROJECT_AUDIT_FINAL.md)의 자동 검증 결과와 실제 한컴 COM·x64·다른 볼륨 미검증 범위를 구분해 기록
+- [ ] [감사 문서](../PROJECT_AUDIT.md)의 자동 검증 결과와 실제 한컴 COM·x64·다른 볼륨 미검증 범위를 구분해 기록. 과거 최종 감사는 Git 이력 참고
+
+### 저장·종료 경계 감사 후속 (2026-11-05)
+
+- [ ] `tests/test_audit_followup_20261105.py`: 실제 modal 파일 선택 중 수집·segment flush 이후 JSON/DB 내용·revision 일치
+- [ ] 용량 1·500 worker 큐의 terminal overflow와 coalesced 최신 preview 보존, 중복 종료·새 run의 stale 메시지 거절
+- [ ] 400ms 전에 중지한 fallback의 자막·실시간 TXT·키워드·dirty·tail·복구 포인터 보존
+- [ ] 포인터 없는 수동 복구, 손상 포인터 안내, 후보 검색 취소·최종 완료 직전 취소 시 현재 세션 보존
+- [ ] 후보 1,000개·전체 256MiB·탐색 경로 10,000개 상한과 진행 표시 확인. 초과 시 부분 후보를 정상 결과로 적용하지 않음
+- [ ] Windows native/비native 파일 대화상자의 timer 동작 차이와 최종 저장 상태를 각각 확인
+- [ ] Windows 3.10 및 macOS/Linux 3.15 compatibility job의 실제 결과 확인. 설정 추가를 통과 결과로 간주하지 않음
+
+오프라인 장기 검증은 사용자 저장소와 분리된 소스 복사본에서 실행합니다. 이 fixture는 임시 DB·INI·archive를 사용하며 실제 생중계 네트워크 재연결을 대신하지 않습니다.
+
+```powershell
+$env:QT_QPA_PLATFORM='offscreen'
+$env:KACC_SOAK_SECONDS='3600'
+python -m pytest tests/test_audit_followup_20261105.py -k offline_capture_soak -q -s
+Remove-Item Env:KACC_SOAK_SECONDS
+```
+
+실기기 시나리오의 입력과 통과 기준:
+
+| 환경·입력 | 확인할 결과 |
+|---|---|
+| 실제 중계 2시간, 파일 선택 중 발언, 네트워크 30초 차단을 3회 | 재연결 안내와 마지막 관측/저장 시각 일치, 저장 뒤 새 변경은 dirty 유지 |
+| 한컴 설치 PC, 기존 HWP에 저장, 읽기 전용·다른 프로그램의 공유 잠금 | 성공 문서는 한컴에서 열림, 실패 시 기존 파일 해시 동일·실패 안내 |
+| Windows x64·ARM64의 새 frozen EXE, 별도 물리 볼륨에 staging | import/storage/window smoke exit 0, 교체 성공 또는 기존 EXE 유지 |
+| 업데이트 두 rename 사이 강제 중단 후 복구 launcher | target 부재 시에만 backup 복원, target 존재 시 보존, 다음 시작 결과 안내 |
+| pointer 손상·segment 변조·disk-full 후 재시작 | 수동 복구 진입 가능, 잘못된 archive 정상 로드 금지, 현재 세션 보존 |
+
+각 항목은 실행 일시·OS/아키텍처·입력·출력 파일 해시·로그·pass/fail을 남긴 뒤 체크합니다. 인증서 서명·공개 배포·물리 장비 시험은 자동 회귀 통과와 구분합니다.

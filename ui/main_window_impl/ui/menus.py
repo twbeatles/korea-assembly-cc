@@ -56,6 +56,10 @@ class MainWindowUIMenuMixin(MainWindowHost):
             self.load_session_action.triggered.connect(self._load_session)
             file_menu.addAction(self.load_session_action)
 
+            recover_session = QAction("백업에서 세션 복구...", self)
+            recover_session.triggered.connect(self._recover_session)
+            file_menu.addAction(recover_session)
+
             file_menu.addSeparator()
 
             export_stats = QAction("📊 통계 내보내기", self)
