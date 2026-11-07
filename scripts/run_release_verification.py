@@ -153,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             "tests/test_audit_remediation_20261103.py",
             "tests/test_additional_audit_20261103.py",
             "tests/test_audit_followup_20261105.py",
+            "tests/test_audit_followup_20261107.py",
             "tests/test_recovery_candidates.py",
             "tests/test_session_storage_integration.py",
             "tests/test_database_save_idempotency.py",

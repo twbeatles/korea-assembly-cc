@@ -6,7 +6,7 @@
 별도 프로그램 설치 없이 브라우저에서 바로 사용하고 싶다면 [Chrome 확장 프로그램](https://chromewebstore.google.com/detail/khchppfkjljacdhohihlpkbbkddmoghk)을 이용할 수도 있습니다.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![PyQt6](https://img.shields.io/badge/GUI-PySide6-green)
+![PySide6](https://img.shields.io/badge/GUI-PySide6-green)
 ![Selenium](https://img.shields.io/badge/Automation-Selenium-orange)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20웹%20스토어-확장프로그램-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/khchppfkjljacdhohihlpkbbkddmoghk)
@@ -368,6 +368,12 @@ Windows가 기본 지원 대상입니다. Windows ARM64에서는 소스 GUI·Chr
 ---
 
 ## 📝 변경 이력
+
+### 감사 후속 수정 (2026-11-07, 배포 버전 유지)
+
+- 내부 메시지 큐가 가득 찬 직후 수집이 끝나면 마지막 발언이 빠질 수 있던 문제를 고쳤습니다. 순서가 어긋나 도착한 자막 관측도 버리지 않고 순서대로 반영합니다.
+- 비정상 종료된 장시간 세션 보관본이 다른 프로그램의 같은 프로세스 번호 때문에 `백업에서 세션 복구` 목록에서 사라지던 문제를 고쳤습니다.
+- 로컬 전체 테스트 **715 passed / 20 skipped**(QtWebEngine이 없는 ARM64에서 브라우저 DOM 17건 skip, Chrome으로 별도 통과), pyright **0 errors / 0 warnings**. 상세는 [감사 문서](PROJECT_AUDIT.md)를 참고하세요.
 
 ### 감사 후속 수정 (2026-11-05, 배포 버전 유지)
 

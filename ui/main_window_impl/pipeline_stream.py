@@ -373,6 +373,10 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
                 handler=preview_handler,
             )
 
+        # Previews held after a sequence gap are newer complete DOM windows.
+        # Apply them in order before the caller finalizes or retires the run.
+        drained += self._drain_held_previews(handler=preview_handler)
+
         if not unlimited and limit is not None and drained >= int(limit):
             logger.warning("preview 큐 소진 제한 도달: max_items=%s", limit)
 

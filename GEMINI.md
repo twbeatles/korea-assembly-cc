@@ -8,6 +8,8 @@
 
 2026-11-05 후속 수정은 파일 선택 후 저장 snapshot·revision·메타데이터 고정, terminal 이전 pending preview 소진, 최종 fallback의 TXT·알림·dirty·tail 갱신, structured row의 snapshot 중복 방지다. `파일 → 백업에서 세션 복구...`는 포인터 없이도 동작하며, 백그라운드 후보 검색에 취소·후보 수·전체 읽기·경로 수 budget을 적용한다. 회귀는 `tests/test_audit_followup_20261105.py`, 파이프라인 계약은 `PIPELINE_LOCK.md`를 따른다. 로컬 전체 pytest는 723 passed / 3 skipped, pyright는 202 files / 0 errors / 0 warnings였다. 실제 중계 장시간 운용·HWP 저장·다른 OS의 원격 CI 결과는 별도 확인한다.
 
+2026-11-07 후속 수정: sequence gap 뒤 도착한 preview(완전한 DOM 창)를 버리지 않고 보류했다가 coalesced snapshot과 함께 sequence 순서로 적용하며, 반영된 것보다 오래된 coalesced snapshot은 무시한다. runtime archive `owner.json`은 프로세스 생성 marker를 기록해 PID 재사용을 소유자 종료로 판정한다. legacy `error`/`subtitle_not_found` handler는 `finished`와 같은 종료 finalize를 공유한다. 회귀는 `tests/test_audit_followup_20261107.py`.
+
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
 - **버전**: v16.14.16
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
@@ -463,7 +465,7 @@ pip install -r requirements-dev.txt
 - `pytest -q` 85 pass, `pyright` 0 errors
 
 ## 9.9.4f 의존성 전면 업그레이드 + CI Python 3.15 (2026-10-13)
-- `requirements-dev.txt` 전면 상향: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
+- `requirements-dev.txt` 전면 상향: PySide6 6.12.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
 - cryptography 47+에 Windows ARM64 휠이 없어 ARM64에서 `pip install` 전체가 깨지므로 `platform_machine` 조건 핀(ARM64만 46.0.3)으로 둔다. x64 CI는 50.0.2 휠로 설치된다.
 - CI(`.github/workflows/ci.yml`)를 Python 3.15 단일 버전으로 전환한다. 프로젝트 `.venv` 격리 검증을 기준으로 삼는다.
 - 회귀 기준선: `pytest -q` 486 pass / 2 skipped, `pyright` 0 errors / 0 warnings, `--smoke` 정상.
@@ -543,7 +545,7 @@ pip install -r requirements-dev.txt
 - runtime manifest 복구는 best-effort salvage로 동작하며, manifest JSON 손상 시 sibling `segment_*.json` + `tail_checkpoint.json`에서 복구를 시도하고 제외된 파일/항목 수를 사용자 요약에 노출한다.
 - 빈 URL 세션 로드 시 stale `current_url`을 비우고, recovery pointer는 복구 거절/복구 성공 시 즉시 지우지 않으며 성공한 JSON 저장 또는 정상 종료에서만 정리한다.
 - `pyrightconfig.json` / `.vscode/settings.json`은 `typings/`를 `stubPath`/`extraPaths`로 명시하고 `.pytest_tmp`를 분석 범위에서 제외하며, 로컬 stub 환경의 `reportMissingModuleSource` 경고를 끈다.
-- `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance에서 동일하게 해석된다.
+- `typings/PySide6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance에서 동일하게 해석된다.
 - 당시 기준선은 `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings 이다.
 
 ## 9.9.8 v16.14.7 저장소 / 세션 안전성 보강 (2026-04-08)

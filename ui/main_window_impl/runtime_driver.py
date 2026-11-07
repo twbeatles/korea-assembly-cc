@@ -668,6 +668,9 @@ class MainWindowRuntimeDriverMixin(RuntimeBase):
                 values = set(self.__dict__.get(state_name, set()))
                 values.discard(int(target_run_id))
                 setattr(self, state_name, values)
+            held = self.__dict__.get("_preview_held_by_run")
+            if isinstance(held, dict):
+                held.pop(int(target_run_id), None)
 
     def _is_active_capture_run(self, run_id: int | None) -> bool:
         return run_id is not None and self.__dict__.get("_active_capture_run_id") == int(run_id)

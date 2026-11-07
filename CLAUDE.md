@@ -6,6 +6,8 @@
 
 2026-11-05 감사 후속: 세션 저장은 파일 선택 후 entries·manifest·revision을 확보하고, `SessionSaveSnapshot`으로 메타데이터까지 UI 스레드에서 고정한다. 종료 메시지는 pending preview 소진 후 run을 폐기하며, 최종 fallback은 일반 live commit의 기록·알림·dirty·tail 갱신 경로를 사용한다. structured preview는 이미 확정된 row이므로 snapshot/종료에서 suffix fallback으로 재생하지 않는다. 수동 복구 메뉴는 포인터 없이도 동작하고, 후보 검색은 취소 가능한 background worker에서 후보 수·경로 수·전체 읽기 budget을 적용한다. 회귀: `tests/test_audit_followup_20261105.py`. 최신 실행 결과와 외부 검증 한계는 `PROJECT_AUDIT.md`의 후속 구현 기록을 따른다.
 
+2026-11-07 감사 후속: worker preview는 매번 완전한 DOM 창 probe이므로, sequence gap 뒤 도착한 preview를 버리지 않고 `_preview_held_by_run`에 보관했다가 coalesced snapshot과 함께 sequence 순서로 적용한다(`_drain_held_previews`, 매 큐 tick·stop/terminal barrier). 이미 반영한 sequence보다 오래된 coalesced snapshot은 적용하지 않는다. runtime archive `owner.json`은 프로세스 생성 marker(`process_marker`, Windows `GetProcessTimes`/Linux `/proc` starttime)를 기록하고, PID가 살아 있어도 marker가 다르면 소유자 종료로 판정한다(marker 없는 기존 lease는 PID 판정 유지). legacy `error`/`subtitle_not_found` handler도 `finished`와 같은 `_finalize_terminal_capture_state`를 쓴다. 회귀: `tests/test_audit_followup_20261107.py`.
+
 최신 감사·검증 기준은 [PROJECT_AUDIT.md](PROJECT_AUDIT.md)의 후속 구현 기록을 참고한다. 과거 개별 감사 문서는 Git 이력에 보존하며, 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
@@ -103,7 +105,7 @@ Raw Text(Observer/폴링) → preview 메시지 → _prepare_preview_raw(정규�
 - Worker는 Observer 버퍼를 우선 읽고, 미수집 시 structured probe fallback으로 자막을 읽는다.
 - Worker preview는 dict payload 계약을 유지하고, 내부 큐에서는 `run_id` envelope로 stale run을 구분한다.
 - 길이/간격 제한에 따라 기존 엔트리에 병합 또는 분리
-- 중지 시 `preview` 큐를 먼저 소진하고 마지막 버퍼를 확정해 누락 방지
+- 중지 시 `preview` 큐를 먼저 소진하고 마지막 버퍼를 확정해 누락 방지. 큐 포화로 sequence gap이 생긴 preview도 보류 후 sequence 순서로 적용한 뒤 run을 폐기한다
 - 동일 자막이 유지되면 마지막 엔트리의 `end_time`을 주기적으로 갱신 (SRT/VTT 정확도)
 - `subtitle_segments`/`_drain_pending_previews` 경로도 동일 게이트를 거쳐 코어 알고리즘과 동기화
 - `capture_state.entries`가 단일 source of truth이고 `self.subtitles`는 alias로 유지된다.
@@ -278,7 +280,7 @@ korea-assembly-cc/
 - **회귀**: `tests/test_timestamp_blocks.py`
 
 ### 의존성 전면 업그레이드 + CI Python 3.15 (2026-10-13)
-- **`requirements-dev.txt` 전면 상향**: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
+- **`requirements-dev.txt` 전면 상향**: PySide6 6.12.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
 - **cryptography ARM64 조건 핀**: 47+에 Windows ARM64 휠이 없어 ARM64에서 `pip install` 전체가 깨지므로 `platform_machine` 조건으로 ARM64만 46.0.3을 쓴다. x64 CI는 50.0.2 휠로 설치된다.
 - **CI 단일 버전 전환**: `.github/workflows/ci.yml`을 Python 3.15로 바꾸고 README/CLAUDE/GEMINI의 버전 표기를 맞췄다. 검증은 프로젝트 루트 `.venv` 격리 환경이 기준이다.
 - **`.venv` 스캔 제외**: 신규 `.venv`가 인코딩 위생 테스트에 걸려 `EXCLUDED_DIRS`와 `pytest.ini norecursedirs`에 venv 계열을 추가했다(의도는 그대로).
@@ -366,7 +368,7 @@ korea-assembly-cc/
 - **debounced full-session search**: inline search는 debounce + revision stale-drop으로 최신 query만 반영하고, segment-local normalized text cache를 재사용한다.
 - **streaming save/export**: 세션 저장과 TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 export는 archived segment + active tail iterator를 직접 사용해 full hydrate를 피한다.
 - **export path cleanup**: `persistence_exports.py`의 TXT/SRT/VTT/통계 export는 현재 스트리밍 구현만 runtime 경로로 유지하고, 함수 내부 dead legacy branch는 제거해 단일 동작 경로로 맞춘다.
-- **LiveBroadcastDialog 네트워크 경로**: daemon fetch thread를 제거하고 `QNetworkAccessManager` + single active reply 구조로 전환했으며, frozen build에서는 `PyQt6.QtNetwork`를 포함하도록 `subtitle_extractor.spec`를 갱신했다.
+- **LiveBroadcastDialog 네트워크 경로**: daemon fetch thread를 제거하고 `QNetworkAccessManager` + single active reply 구조로 전환했으며, frozen build에서는 `PySide6.QtNetwork`를 포함하도록 `subtitle_extractor.spec`를 갱신했다.
 - **회귀 기준선**: `pytest -q` 146 pass, `pyright` 0 errors.
 
 ### v16.14.7 코드 분할 리팩토링 정합화 메모 (2026-04-05)
@@ -388,7 +390,7 @@ korea-assembly-cc/
 - **best-effort recovery salvage**: runtime manifest JSON이 손상돼도 sibling `segment_*.json` + `tail_checkpoint.json`를 스캔해 salvage를 시도하고, 제외된 손상 파일/항목 수를 payload와 UI 요약에 함께 노출한다.
 - **metadata / recovery hygiene**: 빈 URL 세션 로드 시 stale `current_url`을 비우고, recovery pointer는 복구 거절/복구 성공 시 즉시 삭제하지 않으며 성공한 JSON 저장 또는 정상 종료에서만 정리한다.
 - **Pylance/Pyright 고정**: `pyrightconfig.json`은 `stubPath=typings`, `executionEnvironments[].extraPaths=["typings"]`, `.pytest_tmp` exclude, `reportMissingModuleSource=none`를 사용하고, `.vscode/settings.json`도 같은 기준으로 맞췄다.
-- **로컬 stub 보강**: `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance가 같은 결과를 낸다.
+- **로컬 stub 보강**: `typings/PySide6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance가 같은 결과를 낸다.
 - **회귀 기준선**: `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings.
 
 ### v16.14.7 저장소 / 세션 안전성 보강 메모 (2026-04-08)

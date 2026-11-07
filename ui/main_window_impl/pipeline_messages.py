@@ -49,6 +49,9 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 return True
             if bool(self.__dict__.get("_coalesced_worker_messages", {})):
                 return True
+            held = self.__dict__.get("_preview_held_by_run")
+            if isinstance(held, dict) and any(bool(items) for items in held.values()):
+                return True
             control_queue = self.__dict__.get("app_control_queue")
             control_qsize = getattr(control_queue, "qsize", None)
             if callable(control_qsize) and int(cast(Any, control_qsize)()) > 0:
@@ -183,6 +186,21 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             logger.info("세션 불러오기 완료: created_at=%s", created_at)
         return True
 
+    def _finalize_terminal_capture_state(self) -> None:
+        """Shared worker-terminal finalize: pending fallback, timing, legacy buffer."""
+        self._cancel_scheduled_subtitle_reset()
+        self._materialize_pending_preview()
+        finalize_session(
+            self.capture_state,
+            datetime.now(),
+            self._current_capture_settings(),
+        )
+        self._sync_capture_state_entries(force_refresh=False)
+        if self.last_subtitle:
+            self._finalize_subtitle(self.last_subtitle)
+            self.last_subtitle = ""
+            self._stream_start_time = None
+
     def _process_message_queue(self):
         """메시지 큐 처리 (100ms마다 호출) - 예외 처리 강화"""
         try:
@@ -231,6 +249,9 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 processed += self._drain_coalesced_worker_messages(
                     max_items=remaining_budget,
                 )
+            # Out-of-order previews are complete DOM windows held for ordered
+            # replay; apply them every tick so a gap never parks newer data.
+            self._drain_held_previews()
             if self._has_pending_message_backlog():
                 self._schedule_followup_message_queue_drain()
         except Exception as e:
@@ -342,7 +363,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     self._retire_capture_run()
                     self.worker = None
                     return
-                self._materialize_pending_preview()
+                self._finalize_terminal_capture_state()
                 self._retire_capture_run()
                 self.worker = None
                 self.progress.hide()
@@ -374,18 +395,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self._retire_capture_run()
                 self.worker = None
                 if finalize_preview:
-                    self._cancel_scheduled_subtitle_reset()
-                    self._materialize_pending_preview()
-                    finalize_session(
-                        self.capture_state,
-                        datetime.now(),
-                        self._current_capture_settings(),
-                    )
-                    self._sync_capture_state_entries(force_refresh=False)
-                    if self.last_subtitle:
-                        self._finalize_subtitle(self.last_subtitle)
-                        self.last_subtitle = ""
-                        self._stream_start_time = None
+                    self._finalize_terminal_capture_state()
                 self._clear_preview()
                 self._reset_ui()
                 self._update_tray_status("⚪ 대기 중")
@@ -565,6 +575,11 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self._show_toast(f"줄넘김 정리 실패: {err}", "error", 4000)
 
             elif msg_type == "subtitle_not_found":
+                if bool(self.__dict__.get("_is_stopping", False)):
+                    self._retire_capture_run()
+                    self.worker = None
+                    return
+                self._finalize_terminal_capture_state()
                 self._retire_capture_run()
                 self.worker = None
                 self.progress.hide()
