@@ -211,10 +211,11 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 processed += self._drain_terminal_worker_messages(
                     max_items=50,
                 )
-            if processed < 50 and time.perf_counter() <= deadline:
-                processed += self._drain_overflow_passthrough_items(
-                    max_items=50 - processed,
-                )
+            # Order: worker queue → overflow → coalesced → held. Overflow and
+            # coalesced items were stashed while the queue was full, so they
+            # are newer than what is still queued; draining them first would
+            # let a reset overtake older previews (ordered by shared sequence).
+            worker_queue_exhausted = False
             while processed < 50 and time.perf_counter() <= deadline:
                 drained_control = False
                 control_queue = self.__dict__.get("app_control_queue")
@@ -238,20 +239,39 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     self._handle_message(msg_type, data)
                     processed += 1
                 except queue.Empty:
+                    worker_queue_exhausted = True
                     break
+            if not worker_queue_exhausted:
+                worker_queue_exhausted = self._is_worker_queue_empty()
+            if (
+                worker_queue_exhausted
+                and processed < 50
+                and time.perf_counter() <= deadline
+            ):
+                processed += self._drain_overflow_passthrough_items(
+                    max_items=50 - processed,
+                )
             remaining_budget = max(0, 50 - processed)
             if remaining_budget > 0 and time.perf_counter() <= deadline:
                 processed += self._drain_coalesced_control_messages(
                     max_items=remaining_budget,
                 )
+            stream_backlog_clear = (
+                worker_queue_exhausted and not self._has_overflow_stream_messages()
+            )
             remaining_budget = max(0, 50 - processed)
-            if remaining_budget > 0 and time.perf_counter() <= deadline:
+            if (
+                stream_backlog_clear
+                and remaining_budget > 0
+                and time.perf_counter() <= deadline
+            ):
                 processed += self._drain_coalesced_worker_messages(
                     max_items=remaining_budget,
                 )
-            # Out-of-order previews are complete DOM windows held for ordered
-            # replay; apply them every tick so a gap never parks newer data.
-            self._drain_held_previews()
+            # Out-of-order stream messages are held for ordered replay. Apply
+            # them once nothing older can still be waiting in queue/overflow.
+            if stream_backlog_clear:
+                self._drain_held_previews()
             if self._has_pending_message_backlog():
                 self._schedule_followup_message_queue_drain()
         except Exception as e:

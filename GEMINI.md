@@ -8,6 +8,8 @@
 
 2026-11-05 후속 수정은 파일 선택 후 저장 snapshot·revision·메타데이터 고정, terminal 이전 pending preview 소진, 최종 fallback의 TXT·알림·dirty·tail 갱신, structured row의 snapshot 중복 방지다. `파일 → 백업에서 세션 복구...`는 포인터 없이도 동작하며, 백그라운드 후보 검색에 취소·후보 수·전체 읽기·경로 수 budget을 적용한다. 회귀는 `tests/test_audit_followup_20261105.py`, 파이프라인 계약은 `PIPELINE_LOCK.md`를 따른다. 로컬 전체 pytest는 723 passed / 3 skipped, pyright는 202 files / 0 errors / 0 warnings였다. 실제 중계 장시간 운용·HWP 저장·다른 OS의 원격 CI 결과는 별도 확인한다.
 
+2026-11-08 후속 수정: `preview`·`subtitle_reset`·`reconnected`가 run별 stream sequence를 공유하고, 큐 포화로 경로가 갈려도 gap 뒤 메시지를 보류했다가 sequence 순서로 재적용한다. 큐 처리 순서는 worker 큐 → overflow → coalesced → held이며 재적용은 큐·overflow가 비었을 때만 한다. 큐 포화 뒤 reset이 오래된 preview를 앞질러 확정 발언이 중복되던 문제를 고쳤다. 회귀는 `tests/test_audit_followup_20261108.py`.
+
 2026-11-07 후속 수정: sequence gap 뒤 도착한 preview(완전한 DOM 창)를 버리지 않고 보류했다가 coalesced snapshot과 함께 sequence 순서로 적용하며, 반영된 것보다 오래된 coalesced snapshot은 무시한다. runtime archive `owner.json`은 프로세스 생성 marker를 기록해 PID 재사용을 소유자 종료로 판정한다. legacy `error`/`subtitle_not_found` handler는 `finished`와 같은 종료 finalize를 공유한다. 회귀는 `tests/test_audit_followup_20261107.py`.
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
@@ -235,7 +237,7 @@ pip install -r requirements-dev.txt
 ### 8.1 개발 품질 게이트
 - 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors` (`requirements-dev.txt` 핀)
 - **푸시 전**: `python scripts/install_git_hooks.py` (1회), `python scripts/check_before_push.py --pyright-only`
-- **CI**: `.github/workflows/ci.yml` — **pyright fail-fast → pytest** (Windows / Python 3.15)
+- **CI**: `.github/workflows/ci.yml` — **pyright fail-fast → pytest** (Windows / Python 3.15), `compatibility` matrix(Windows 3.10, ubuntu·macOS 3.15)
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`

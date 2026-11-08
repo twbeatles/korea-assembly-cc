@@ -146,6 +146,12 @@ pyinstaller --clean subtitle_extractor.spec
 - [ ] Windows native/비native 파일 대화상자의 timer 동작 차이와 최종 저장 상태를 각각 확인
 - [ ] Windows 3.10 및 macOS/Linux 3.15 compatibility job의 실제 결과 확인. 설정 추가를 통과 결과로 간주하지 않음
 
+### 큐 포화 순서 감사 후속 (2026-11-07 / 2026-11-08)
+
+- [ ] `tests/test_audit_followup_20261107.py`: sequence gap 뒤 preview 보존(수집 중·`finished`·`_stop()`), 오래된 coalesced snapshot 무시, PID 재사용 archive의 복구 후보 노출
+- [ ] `tests/test_audit_followup_20261108.py`: 큐 포화 중 `subtitle_reset`·`reconnected`가 더 오래된 preview를 앞지르지 않음(수집 중·`finished`·overflow 경로), 확정 발언 중복 0
+- [ ] 실제 중계에서 UI를 2초 이상 멈춘 뒤(대형 hydrate·모달) 재개: 화자 경계 보존, 중복 entry 0, 드롭이 있으면 중지/완료 상태 메시지에 건수 표시
+
 오프라인 장기 검증은 사용자 저장소와 분리된 소스 복사본에서 실행합니다. 이 fixture는 임시 DB·INI·archive를 사용하며 실제 생중계 네트워크 재연결을 대신하지 않습니다.
 
 ```powershell

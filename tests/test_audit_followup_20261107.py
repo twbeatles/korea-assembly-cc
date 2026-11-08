@@ -30,6 +30,14 @@ def rows(*pairs: tuple[str, str]) -> dict:
     }
 
 
+def _pump(win, ticks: int = 10) -> None:
+    """Run queue ticks until the backlog is empty (each tick has an 8ms budget)."""
+    for _ in range(ticks):
+        win._process_message_queue()
+        if not win._has_pending_message_backlog():
+            break
+
+
 def _saturate_then_gap(win) -> int:
     """#1,#2 queued, #3 coalesced (full), UI consumes #1, then #4 queued after a gap."""
     run = win._activate_capture_run()
@@ -49,8 +57,7 @@ def test_gap_preview_survives_worker_finished(qt_window):
     win.is_running = True
     run = _saturate_then_gap(win)
     win._emit_worker_message("finished", {"success": True, "finalize_preview": True}, run_id=run)
-    for _ in range(5):
-        win._process_message_queue()
+    _pump(win)
     assert [entry.text for entry in win.subtitles] == TEXTS
 
 
@@ -68,12 +75,12 @@ def test_gap_preview_is_applied_in_order_during_capture(qt_window):
     win.queue_timer.stop()
     win.is_running = True
     run = _saturate_then_gap(win)
-    win._process_message_queue()
+    _pump(win)
     assert [entry.text for entry in win.subtitles] == TEXTS
     assert win._get_capture_quality_payload()["preview_gaps"] == 1
     # The next in-order preview after replay is accepted normally (no new gap).
     win._emit_worker_message("preview", rows(("r4", TEXTS[3]), ("r5", "다섯째 발언")), run_id=run)
-    win._process_message_queue()
+    _pump(win)
     assert [entry.text for entry in win.subtitles] == TEXTS + ["다섯째 발언"]
     assert win._get_capture_quality_payload()["preview_gaps"] == 1
 
@@ -85,13 +92,13 @@ def test_older_coalesced_snapshot_never_overrides_newer_state(qt_window):
     run = win._activate_capture_run()
     win._emit_worker_message("preview", rows(("r1", TEXTS[0])), run_id=run)
     win._emit_worker_message("preview", rows(("r1", TEXTS[0]), ("r2", TEXTS[1])), run_id=run)
-    win._process_message_queue()
+    _pump(win)
     # A late coalesced snapshot with an older worker sequence must be ignored.
     with win._worker_message_lock:
         win._coalesced_worker_messages[(run, "preview")] = {
             **rows(("r1", "오래된 발언")), "full_snapshot": True, "worker_sequence": 1,
         }
-    win._process_message_queue()
+    _pump(win)
     assert [entry.text for entry in win.subtitles] == TEXTS[:2]
 
 

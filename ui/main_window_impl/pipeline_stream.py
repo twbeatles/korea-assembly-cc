@@ -339,6 +339,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
                 return 10_000_000
             return max(0, int(limit or 0) - drained)
 
+        queue_exhausted = False
         try:
             while _budget_remaining() > 0:
                 raw_item = self.message_queue.get_nowait()
@@ -350,9 +351,19 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
                 if self._process_preview_queue_message(msg_type, data):
                     drained += 1
                 else:
-                    pending.append(raw_item)
+                    pending.append(self._as_requeueable(raw_item))
         except queue.Empty:
-            pass
+            queue_exhausted = True
+
+        if not queue_exhausted:
+            # Budget ran out with older messages still queued: replaying
+            # overflow/coalesced/held (newer) items now would reorder them.
+            if not unlimited and limit is not None and drained >= int(limit):
+                logger.warning("preview 큐 소진 제한 도달: max_items=%s", limit)
+            if requeue_others and pending:
+                for item in pending:
+                    self._requeue_message_item(item)
+            return
 
         remaining = _budget_remaining()
         if remaining > 0:
@@ -373,9 +384,10 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
                 handler=preview_handler,
             )
 
-        # Previews held after a sequence gap are newer complete DOM windows.
-        # Apply them in order before the caller finalizes or retires the run.
-        drained += self._drain_held_previews(handler=preview_handler)
+        # Stream messages held after a sequence gap are applied in order before
+        # the caller finalizes or retires the run, once overflow is drained.
+        if not self._has_overflow_stream_messages():
+            drained += self._drain_held_previews(handler=preview_handler)
 
         if not unlimited and limit is not None and drained >= int(limit):
             logger.warning("preview 큐 소진 제한 도달: max_items=%s", limit)

@@ -6,6 +6,8 @@
 
 2026-11-05 감사 후속: 세션 저장은 파일 선택 후 entries·manifest·revision을 확보하고, `SessionSaveSnapshot`으로 메타데이터까지 UI 스레드에서 고정한다. 종료 메시지는 pending preview 소진 후 run을 폐기하며, 최종 fallback은 일반 live commit의 기록·알림·dirty·tail 갱신 경로를 사용한다. structured preview는 이미 확정된 row이므로 snapshot/종료에서 suffix fallback으로 재생하지 않는다. 수동 복구 메뉴는 포인터 없이도 동작하고, 후보 검색은 취소 가능한 background worker에서 후보 수·경로 수·전체 읽기 budget을 적용한다. 회귀: `tests/test_audit_followup_20261105.py`. 최신 실행 결과와 외부 검증 한계는 `PROJECT_AUDIT.md`의 후속 구현 기록을 따른다.
 
+2026-11-08 감사 후속: `preview`·`subtitle_reset`·`reconnected`는 run별 하나의 stream sequence를 공유한다(`ORDERED_STREAM_MESSAGE_TYPES`, `keepalive`는 비순서). 큐 포화로 경로(큐/overflow/coalesced)가 갈려도 gap 뒤 메시지는 모두 보류했다가 sequence 순서로 재적용하므로 reset이 더 오래된 preview를 앞지르지 않는다. `_process_message_queue`는 worker 큐 → overflow → coalesced → held 순서로 처리하고, coalesced·held 재적용은 worker 큐와 overflow의 stream 메시지가 비었을 때만 수행한다(`_drain_pending_previews`도 예산 소진 시 재적용하지 않음). gap 뒤 full snapshot은 overflow/coalesced에 더 오래된 stream 메시지가 없을 때만 즉시 수용한다. 재큐잉은 `_as_requeueable`로 sequence를 지운다. `PREVIEW_HELD_MAX=1024`, held 초과 드롭은 `queue_drops`와 토스트로 알리고, 중지/완료 요약에 이번 run의 드롭 수를 표시한다. 회귀: `tests/test_audit_followup_20261108.py`.
+
 2026-11-07 감사 후속: worker preview는 매번 완전한 DOM 창 probe이므로, sequence gap 뒤 도착한 preview를 버리지 않고 `_preview_held_by_run`에 보관했다가 coalesced snapshot과 함께 sequence 순서로 적용한다(`_drain_held_previews`, 매 큐 tick·stop/terminal barrier). 이미 반영한 sequence보다 오래된 coalesced snapshot은 적용하지 않는다. runtime archive `owner.json`은 프로세스 생성 marker(`process_marker`, Windows `GetProcessTimes`/Linux `/proc` starttime)를 기록하고, PID가 살아 있어도 marker가 다르면 소유자 종료로 판정한다(marker 없는 기존 lease는 PID 판정 유지). legacy `error`/`subtitle_not_found` handler도 `finished`와 같은 `_finalize_terminal_capture_state`를 쓴다. 회귀: `tests/test_audit_followup_20261107.py`.
 
 최신 감사·검증 기준은 [PROJECT_AUDIT.md](PROJECT_AUDIT.md)의 후속 구현 기록을 참고한다. 과거 개별 감사 문서는 Git 이력에 보존하며, 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
@@ -105,7 +107,7 @@ Raw Text(Observer/폴링) → preview 메시지 → _prepare_preview_raw(정규�
 - Worker는 Observer 버퍼를 우선 읽고, 미수집 시 structured probe fallback으로 자막을 읽는다.
 - Worker preview는 dict payload 계약을 유지하고, 내부 큐에서는 `run_id` envelope로 stale run을 구분한다.
 - 길이/간격 제한에 따라 기존 엔트리에 병합 또는 분리
-- 중지 시 `preview` 큐를 먼저 소진하고 마지막 버퍼를 확정해 누락 방지. 큐 포화로 sequence gap이 생긴 preview도 보류 후 sequence 순서로 적용한 뒤 run을 폐기한다
+- 중지 시 `preview` 큐를 먼저 소진하고 마지막 버퍼를 확정해 누락 방지. 큐 포화로 sequence gap이 생긴 preview·`subtitle_reset`·`reconnected`도 보류 후 공유 sequence 순서로 적용한 뒤 run을 폐기한다(reset이 오래된 preview를 앞질러 확정 발언이 중복되지 않음)
 - 동일 자막이 유지되면 마지막 엔트리의 `end_time`을 주기적으로 갱신 (SRT/VTT 정확도)
 - `subtitle_segments`/`_drain_pending_previews` 경로도 동일 게이트를 거쳐 코어 알고리즘과 동기화
 - `capture_state.entries`가 단일 source of truth이고 `self.subtitles`는 alias로 유지된다.
@@ -648,7 +650,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - **푸시 전 (필수 권장)**:
   - `python scripts/install_git_hooks.py` (1회) → `git push` 시 pre-push 가 pyright 실행
   - 수동: `python scripts/check_before_push.py --pyright-only`
-- **GitHub CI** (`.github/workflows/ci.yml`): **pyright fail-fast → pytest** 순서 (Windows, Python 3.15)
+- **GitHub CI** (`.github/workflows/ci.yml`): 주 job은 **pyright fail-fast → pytest** 순서 (Windows, Python 3.15). 별도 `compatibility` matrix가 Windows Python 3.10, ubuntu·macOS Python 3.15에서 소스 호환성 테스트를 실행한다
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과 (기본 in-process smoke·pyright fallback 포함, `*_subprocess` 테스트는 환경에 따라 skip)
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - pyright suppression policy: `tests/test_pyright_suppression_policy.py`가 파일 단위 `# pyright:` directive 재도입을 차단
