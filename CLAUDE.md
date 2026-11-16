@@ -5,9 +5,9 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
-- **버전**: v16.14.16
+- **버전**: v16.14.17
 - **핵심 가치**: 
-  - **실시간 스트리밍 자막 (Delay-free)**
+  - **실시간 스트리밍 자막** (stable row 즉시, 일반 자막 fallback 은 안정 관측 400ms·최대 2초 안 commit)
   - 안정적인 멀티스레딩 아키텍처
   - 모던 UI/UX (다크/라이트 테마)
   - 다양한 출력 형식 지원
@@ -90,7 +90,7 @@ Raw Text(Observer/폴링) → preview 메시지 → _prepare_preview_raw(정규�
                               ↓
                     후단 정제(get_word_diff/tail check)
                               ↓
-                       SubtitleEntry 즉시 반영
+                       SubtitleEntry 반영 (fallback 은 안정 관측/최대 대기 게이트 뒤)
 ```
 - Worker는 선택자 후보를 우선순위(`.smi_word:last-child` 우선)로 정렬하고, 기본 문서 + 중첩 iframe/frame 경로를 순회한다.
 - `.smi_word` 선택자는 단일 노드에만 의존하지 않고 목록 전체를 수집해 최근 창(window) 텍스트를 조합한다.
@@ -146,6 +146,7 @@ korea-assembly-cc/
     runtime_archive_owner.py    # runtime archive owner.json lease
     export_text.py              # export 공통 sanitize / SRT·VTT 상대 타임코드
     subtitle_row_split.py       # multi-speaker 분할 규칙 순수 미러 (probe JS 정합)
+    fallback_commit.py          # fallback 안정 관측/최대 대기 commit 게이트 순수 함수 (parity fallbackCommitGate)
     hwpx_export.py              # 기본 HWPX 내보내기
     utils.py                    # 호환용 re-export shim
   scripts/
@@ -249,7 +250,15 @@ korea-assembly-cc/
 | `_show_db_history()` | **세션 히스토리 조회 (#26)** |
 | `_show_db_search()` | **자막 통합 검색 (#26)** |
 
-## 6. 최신 변경 요약 (v16.14.16 기준)
+## 6. 최신 변경 요약 (v16.14.17 기준)
+
+### PROJECT_AUDIT 후속: fallback commit 게이트·내보내기·업데이트 정리 (v16.14.17, 2026-11-16)
+- **reset 직전 유실 수정**: `subtitle_reset` 수신 즉시(그리고 reset 적용 직전) 대기 중인 fallback 후보를 commit 한다(`Config.COMMIT_PENDING_FALLBACK_ON_RESET`, parity `commitPendingFallbackOnReset`). 화면 clear 직전 400ms 안에 갱신된 마지막 어절이 후보째 버려지던 문제.
+- **최대 대기 상한**: raw 가 계속 바뀌어도 첫 미확정 관측(`pending_since_at`)부터 `FALLBACK_COMMIT_MAX_WAIT_MS=2000` 이 지나면 commit 한다. 판정은 순수 함수 `core/fallback_commit.decide_fallback_commit` 이고 Chrome `fallback-commit-gate.ts` 와 `parity/pipeline-vectors.json` `fallbackCommitGate` 벡터로 함께 검증한다. Chrome 확장도 같은 결함이 있어 같이 고쳤다.
+- **진단**: `CaptureQualityState` 에 `fallback_reset_flushes`, `fallback_max_wait_commits` 카운터 추가(JSON/runtime/DB `capture_quality` 로 보존).
+- **시간 역순 내보내기**: `timestamp_blocks.starts_new_block` 은 시각 역행도 새 블록으로 본다. SRT/VTT 는 `core.export_text.RelativeCueTimeline` 으로 큐 시작이 단조 증가하도록 배치한다(역행 큐는 직전 큐 끝에 이어 붙임).
+- **업데이트 정리**: 다음 시작 시 `cleanup_update_helper_copies` 가 staging 의 `update-helper-*.exe` 와 설치 폴더의 `.update-apply-*.exe` 를 지운다(frozen 실행만).
+- **회귀**: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`, Chrome `tests/fallback-commit-reset.test.ts`
 
 ### Chrome 확장 수집 알고리즘 정합 2차 + 공유 계약 `parity/` (2026-10-22)
 - **연결 방식**: 코드 공유 없이 `parity/capture-contract.json`(사이트·DOM·상수·의도적 차이)과 `parity/pipeline-vectors.json`(순수 함수 벡터)을 Chrome 확장 저장소와 같은 내용으로 둔다. `tests/test_parity_contract.py` 가 구현을 대조하고, `python scripts/check_parity_sync.py`(pre-push `check_before_push.py` 포함, 형제 저장소 없으면 skip)가 사본 일치를 검사한다. 수집 의미론을 바꾸면 `parity/` 를 먼저 고치고 양쪽을 맞춘 뒤 `--write` 로 복사한다.
@@ -273,7 +282,7 @@ korea-assembly-cc/
 - **회귀**: `tests/test_timestamp_blocks.py`
 
 ### 의존성 전면 업그레이드 + CI Python 3.15 (2026-10-13)
-- **`requirements-dev.txt` 전면 상향**: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
+- **`requirements-dev.txt` 전면 상향**: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다. (Qt 바인딩은 이후 v16.14.13에서 PySide6 6.12.0으로 통일)
 - **cryptography ARM64 조건 핀**: 47+에 Windows ARM64 휠이 없어 ARM64에서 `pip install` 전체가 깨지므로 `platform_machine` 조건으로 ARM64만 46.0.3을 쓴다. x64 CI는 50.0.2 휠로 설치된다.
 - **CI 단일 버전 전환**: `.github/workflows/ci.yml`을 Python 3.15로 바꾸고 README/CLAUDE/GEMINI의 버전 표기를 맞췄다. 검증은 프로젝트 루트 `.venv` 격리 환경이 기준이다.
 - **`.venv` 스캔 제외**: 신규 `.venv`가 인코딩 위생 테스트에 걸려 `EXCLUDED_DIRS`와 `pytest.ini norecursedirs`에 venv 계열을 추가했다(의도는 그대로).

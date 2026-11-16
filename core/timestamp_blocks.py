@@ -60,7 +60,9 @@ def starts_new_block(
 ) -> bool:
     if block_start is None:
         return True
-    return (timestamp - block_start).total_seconds() >= interval_seconds
+    elapsed = (timestamp - block_start).total_seconds()
+    # 시각이 역행하면(정렬하지 않은 병합, 시스템 시계 조정) 새 블록으로 시작한다.
+    return elapsed < 0 or elapsed >= interval_seconds
 
 
 def block_join_separator(left: str, right: str) -> str:

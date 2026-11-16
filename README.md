@@ -1,4 +1,4 @@
-# 🏛️ 국회 의사중계 자막 추출기 (Korea Assembly CC) v16.14.16
+# 🏛️ 국회 의사중계 자막 추출기 (Korea Assembly CC) v16.14.17
 
 대한민국 국회 의사중계 웹사이트의 **실시간 AI 자막**을 수집·정리·검색하고 파일로 저장하는 PySide6 기반 데스크톱 프로그램입니다. 국회 회의와 발언을 실시간으로 기록하거나, 후속 검토를 위한 자막 파일이 필요한 기자·연구자·시민단체·일반 사용자를 위해 만들었습니다.
 
@@ -6,7 +6,7 @@
 별도 프로그램 설치 없이 브라우저에서 바로 사용하고 싶다면 [Chrome 확장 프로그램](https://chromewebstore.google.com/detail/khchppfkjljacdhohihlpkbbkddmoghk)을 이용할 수도 있습니다.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![PyQt6](https://img.shields.io/badge/GUI-PySide6-green)
+![PySide6](https://img.shields.io/badge/GUI-PySide6-green)
 ![Selenium](https://img.shields.io/badge/Automation-Selenium-orange)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20웹%20스토어-확장프로그램-4285F4?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/khchppfkjljacdhohihlpkbbkddmoghk)
@@ -58,7 +58,7 @@
 ## ✨ 주요 기능
 
 ### 🎯 실시간 자막 추출
-- 국회 의사중계 AI 자막을 **딜레이 없이** 즉시 캡처
+- 국회 의사중계 AI 자막을 실시간으로 캡처 — 고정 키가 있는 행은 즉시, 일반 자막(본회의)은 같은 텍스트가 2회 보이거나 0.4초 유지되면 저장하고, 계속 바뀌는 중에도 최대 2초 안에 저장
 - 발언자 전환을 자동 감지해 자막을 구분 저장
 - 중복 자막 자동 제거 및 스마트 이어붙이기
 - 수집 중 연결 끊김 시 자동 재연결 — 상태바에 🟢 연결됨 / 🔴 끊김 / 🟡 재연결 중 표시. 최초 Chrome/네트워크 오류도 같은 횟수로 재시도하며, 비중계·자막 요소 없음은 즉시 안내하고 재시도하지 않습니다.
@@ -305,7 +305,7 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 ```bash
 pip install pyinstaller
 pyinstaller subtitle_extractor.spec
-# dist/국회의사중계자막추출기 v16.14.11.exe
+# dist/국회의사중계자막추출기 v16.14.17.exe
 ```
 
 **Portable 모드**: EXE 파일 옆에 `portable.flag` 파일을 만들어두면 로그·세션·DB·설정을 EXE 폴더에 저장합니다.  
@@ -360,6 +360,15 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 ---
 
 ## 📝 변경 이력
+
+### v16.14.17 (2026-11-16)
+- **발언자 전환 직전 자막 유실 수정** — 자막 영역이 비워지기 직전 0.4초 안에 갱신된 마지막 어절이 저장되지 않던 문제. 화면 clear 신호를 받으면 대기 중인 텍스트를 먼저 저장한다
+- **연속 발언 저장 지연 상한** — 텍스트가 쉬지 않고 바뀌는 동안 저장·타임스탬프가 계속 밀리던 문제. 최대 2초 안에 저장한다
+- 위 두 규칙은 Chrome 확장과 같은 공유 계약(`parity/` `fallbackCommitMaxWaitMs`, `commitPendingFallbackOnReset`, `fallbackCommitGate` 벡터)으로 고정했고 확장도 함께 수정
+- **시간 역순 자막 내보내기** — 시간순 정렬 없이 병합한 세션에서 타임스탬프 문단이 한 덩어리로 뭉치고 SRT/VTT 큐가 0초가 되던 문제 수정
+- **업데이트 임시 파일 정리** — 업데이트마다 남던 helper EXE 사본과 중단된 교체 임시 파일을 다음 시작 때 삭제
+- 품질 진단(`capture_quality`)에 `fallback_reset_flushes`, `fallback_max_wait_commits` 추가
+- 회귀: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`
 
 ### v16.14.16 (2026-10-22)
 - **Chrome 확장 수집 알고리즘 정합 2차 + 공유 계약 `parity/`** — 확장 저장소와 같은 내용의 `parity/capture-contract.json`·`pipeline-vectors.json` 으로 두 구현을 테스트(`tests/test_parity_contract.py`)와 `scripts/check_parity_sync.py` 로 대조

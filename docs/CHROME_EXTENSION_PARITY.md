@@ -151,6 +151,20 @@
 
 회귀: `tests/test_parity_contract.py` (계약 + 공유 벡터), `tests/test_pipeline_risk_hardening.py` (container 안정 관측).
 
+## 4.2 정합 작업 이력 (2026-11-16, PROJECT_AUDIT 후속)
+
+데스크톱 감사(`PROJECT_AUDIT.md` ISSUE-001·002)에서 찾은 fallback 게이트 결함이 확장에도 같은 구조로 있었다(확장 쪽은 다음 update 가 pending reset 을 취소하고, 새 raw 가 후보를 덮어써 직전 후보가 commit 없이 사라졌다). 두 저장소를 같은 규칙으로 고쳤다.
+
+| ID | 내용 | 데스크톱 | Chrome |
+|----|------|----------|--------|
+| G1 | 안정 관측 게이트를 순수 함수로 분리하고 공유 벡터 `fallbackCommitGate` 로 고정 | `core/fallback_commit.py` | `src/core/subtitle-pipeline/fallback-commit-gate.ts` |
+| G2 | 최대 대기 상한 `fallbackCommitMaxWaitMs=2000` — raw 가 바뀌어도 첫 미확정 관측(`pendingSince`)부터 상한이 지나면 commit | `pipeline_state._observe_fallback_commit_candidate` | `runtime-core/fallback-commit.ts` |
+| G3 | `commitPendingFallbackOnReset` — `subtitle_reset` 수신 즉시(그리고 reset 적용 직전) 대기 후보 commit | `pipeline_state._schedule_deferred_subtitle_reset`/`_commit_scheduled_subtitle_reset` | `capture-events.ts` reset 분기·reset 타이머 |
+
+데스크톱만 `CaptureQualityState.fallback_reset_flushes`/`fallback_max_wait_commits` 진단 카운터를 남긴다(확장은 기존 `fallbackCommitState` 표시 유지).
+
+회귀: 데스크톱 `tests/test_project_audit_20261116.py`, 확장 `tests/fallback-commit-reset.test.ts`, 양쪽 parity 테스트.
+
 ---
 
 ## 5. 사이트 변경 대응 절차
@@ -172,7 +186,7 @@
 | 셀렉터 후보 | `capture_dom._build_subtitle_selector_candidates` | `src/shared/constants.ts`, `src/content/dom-probe.ts` |
 | 병합/keepalive 정책 | `core/subtitle_pipeline_impl/entry_policy.py` | `src/core/subtitle-pipeline/entry-policy.ts` |
 | 미확정 판정 | `capture_dom` probe JS, `core/subtitle_confirmation.py` | `src/content/subtitle-rows.ts`, `src/content/unconfirmed-fallback.ts` |
-| fallback 안정 관측 | `pipeline_state._observe_fallback_commit_candidate` | `runtime-core/fallback-commit.ts` |
+| fallback 안정 관측 | `core/fallback_commit.py`, `pipeline_state._observe_fallback_commit_candidate` | `core/subtitle-pipeline/fallback-commit-gate.ts`, `runtime-core/fallback-commit.ts` |
 | row / 화자 | `capture_dom` probe JS | `src/content/subtitle-rows.ts` |
 | 레이어 활성 | `capture_observer._activate_subtitle` | `src/content/subtitle-layer.ts` |
 | 파이프라인 | `core/subtitle_pipeline*` | `src/core/subtitle-pipeline/` |

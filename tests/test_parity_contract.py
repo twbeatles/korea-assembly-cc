@@ -18,6 +18,11 @@ import pytest
 
 from core import utils
 from core.config import Config
+from core.fallback_commit import (
+    FallbackGateCandidate,
+    FallbackGateSettings,
+    decide_fallback_commit,
+)
 from core.live_capture_impl.ledger import LIVE_LEDGER_MAX_ROWS
 from core.models import SubtitleEntry
 from core.subtitle_confirmation import has_visible_background_highlight, sample_evenly
@@ -104,6 +109,8 @@ def test_pipeline_constants_match_contract() -> None:
     assert LIVE_LEDGER_MAX_ROWS == p["liveLedgerMaxRows"]
     assert Config.FALLBACK_COMMIT_OBSERVATION_THRESHOLD == p["fallbackCommitObservationThreshold"]
     assert Config.FALLBACK_COMMIT_STABLE_MS == p["fallbackCommitStableMs"]
+    assert Config.FALLBACK_COMMIT_MAX_WAIT_MS == p["fallbackCommitMaxWaitMs"]
+    assert Config.COMMIT_PENDING_FALLBACK_ON_RESET is p["commitPendingFallbackOnReset"]
     assert Config.FALLBACK_INTERNAL_RAW_MAX_CHARS == p["fallbackInternalRawMaxChars"]
     assert Config.FALLBACK_PREVIEW_MAX_CHARS == p["fallbackPreviewMaxChars"]
     unconfirmed = CONTRACT["unconfirmed"]
@@ -220,3 +227,31 @@ def test_background_highlight_vectors(case: dict[str, Any]) -> None:
 @pytest.mark.parametrize("case", VECTORS["sampleEvenly"])
 def test_sample_evenly_vectors(case: dict[str, Any]) -> None:
     assert sample_evenly(list(range(case["count"])), case["maxTake"]) == case["expectedIndices"]
+
+
+def test_fallback_gate_defaults_match_contract() -> None:
+    defaults = DEFAULTS["fallbackCommit"]
+    p = CONTRACT["pipeline"]
+    assert defaults["observationThreshold"] == p["fallbackCommitObservationThreshold"]
+    assert defaults["stableMs"] == p["fallbackCommitStableMs"]
+    assert defaults["maxWaitMs"] == p["fallbackCommitMaxWaitMs"]
+
+
+@pytest.mark.parametrize(
+    "case", VECTORS["fallbackCommitGate"], ids=lambda case: case["name"]
+)
+def test_fallback_commit_gate_vectors(case: dict[str, Any]) -> None:
+    defaults = DEFAULTS["fallbackCommit"]
+    settings = FallbackGateSettings(
+        observation_threshold=defaults["observationThreshold"],
+        stable_ms=defaults["stableMs"],
+        max_wait_ms=defaults["maxWaitMs"],
+    )
+    candidate: FallbackGateCandidate | None = None
+    for step in case["steps"]:
+        decision = decide_fallback_commit(candidate, step["raw"], step["atMs"], settings)
+        expected = step["expected"]
+        assert decision.commit_now is expected["commitNow"], step
+        assert decision.delay_ms == expected["delayMs"], step
+        assert decision.candidate.observation_count == expected["observationCount"], step
+        candidate = None if decision.commit_now else decision.candidate

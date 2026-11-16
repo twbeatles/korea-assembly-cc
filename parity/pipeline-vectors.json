@@ -7,7 +7,12 @@
     "mergeMaxChars": 1000,
     "baseTimeIso": "2026-10-22T10:00:00.000Z",
     "lastEntryText": "기존 발언",
-    "nextText": "이어지는 발언"
+    "nextText": "이어지는 발언",
+    "fallbackCommit": {
+      "observationThreshold": 2,
+      "stableMs": 400,
+      "maxWaitMs": 2000
+    }
   },
   "normalize": [
     {
@@ -600,6 +605,172 @@
         56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
         74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91,
         92, 93, 94, 96
+      ]
+    }
+  ],
+  "fallbackCommitGate": [
+    {
+      "name": "same_raw_reobserved_commits",
+      "steps": [
+        {
+          "raw": "안녕하세요 여러분",
+          "atMs": 0,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "안녕하세요 여러분",
+          "atMs": 200,
+          "expected": {
+            "commitNow": true,
+            "delayMs": 0,
+            "observationCount": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "stable_window_reached_on_reobservation",
+      "steps": [
+        {
+          "raw": "오늘 회의를",
+          "atMs": 0,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "오늘 회의를",
+          "atMs": 400,
+          "expected": {
+            "commitNow": true,
+            "delayMs": 0,
+            "observationCount": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "changing_raw_keeps_pending_window_until_max_wait",
+      "steps": [
+        {
+          "raw": "단어0",
+          "atMs": 0,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "단어0 단어1",
+          "atMs": 300,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "단어0 단어1 단어2",
+          "atMs": 600,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "단어0 단어1 단어2 단어3",
+          "atMs": 900,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "단어0 단어1 단어2 단어3 단어4",
+          "atMs": 1200,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "단어0 단어1 단어2 단어3 단어4 단어5",
+          "atMs": 1500,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "단어0 단어1 단어2 단어3 단어4 단어5 단어6",
+          "atMs": 1800,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 200,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "단어0 단어1 단어2 단어3 단어4 단어5 단어6 단어7",
+          "atMs": 2100,
+          "expected": {
+            "commitNow": true,
+            "delayMs": 0,
+            "observationCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "after_commit_starts_fresh_window",
+      "steps": [
+        {
+          "raw": "첫 발언",
+          "atMs": 0,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "첫 발언",
+          "atMs": 100,
+          "expected": {
+            "commitNow": true,
+            "delayMs": 0,
+            "observationCount": 2
+          }
+        },
+        {
+          "raw": "첫 발언 이어서",
+          "atMs": 200,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "첫 발언 이어서 더",
+          "atMs": 1900,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 300,
+            "observationCount": 1
+          }
+        }
       ]
     }
   ]

@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from core.update_installer import (
+    cleanup_update_helper_copies,
     consume_update_result,
     launch_update_helper,
     prepare_staged_update,
@@ -52,6 +53,17 @@ class MainWindowUIHelpMixin(MainWindowHost):
             install_dir=target.parent,
             storage_mode=Config.STORAGE_MODE,
         )
+        if bool(getattr(sys, "frozen", False)):
+            try:
+                removed = cleanup_update_helper_copies(
+                    staging_root,
+                    target.parent,
+                    exclude=(target,),
+                )
+                if removed:
+                    logger.info("이전 업데이트 helper/임시 파일 %s개 정리", removed)
+            except Exception as exc:
+                logger.debug("업데이트 helper 정리 실패: %s", exc)
         result = consume_update_result(update_result_path(staging_root))
         if not result:
             return

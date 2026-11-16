@@ -29,7 +29,8 @@
 - `_confirmed_compact`와 `_trailing_suffix`를 기준으로 새 텍스트를 추출하는 글로벌 히스토리 + suffix 방식
 - 공개 고정 경로는 `ui/main_window_capture.py`, `ui/main_window_pipeline.py`, `ui/main_window_view.py`, `core/live_capture.py`이지만 실제 구현은 `ui/main_window_impl/*`, `core/live_capture_impl/*`로 이동할 수 있다. 고정 의미론 변경 시 facade와 내부 구현 문서를 함께 맞춘다.
 
-### 2.1 코어 수정 이력 (v16.12 ~ v16.14.8)
+### 2.1 코어 수정 이력 (v16.12 ~ v16.14.17)
+- `core/fallback_commit.py`/`ui/main_window_impl/pipeline_state.py`/`core/config_impl/app_config.py`: v16.14.17(2026-11-16) PROJECT_AUDIT 후속. fallback 안정 관측 게이트를 순수 함수 `decide_fallback_commit` 으로 옮기고 Chrome 확장 `fallback-commit-gate.ts` 와 `parity/pipeline-vectors.json` `fallbackCommitGate` 벡터로 함께 고정했다. (1) raw 가 계속 바뀌어도 첫 미확정 관측부터 `FALLBACK_COMMIT_MAX_WAIT_MS=2000` 이 지나면 commit 한다(연속 발언 중 commit·타임스탬프가 무기한 밀리던 문제). (2) `subtitle_reset` 수신 즉시, 그리고 reset 적용 직전에 대기 중인 후보를 commit 한다(`commitPendingFallbackOnReset`). 화면 clear 직전 400ms 안에 갱신된 마지막 어절이 후보째 버려지던 유실을 막는다. 발생 횟수는 `CaptureQualityState.fallback_reset_flushes`/`fallback_max_wait_commits` 로 남는다. 글로벌 히스토리 + suffix `rfind` 증분 추출 의미론은 바꾸지 않는다.
 - `core/text_utils.py`/`core/subtitle_pipeline_impl/entry_policy.py`/`entries.py`/`core/subtitle_pipeline.py`/`ui/main_window_impl/capture_dom.py`/`pipeline_state.py`/`pipeline_stream.py`: 2026-10-22 Chrome 확장 수집 정합 2차. `parity/capture-contract.json`·`parity/pipeline-vectors.json` 을 확장 저장소와 같은 내용으로 두고 `tests/test_parity_contract.py` 로 대조한다. 본문 `\d{4}년` 삭제(`RE_YEAR`) 중단, placeholder(`로딩중..`) 차단, 병합 경계를 확장과 같은 순수 함수(`should_merge_into_last_entry`: 알려진 channel 만 경계, structured/화자 entry 뒤 fallback 은 새 entry, fallback gap ×0.4)로 통일하고 새 entry 의 `speaker_changed` 를 설정한다. keepalive 는 raw 가 마지막 entry 와 같거나 그것으로 끝날 때 연장한다(기존: 완전 일치만). probe 는 미확정 배경 이미지·96개 샘플·container 차단 streak(6회)·내부 raw 4KB tail(본회의 전체)을 쓰고, unstable row 는 commit 하지 않고 container/unstable fallback 은 같은 raw 2회 또는 400ms 안정 관측 뒤에만 commit 한다. 글로벌 히스토리 + suffix `rfind` 증분 추출 의미론은 바꾸지 않는다.
 - `ui/main_window_capture.py`/`ui/main_window_impl/capture_browser.py`/`core/config.py`: 브라우저 헬스체크(`window_handles`, `current_url`, script ping), recoverable WebDriver 오류 승격, 같은 모드/마지막 확정 live URL 기반 Chrome 자동 재기동, `reconnected` 상태 반영을 추가했다. 이는 수집 연속성과 driver lifecycle 안정화 레이어 변경이며 글로벌 히스토리 + suffix 의미론 자체는 바꾸지 않는다.
 - `ui/main_window.py`/`ui/main_window_capture.py`/`ui/main_window_pipeline.py`/`ui/main_window_view.py`/`core/live_capture.py`: 공개 facade는 유지하고 실제 구현을 `ui/main_window_impl/`, `core/live_capture_impl/`로 재배치했다. 책임 경계와 import 구조만 바뀌며 코어 자막 의미론은 바뀌지 않는다.
@@ -167,7 +168,7 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 메시지: `("subtitle_reset", source)` 또는 `("subtitle_reset", {"source": ..., "selector": ..., "frame_path": ..., "previous_length": ...})`
 
 핸들러 동작 (순서 중요):
-1. reset marker 수신 시 `Config.SUBTITLE_RESET_GRACE_MS` 동안 pending reset으로 보관
+1. reset marker 수신 시 대기 중인 fallback 후보를 먼저 commit 하고(`COMMIT_PENDING_FALLBACK_ON_RESET`), `Config.SUBTITLE_RESET_GRACE_MS` 동안 pending reset으로 보관
 2. timer 만료 또는 다음 structured preview 처리 직전 `_commit_scheduled_subtitle_reset()` 실행
 3. `CaptureSessionState`의 preview/confirmed history/last raw/desync counter를 완전 리셋하고 `last_committed_reset_at`을 기록
 4. 새 preview는 reset 커밋 이후 처리되므로 이전 발언자 entry와 merge되지 않음
@@ -263,7 +264,7 @@ Worker(raw) [stable hybrid: MutationObserver 우선 + structured probe fallback]
 - 누락 완화를 위해 fallback delta는 1자 이상 허용
 - `_add_text_to_subtitles` 병합 조건: `ENTRY_MERGE_MAX_GAP=5`, `ENTRY_MERGE_MAX_CHARS=300`
 - fallback 경로 merge gap: `ENTRY_MERGE_MAX_GAP × FALLBACK_MERGE_GAP_FACTOR(0.4)` (최소 1초)
-- fallback 안정 관측: `FALLBACK_COMMIT_OBSERVATION_THRESHOLD = 2`, `FALLBACK_COMMIT_STABLE_MS = 400`
+- fallback 안정 관측: `FALLBACK_COMMIT_OBSERVATION_THRESHOLD = 2`, `FALLBACK_COMMIT_STABLE_MS = 400`, 최대 대기 `FALLBACK_COMMIT_MAX_WAIT_MS = 2000` (raw 가 바뀌어도 첫 미확정 관측부터), reset 시 대기 후보 선 commit
 - 미확정 판정: `UNCONFIRMED_DESCENDANT_SAMPLE_LIMIT = 96`, container 차단 허용 streak `UNCONFIRMED_FALLBACK_ALLOW_STREAK = 6`
 - 위 상수는 `parity/capture-contract.json` 과 Chrome 확장에 같은 값으로 고정된다
 - 짧은 발화 정책: 한글/영문 포함 텍스트는 길이와 무관하게 허용

@@ -5,7 +5,7 @@
 ## 1. 프로젝트 개요
 
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
-- **버전**: v16.14.16
+- **버전**: v16.14.17
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
 
 ### 관련 문서
@@ -77,6 +77,7 @@
 11. finalize 호환 경로도 shared append/merge helper를 사용해 duplicate append를 방지
 12. 중지 시: `_drain_pending_previews`로 큐를 소진하고 강제 플러시로 누락 방지
 13. 동일 자막 유지 시: 마지막 엔트리 `end_time` 주기 갱신
+14. 일반 자막(unstable row)·container fallback: 같은 raw 2회 또는 400ms 안정 관측 뒤 commit, raw 가 계속 바뀌어도 최대 2초(`FALLBACK_COMMIT_MAX_WAIT_MS`) 안 commit, `subtitle_reset` 수신 시 대기 후보를 먼저 commit (v16.14.17, `core/fallback_commit.py`, parity `fallbackCommitGate`)
 
 ### 4.3 예외 처리
 - 파일 I/O: `try-except` 필수
@@ -262,6 +263,15 @@ pip install -r requirements-dev.txt
 - `tests/test_pyright_regression.py`: 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 회귀 검증
 - `tests/test_url_policy.py`: URL policy/default URL/history sanitize 회귀 검증
 - `tests/test_project_audit_20260907.py`: 2026-09-07 PROJECT_AUDIT 후속 회귀
+
+## 8.3 v16.14.17 PROJECT_AUDIT 후속 (2026-11-16)
+
+- **reset 직전 유실 수정**: `subtitle_reset` 수신 즉시(그리고 reset 적용 직전) 대기 중인 fallback 후보를 commit 한다(`Config.COMMIT_PENDING_FALLBACK_ON_RESET`, parity `commitPendingFallbackOnReset`). 화면 clear 직전 400ms 안에 갱신된 마지막 어절이 후보째 버려지던 문제.
+- **최대 대기 상한**: raw 가 계속 바뀌어도 첫 미확정 관측(`pending_since_at`)부터 `FALLBACK_COMMIT_MAX_WAIT_MS=2000` 이 지나면 commit 한다. 판정은 순수 함수 `core/fallback_commit.decide_fallback_commit` 이고 Chrome `fallback-commit-gate.ts` 와 `parity/pipeline-vectors.json` `fallbackCommitGate` 벡터로 함께 검증한다. Chrome 확장도 같은 결함이 있어 같이 고쳤다.
+- **진단**: `CaptureQualityState` 에 `fallback_reset_flushes`, `fallback_max_wait_commits` 카운터 추가(JSON/runtime/DB `capture_quality` 로 보존).
+- **시간 역순 내보내기**: `timestamp_blocks.starts_new_block` 은 시각 역행도 새 블록으로 본다. SRT/VTT 는 `core.export_text.RelativeCueTimeline` 으로 큐 시작이 단조 증가하도록 배치한다(역행 큐는 직전 큐 끝에 이어 붙임).
+- **업데이트 정리**: 다음 시작 시 `cleanup_update_helper_copies` 가 staging 의 `update-helper-*.exe` 와 설치 폴더의 `.update-apply-*.exe` 를 지운다(frozen 실행만).
+- **회귀**: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`, Chrome `tests/fallback-commit-reset.test.ts`
 
 ## 9. HWPX 기본 내보내기 추가 (2026-03-23)
 
@@ -459,7 +469,7 @@ pip install -r requirements-dev.txt
 - `pytest -q` 85 pass, `pyright` 0 errors
 
 ## 9.9.4f 의존성 전면 업그레이드 + CI Python 3.15 (2026-10-13)
-- `requirements-dev.txt` 전면 상향: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
+- `requirements-dev.txt` 전면 상향: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다. (Qt 바인딩은 이후 v16.14.13에서 PySide6 6.12.0으로 통일)
 - cryptography 47+에 Windows ARM64 휠이 없어 ARM64에서 `pip install` 전체가 깨지므로 `platform_machine` 조건 핀(ARM64만 46.0.3)으로 둔다. x64 CI는 50.0.2 휠로 설치된다.
 - CI(`.github/workflows/ci.yml`)를 Python 3.15 단일 버전으로 전환한다. 프로젝트 `.venv` 격리 검증을 기준으로 삼는다.
 - 회귀 기준선: `pytest -q` 486 pass / 2 skipped, `pyright` 0 errors / 0 warnings, `--smoke` 정상.

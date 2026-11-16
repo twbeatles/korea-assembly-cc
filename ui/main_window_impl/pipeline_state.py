@@ -19,6 +19,11 @@ from core.live_capture import (
     reconcile_live_capture,
     set_live_row_baseline,
 )
+from core.fallback_commit import (
+    FallbackGateCandidate,
+    FallbackGateSettings,
+    decide_fallback_commit,
+)
 from core.logging_utils import logger
 from core.models import CaptureSessionState, ObservedSubtitleRow, SubtitleEntry
 from core.subtitle_pipeline import (
@@ -121,31 +126,55 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             self._clear_fallback_commit_candidate()
             return False
 
-        candidate = self.__dict__.get("_fallback_commit_candidate")
-        if isinstance(candidate, dict) and candidate.get("raw") == normalized_raw:
-            candidate["observation_count"] = int(candidate.get("observation_count", 1)) + 1
+        previous = self.__dict__.get("_fallback_commit_candidate")
+        previous_gate: FallbackGateCandidate | None = None
+        if isinstance(previous, dict):
+            first_seen_at = previous.get("first_seen_at")
+            pending_since_at = previous.get("pending_since_at", first_seen_at)
+            if isinstance(first_seen_at, datetime) and isinstance(pending_since_at, datetime):
+                previous_gate = FallbackGateCandidate(
+                    raw=str(previous.get("raw", "")),
+                    first_seen_ms=first_seen_at.timestamp() * 1000,
+                    pending_since_ms=pending_since_at.timestamp() * 1000,
+                    observation_count=int(previous.get("observation_count", 1) or 1),
+                )
+
+        decision = decide_fallback_commit(
+            previous_gate,
+            normalized_raw,
+            now.timestamp() * 1000,
+            FallbackGateSettings(
+                observation_threshold=int(Config.FALLBACK_COMMIT_OBSERVATION_THRESHOLD),
+                stable_ms=int(Config.FALLBACK_COMMIT_STABLE_MS),
+                max_wait_ms=int(Config.FALLBACK_COMMIT_MAX_WAIT_MS),
+            ),
+        )
+        if isinstance(previous, dict) and not decision.replaced and previous_gate is not None:
+            candidate = previous
+            candidate["observation_count"] = decision.candidate.observation_count
             candidate["selector"] = selector
             candidate["frame_path"] = tuple(frame_path)
             candidate["source_mode"] = source_mode or candidate.get("source_mode", "")
         else:
             self._fallback_commit_token = int(self.__dict__.get("_fallback_commit_token", 0)) + 1
+            pending_since_at = (
+                previous.get("pending_since_at", previous.get("first_seen_at"))
+                if isinstance(previous, dict) and previous_gate is not None
+                else now
+            )
             candidate = {
                 "raw": normalized_raw,
                 "selector": selector,
                 "frame_path": tuple(frame_path),
                 "source_mode": source_mode,
                 "first_seen_at": now,
+                "pending_since_at": pending_since_at,
                 "observation_count": 1,
                 "token": self._fallback_commit_token,
             }
             self._fallback_commit_candidate = candidate
 
-        stable_ms = int(Config.FALLBACK_COMMIT_STABLE_MS)
-        elapsed_ms = (now - candidate["first_seen_at"]).total_seconds() * 1000
-        if (
-            int(candidate["observation_count"]) >= int(Config.FALLBACK_COMMIT_OBSERVATION_THRESHOLD)
-            or elapsed_ms >= stable_ms
-        ):
+        if decision.commit_now:
             return self._commit_fallback_candidate(int(candidate["token"]), now)
 
         timer = self.__dict__.get("_fallback_commit_timer")
@@ -153,10 +182,33 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             try:
                 if timer.isActive():
                     timer.stop()
-                timer.start(max(0, int(stable_ms - elapsed_ms)))
+                timer.start(int(decision.delay_ms))
             except Exception:
                 pass
         return False
+
+    def _record_fallback_quality(self, name: str) -> None:
+        increment = getattr(self, "_increment_capture_quality", None)
+        if not callable(increment):
+            return
+        try:
+            increment(name)
+        except Exception:
+            logger.debug("fallback quality counter 갱신 실패: %s", name, exc_info=True)
+
+    def _flush_fallback_commit_candidate(self, now: datetime | None = None) -> bool:
+        """대기 중인 fallback 후보를 즉시 commit 한다 (reset 직전 유실 방지)."""
+        candidate = self.__dict__.get("_fallback_commit_candidate")
+        if not isinstance(candidate, dict):
+            return False
+        committed = self._commit_fallback_candidate(
+            int(candidate.get("token", 0)),
+            now or datetime.now(),
+            count_max_wait=False,
+        )
+        if committed:
+            self._record_fallback_quality("fallback_reset_flushes")
+        return committed
 
     def _commit_scheduled_fallback_candidate(self) -> None:
         candidate = self.__dict__.get("_fallback_commit_candidate")
@@ -164,10 +216,32 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             return
         self._commit_fallback_candidate(int(candidate.get("token", 0)), datetime.now())
 
-    def _commit_fallback_candidate(self, token: int, now: datetime) -> bool:
+    def _is_fallback_max_wait_commit(self, candidate: dict[str, Any], now: datetime) -> bool:
+        """안정 조건이 아니라 최대 대기 상한 때문에 commit 하는지 판정한다."""
+        first_seen_at = candidate.get("first_seen_at")
+        pending_since_at = candidate.get("pending_since_at", first_seen_at)
+        if not isinstance(first_seen_at, datetime) or not isinstance(pending_since_at, datetime):
+            return False
+        stable_elapsed_ms = (now - first_seen_at).total_seconds() * 1000
+        pending_elapsed_ms = (now - pending_since_at).total_seconds() * 1000
+        return (
+            int(candidate.get("observation_count", 1) or 1)
+            < int(Config.FALLBACK_COMMIT_OBSERVATION_THRESHOLD)
+            and stable_elapsed_ms < int(Config.FALLBACK_COMMIT_STABLE_MS)
+            and pending_elapsed_ms >= int(Config.FALLBACK_COMMIT_MAX_WAIT_MS)
+        )
+
+    def _commit_fallback_candidate(
+        self,
+        token: int,
+        now: datetime,
+        *,
+        count_max_wait: bool = True,
+    ) -> bool:
         candidate = self.__dict__.get("_fallback_commit_candidate")
         if not isinstance(candidate, dict) or int(candidate.get("token", -1)) != token:
             return False
+        max_wait_commit = count_max_wait and self._is_fallback_max_wait_commit(candidate, now)
         self._clear_fallback_commit_candidate()
         if not bool(getattr(self, "is_running", False)):
             return False
@@ -203,6 +277,8 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             self._schedule_initial_recovery_snapshot_if_needed(
                 self._build_prepared_entries_snapshot()
             )
+            if max_wait_commit:
+                self._record_fallback_quality("fallback_max_wait_commits")
         return bool(appended_entries or updated_existing)
 
     def _current_capture_settings(self) -> dict[str, int | bool]:
@@ -267,6 +343,10 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
 
     def _schedule_deferred_subtitle_reset(self, source: str) -> None:
         self._ensure_capture_runtime_state()
+        # 화면이 비워지기 직전 텍스트가 대기 후보에만 있으면 reset 과 함께 사라진다.
+        # parity `commitPendingFallbackOnReset`: reset 수신 즉시 후보를 확정한다.
+        if bool(Config.COMMIT_PENDING_FALLBACK_ON_RESET):
+            self._flush_fallback_commit_candidate()
         if self._pending_subtitle_reset_timer.isActive():
             return
         self._pending_subtitle_reset_source = str(source or "")
@@ -284,6 +364,8 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
             return
         if not self.is_running:
             return
+        if bool(Config.COMMIT_PENDING_FALLBACK_ON_RESET):
+            self._flush_fallback_commit_candidate()
         apply_reset(
             self.capture_state,
             datetime.now(),

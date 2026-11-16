@@ -288,6 +288,38 @@ def cleanup_update_backups(target: str | Path, *, keep_count: int | None = None)
             continue
 
 
+def cleanup_update_helper_copies(
+    staging_root: str | Path,
+    install_dir: str | Path | None = None,
+    *,
+    exclude: Iterable[str | Path] = (),
+) -> int:
+    """이전 업데이트가 남긴 helper EXE 사본과 중단된 교체 임시 파일을 지운다.
+
+    실행 중이라 잠긴 파일(helper 가 아직 종료 직전)은 다음 시작에 다시 시도한다.
+    """
+    excluded = {Path(item).resolve() for item in exclude}
+    patterns: list[tuple[Path, str]] = [(Path(staging_root), "update-helper-*.exe")]
+    if install_dir is not None:
+        patterns.append((Path(install_dir), ".update-apply-*.exe"))
+    removed = 0
+    for directory, pattern in patterns:
+        try:
+            candidates = list(directory.glob(pattern))
+        except OSError:
+            continue
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+                if resolved in excluded or not resolved.is_file():
+                    continue
+                resolved.unlink()
+                removed += 1
+            except OSError:
+                continue
+    return removed
+
+
 def apply_staged_update(
     *,
     target: str | Path,

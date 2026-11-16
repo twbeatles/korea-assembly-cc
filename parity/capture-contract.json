@@ -1,6 +1,6 @@
 {
   "contractVersion": 1,
-  "updatedAt": "2026-10-22",
+  "updatedAt": "2026-11-16",
   "description": "국회 의사중계 자막 수집 공유 계약. korea-assembly-cc(데스크톱)와 korea-assembly-cc-chrome(Chrome 확장)의 parity/ 폴더에 내용이 같은 사본을 둔다.",
   "repositories": {
     "desktop": "https://github.com/twbeatles/korea-assembly-cc",
@@ -81,6 +81,8 @@
     "liveLedgerMaxRows": 300,
     "fallbackCommitObservationThreshold": 2,
     "fallbackCommitStableMs": 400,
+    "fallbackCommitMaxWaitMs": 2000,
+    "commitPendingFallbackOnReset": true,
     "fallbackInternalRawMaxChars": 4096,
     "fallbackPreviewMaxChars": 400,
     "commitStableRowsOnly": true

@@ -308,6 +308,10 @@ class Config:
     # container/unstable fallback 안정 관측 commit 게이트 (Chrome FALLBACK_COMMIT_* 정합)
     FALLBACK_COMMIT_OBSERVATION_THRESHOLD = 2
     FALLBACK_COMMIT_STABLE_MS = 400
+    # raw 가 계속 바뀌어도 첫 미확정 관측부터 이 시간이 지나면 commit 한다 (Chrome 정합)
+    FALLBACK_COMMIT_MAX_WAIT_MS = 2000
+    # subtitle_reset 수신 시 대기 중인 fallback 후보를 먼저 commit 한다 (Chrome 정합)
+    COMMIT_PENDING_FALLBACK_ON_RESET = True
     # container fallback 내부 raw tail 상한 (본회의는 전체 보존), UI preview 축약 길이
     FALLBACK_INTERNAL_RAW_MAX_CHARS = 4096
     FALLBACK_PREVIEW_MAX_CHARS = 400

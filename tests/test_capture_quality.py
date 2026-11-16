@@ -24,6 +24,8 @@ def test_capture_quality_mapping_round_trip_and_sanitizing() -> None:
         "reconnects": 0,
         "desync_resets": 0,
         "salvage_skipped_files": 0,
+        "fallback_reset_flushes": 0,
+        "fallback_max_wait_commits": 0,
     }
 
 

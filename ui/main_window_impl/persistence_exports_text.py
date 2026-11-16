@@ -10,6 +10,7 @@ from ui.main_window_common import *
 from ui.main_window_common import _import_optional_module as _common_import_optional_module
 from ui.main_window_types import MainWindowHost
 from core.export_text import (
+    RelativeCueTimeline,
     format_srt_relative,
     format_vtt_relative,
     normalize_hwp_insert_text,
@@ -194,7 +195,7 @@ class MainWindowPersistenceExportsTextMixin(MainWindowHost):
             def do_save(filepath):
                 def writer(handle) -> None:
                     cue_index = 0
-                    base_time = None
+                    timeline = RelativeCueTimeline()
                     for start_time, end_time, timestamp, text in self._iter_full_session_timed_rows(
                         prepared_entries,
                         runtime_root=runtime_root,
@@ -206,15 +207,10 @@ class MainWindowPersistenceExportsTextMixin(MainWindowHost):
                         cue_start, cue_end = resolve_cue_time_range(
                             start_time, end_time, timestamp
                         )
-                        if base_time is None:
-                            base_time = cue_start
                         cue_index += 1
-                        start = format_srt_relative(
-                            (cue_start - base_time).total_seconds()
-                        )
-                        end = format_srt_relative(
-                            (cue_end - base_time).total_seconds()
-                        )
+                        start_offset, end_offset = timeline.place(cue_start, cue_end)
+                        start = format_srt_relative(start_offset)
+                        end = format_srt_relative(end_offset)
                         handle.write(f"{cue_index}\n{start} --> {end}\n{cue_text}\n\n")
                     if cue_index <= 0:
                         raise RuntimeError("저장할 유효 자막이 없습니다.")
@@ -242,7 +238,7 @@ class MainWindowPersistenceExportsTextMixin(MainWindowHost):
                 def writer(handle) -> None:
                     handle.write("WEBVTT\n\n")
                     cue_index = 0
-                    base_time = None
+                    timeline = RelativeCueTimeline()
                     for start_time, end_time, timestamp, text in self._iter_full_session_timed_rows(
                         prepared_entries,
                         runtime_root=runtime_root,
@@ -254,15 +250,10 @@ class MainWindowPersistenceExportsTextMixin(MainWindowHost):
                         cue_start, cue_end = resolve_cue_time_range(
                             start_time, end_time, timestamp
                         )
-                        if base_time is None:
-                            base_time = cue_start
                         cue_index += 1
-                        start = format_vtt_relative(
-                            (cue_start - base_time).total_seconds()
-                        )
-                        end = format_vtt_relative(
-                            (cue_end - base_time).total_seconds()
-                        )
+                        start_offset, end_offset = timeline.place(cue_start, cue_end)
+                        start = format_vtt_relative(start_offset)
+                        end = format_vtt_relative(end_offset)
                         handle.write(f"{cue_index}\n{start} --> {end}\n{cue_text}\n\n")
                     if cue_index <= 0:
                         raise RuntimeError("저장할 유효 자막이 없습니다.")

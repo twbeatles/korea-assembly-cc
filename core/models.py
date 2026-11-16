@@ -20,6 +20,8 @@ class CaptureQualityState:
     reconnects: int = 0
     desync_resets: int = 0
     salvage_skipped_files: int = 0
+    fallback_reset_flushes: int = 0
+    fallback_max_wait_commits: int = 0
 
     _FIELDS = (
         "queue_drops",
@@ -27,6 +29,8 @@ class CaptureQualityState:
         "reconnects",
         "desync_resets",
         "salvage_skipped_files",
+        "fallback_reset_flushes",
+        "fallback_max_wait_commits",
     )
 
     @classmethod

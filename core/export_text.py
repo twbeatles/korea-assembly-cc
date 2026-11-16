@@ -119,6 +119,34 @@ def format_cue_timestamp_from_seconds(
     return f"{h:02d}:{m:02d}:{s:02d}{fractional_sep}{ms:03d}"
 
 
+class RelativeCueTimeline:
+    """세션 첫 큐 기준 상대 타임코드를 단조 증가하도록 배치한다.
+
+    정상 세션은 첫 큐 기준 차이를 그대로 쓴다. 큐 시작이 직전 큐 시작보다
+    이르면(정렬하지 않은 병합, 시스템 시계 역행) 직전 큐 끝에 이어 붙이고 이후
+    큐도 같은 만큼 민다. 0초 길이 큐나 역순 큐가 생기지 않는다.
+    """
+
+    def __init__(self) -> None:
+        self._base: Optional[datetime] = None
+        self._shift = 0.0
+        self._last_start = 0.0
+        self._last_end = 0.0
+
+    def place(self, cue_start: datetime, cue_end: datetime) -> Tuple[float, float]:
+        if self._base is None:
+            self._base = cue_start
+        duration = max(0.001, (cue_end - cue_start).total_seconds())
+        start = (cue_start - self._base).total_seconds() + self._shift
+        if start < self._last_start:
+            self._shift += self._last_end - start
+            start = self._last_end
+        end = start + duration
+        self._last_start = start
+        self._last_end = max(self._last_end, end)
+        return start, end
+
+
 def format_srt_relative(total_seconds: float) -> str:
     return format_cue_timestamp_from_seconds(total_seconds, fractional_sep=",")
 
