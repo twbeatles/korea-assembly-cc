@@ -6,6 +6,7 @@ Windows 데스크톱 배포용 운영 체크리스트입니다. 인증서와 업
 
 - [`CHROME_EXTENSION_PARITY.md`](CHROME_EXTENSION_PARITY.md) — Chrome 확장과의 수집 계약 정합
 - [`HWPX_EXPORT_ANALYSIS.md`](HWPX_EXPORT_ANALYSIS.md) — HWPX 패키지 유지 방침 (스키마 전면 개편 비대상)
+- [`BUILD_TROUBLESHOOTING.md`](BUILD_TROUBLESHOOTING.md) — PyInstaller 빌드 문제 기록 (python3t.dll, UPX, GUI EXE smoke 판정)
 
 ## 1. 품질 게이트
 
@@ -58,6 +59,8 @@ python scripts/run_release_verification.py
 pyinstaller --clean subtitle_extractor.spec
 # dist/국회의사중계자막추출기 vX.Y.Z.exe
 ```
+
+빌드 Python은 CI·릴리스·로컬 모두 3.15다. 빌드 뒤에는 frozen smoke를 반드시 돌린다. PowerShell에서 GUI EXE를 `&`로 실행하면 종료 코드를 받지 못하므로 `Start-Process -Wait -PassThru`를 쓴다. 증상별 원인과 조치는 [`BUILD_TROUBLESHOOTING.md`](BUILD_TROUBLESHOOTING.md)에 있다.
 
 - [ ] frozen `--smoke` exit 0 (`hwpx_ok` 등 JSON ok)  
 - [ ] `portable.flag` 옆 `--smoke-storage-preflight` exit 0  

@@ -23,6 +23,7 @@
 | [`PROJECT_AUDIT.md`](PROJECT_AUDIT.md) | 기능 감사·리스크·후속 조치 현황 |
 | [`PIPELINE_LOCK.md`](PIPELINE_LOCK.md) | 자막 파이프라인 코어 의미론 고정 |
 | [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) | 릴리스·빌드·CI 체크리스트 |
+| [`docs/BUILD_TROUBLESHOOTING.md`](docs/BUILD_TROUBLESHOOTING.md) | PyInstaller 빌드 문제 기록 (python3t.dll, UPX, GUI EXE smoke 판정) |
 
 ## 2. 기술 스택
 
@@ -258,7 +259,9 @@ korea-assembly-cc/
 - **진단**: `CaptureQualityState` 에 `fallback_reset_flushes`, `fallback_max_wait_commits` 카운터 추가(JSON/runtime/DB `capture_quality` 로 보존).
 - **시간 역순 내보내기**: `timestamp_blocks.starts_new_block` 은 시각 역행도 새 블록으로 본다. SRT/VTT 는 `core.export_text.RelativeCueTimeline` 으로 큐 시작이 단조 증가하도록 배치한다(역행 큐는 직전 큐 끝에 이어 붙임).
 - **업데이트 정리**: 다음 시작 시 `cleanup_update_helper_copies` 가 staging 의 `update-helper-*.exe` 와 설치 폴더의 `.update-apply-*.exe` 를 지운다(frozen 실행만).
-- **회귀**: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`, Chrome `tests/fallback-commit-reset.test.ts`
+- **동일성 차등 검증**: `scripts/parity_differential.py` 가 같은 무작위 입력을 데스크톱·Chrome 구현에 넣어 10개 함수 결과를 비교한다(Chrome 쪽 `tests/parity-differential.test.ts`, 환경 변수 없으면 no-op). 첫 실행에서 찾은 공백 문자 집합 차이(Python 은 U+001C–U+001F·U+0085 를 공백으로, JS 는 U+FEFF 를 trim)를 합집합으로 통일해 계약 `capture-contract.json` `whitespace` 에 고정했다. 데스크톱은 `text_utils.strip_subtitle_whitespace` 계열을 결합·fallback 게이트에 쓴다. 시드 3개 약 12만 건 일치. `check_before_push.py --with-parity-differential` 로도 실행한다.
+- **빌드·릴리스 (상세 `docs/BUILD_TROUBLESHOOTING.md`)**: 로컬 3.15 빌드 EXE가 `DLL load failed while importing _rust` 로 죽던 원인은 PATH 의 `C:/Python314/python3t.dll`(3.14t) 번들이었다. spec 은 빌드 인터프리터의 python3t.dll(`abi3t-compat` 또는 prefix 루트)로 교체하고 다른 free-threaded 런타임(`python3XXt.dll`)을 빼며, 사본이 없으면 빌드를 실패시킨다. UPX 는 `_rust.pyd`·Python/VC 런타임을 제외한다. `release.yml` 은 Python 3.15 로 빌드하고, GUI EXE 를 `&` 로 실행해 종료를 기다리지 않던 smoke 게이트를 `Start-Process -Wait` + JSON `ok` 판정으로 고쳤다.
+- **회귀**: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`, `tests/test_build_spec_contract.py`, `tests/test_release_workflow.py`, Chrome `tests/fallback-commit-reset.test.ts`
 
 ### Chrome 확장 수집 알고리즘 정합 2차 + 공유 계약 `parity/` (2026-10-22)
 - **연결 방식**: 코드 공유 없이 `parity/capture-contract.json`(사이트·DOM·상수·의도적 차이)과 `parity/pipeline-vectors.json`(순수 함수 벡터)을 Chrome 확장 저장소와 같은 내용으로 둔다. `tests/test_parity_contract.py` 가 구현을 대조하고, `python scripts/check_parity_sync.py`(pre-push `check_before_push.py` 포함, 형제 저장소 없으면 skip)가 사본 일치를 검사한다. 수집 의미론을 바꾸면 `parity/` 를 먼저 고치고 양쪽을 맞춘 뒤 `--write` 로 복사한다.
@@ -659,6 +662,8 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - Constructor smoke check: `python "국회의사중계 자막.py" --smoke --smoke-instantiate-window --smoke-storage-dir .pytest_tmp/smoke-window`
 - Storage smoke check: `python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage`
 - Release verification: `python scripts/run_release_verification.py`
+- Parity differential (Chrome 형제 저장소·npx 필요): `python scripts/parity_differential.py`
+- 빌드 Python: CI·릴리스(`release.yml`)·로컬 모두 3.15. 빌드 문제 기록은 `docs/BUILD_TROUBLESHOOTING.md`
 - Source-only release verification: `python scripts/run_release_verification.py --offline --skip-build --instantiate-window`
 - Live-list drift report: `python scripts/check_live_list_drift.py` (`--fail-on-drift`, `--fail-on-name-drift`로 strict mode)
 - 인코딩 정책: 소스/문서/`subtitle_extractor.spec`는 UTF-8 without BOM 유지

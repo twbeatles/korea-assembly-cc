@@ -368,7 +368,9 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 - **시간 역순 자막 내보내기** — 시간순 정렬 없이 병합한 세션에서 타임스탬프 문단이 한 덩어리로 뭉치고 SRT/VTT 큐가 0초가 되던 문제 수정
 - **업데이트 임시 파일 정리** — 업데이트마다 남던 helper EXE 사본과 중단된 교체 임시 파일을 다음 시작 때 삭제
 - 품질 진단(`capture_quality`)에 `fallback_reset_flushes`, `fallback_max_wait_commits` 추가
-- 회귀: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`
+- **Chrome 확장과 동일성 검증** — 같은 무작위 입력을 두 구현에 넣어 비교하는 `scripts/parity_differential.py` 추가. 찾아낸 공백 문자 처리 차이(제어문자·BOM)를 공유 계약 `whitespace`로 통일
+- **빌드·릴리스** — 로컬 3.15 빌드 EXE가 실행되지 않던 문제(다른 Python의 `python3t.dll` 번들) 수정, 릴리스 워크플로를 Python 3.15로 올리고 frozen smoke가 실제로 종료 코드를 확인하도록 수정. 기록: [`docs/BUILD_TROUBLESHOOTING.md`](docs/BUILD_TROUBLESHOOTING.md)
+- 회귀: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`, `tests/test_build_spec_contract.py`, `tests/test_release_workflow.py`
 
 ### v16.14.16 (2026-10-22)
 - **Chrome 확장 수집 알고리즘 정합 2차 + 공유 계약 `parity/`** — 확장 저장소와 같은 내용의 `parity/capture-contract.json`·`pipeline-vectors.json` 으로 두 구현을 테스트(`tests/test_parity_contract.py`)와 `scripts/check_parity_sync.py` 로 대조

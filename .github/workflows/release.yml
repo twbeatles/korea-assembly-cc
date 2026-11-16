@@ -30,7 +30,10 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # CI(ci.yml)·로컬과 같은 Python 으로 배포 EXE 를 만든다.
+          # 3.15 cryptography `_rust` 의 python3t.dll 처리는 spec 이 담당한다
+          # (docs/BUILD_TROUBLESHOOTING.md).
+          python-version: "3.15"
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
@@ -56,8 +59,17 @@ jobs:
           if ($null -eq $source) { throw 'PyInstaller did not create an EXE' }
           $artifact = Join-Path $PWD "dist/korea-assembly-cc-v$version.exe"
           Copy-Item -LiteralPath $source.FullName -Destination $artifact -Force
-          & $artifact --smoke
-          if ($LASTEXITCODE -ne 0) { throw "Frozen smoke check failed: $LASTEXITCODE" }
+          # GUI(console=False) EXE 는 `& $artifact` 로 실행하면 PowerShell 이 종료를 기다리지 않고
+          # $LASTEXITCODE 도 갱신하지 않는다. 실패하는 EXE 도 통과했으므로 Start-Process -Wait 로
+          # 종료 코드를 받고, smoke JSON 의 ok 값까지 확인한다.
+          $smokeDir = Join-Path $env:RUNNER_TEMP 'frozen-smoke-storage'
+          $smokeJson = Join-Path $env:RUNNER_TEMP 'frozen-smoke.json'
+          # ArgumentList 배열은 공백 경로를 따옴표 처리하지 않으므로 인자 문자열을 직접 만든다.
+          $smokeArgs = '--smoke --smoke-instantiate-window --smoke-storage-dir "{0}" --smoke-output "{1}"' -f $smokeDir, $smokeJson
+          $smoke = Start-Process -FilePath $artifact -ArgumentList $smokeArgs -Wait -PassThru -NoNewWindow
+          if ($smoke.ExitCode -ne 0) { throw "Frozen smoke check failed: exit $($smoke.ExitCode) $(Get-Content -Raw -ErrorAction SilentlyContinue $smokeJson)" }
+          $smokeResult = Get-Content -Raw $smokeJson | ConvertFrom-Json
+          if (-not $smokeResult.ok) { throw "Frozen smoke reported failure: $($smokeResult.error)" }
           $artifactUrl = "https://github.com/twbeatles/korea-assembly-cc/releases/download/v$version/korea-assembly-cc-v$version.exe"
           python scripts/build_update_manifest.py --version $version --artifact $artifact --artifact-url $artifactUrl --output "$env:RUNNER_TEMP/latest.json"
           "ARTIFACT=$artifact" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

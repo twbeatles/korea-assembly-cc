@@ -17,6 +17,7 @@
 | `docs/HWPX_EXPORT_ANALYSIS.md` | HWPX 최소 패키지 / 스키마 전면 개편 불필요 |
 | `PROJECT_AUDIT.md` | 기능 감사·후속 조치 |
 | `docs/RELEASE_CHECKLIST.md` | 릴리스·CI·pyright 게이트 |
+| `docs/BUILD_TROUBLESHOOTING.md` | PyInstaller 빌드 문제 기록 (python3t.dll, UPX, GUI EXE smoke 판정) |
 | `PIPELINE_LOCK.md` | 파이프라인 코어 고정 |
 
 ## 2. 기술 스택
@@ -238,6 +239,8 @@ pip install -r requirements-dev.txt
 - Constructor smoke check: `python "국회의사중계 자막.py" --smoke --smoke-instantiate-window --smoke-storage-dir .pytest_tmp/smoke-window`
 - Storage smoke check: `python "국회의사중계 자막.py" --smoke-storage-preflight --smoke-storage-dir .pytest_tmp/smoke-storage`
 - Release verification: `python scripts/run_release_verification.py`
+- Parity differential (Chrome 형제 저장소·npx 필요): `python scripts/parity_differential.py`
+- 빌드 Python: CI·릴리스(`release.yml`)·로컬 모두 3.15. 빌드 문제 기록은 `docs/BUILD_TROUBLESHOOTING.md`
 - Source-only release verification: `python scripts/run_release_verification.py --offline --skip-build --instantiate-window`
 - Live-list drift report: `python scripts/check_live_list_drift.py` (`--fail-on-drift`, `--fail-on-name-drift`로 strict mode)
 - Frozen smoke check: `pyinstaller --clean subtitle_extractor.spec` 후 EXE `--smoke`, 필요 시 `--smoke-instantiate-window`, EXE 옆 `portable.flag` 생성 후 `--smoke-storage-preflight` exit code 0 확인
@@ -271,7 +274,9 @@ pip install -r requirements-dev.txt
 - **진단**: `CaptureQualityState` 에 `fallback_reset_flushes`, `fallback_max_wait_commits` 카운터 추가(JSON/runtime/DB `capture_quality` 로 보존).
 - **시간 역순 내보내기**: `timestamp_blocks.starts_new_block` 은 시각 역행도 새 블록으로 본다. SRT/VTT 는 `core.export_text.RelativeCueTimeline` 으로 큐 시작이 단조 증가하도록 배치한다(역행 큐는 직전 큐 끝에 이어 붙임).
 - **업데이트 정리**: 다음 시작 시 `cleanup_update_helper_copies` 가 staging 의 `update-helper-*.exe` 와 설치 폴더의 `.update-apply-*.exe` 를 지운다(frozen 실행만).
-- **회귀**: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`, Chrome `tests/fallback-commit-reset.test.ts`
+- **동일성 차등 검증**: `scripts/parity_differential.py` 가 같은 무작위 입력을 데스크톱·Chrome 구현에 넣어 10개 함수 결과를 비교한다(Chrome 쪽 `tests/parity-differential.test.ts`, 환경 변수 없으면 no-op). 첫 실행에서 찾은 공백 문자 집합 차이(Python 은 U+001C–U+001F·U+0085 를 공백으로, JS 는 U+FEFF 를 trim)를 합집합으로 통일해 계약 `capture-contract.json` `whitespace` 에 고정했다. 데스크톱은 `text_utils.strip_subtitle_whitespace` 계열을 결합·fallback 게이트에 쓴다. 시드 3개 약 12만 건 일치. `check_before_push.py --with-parity-differential` 로도 실행한다.
+- **빌드·릴리스 (상세 `docs/BUILD_TROUBLESHOOTING.md`)**: 로컬 3.15 빌드 EXE가 `DLL load failed while importing _rust` 로 죽던 원인은 PATH 의 `C:/Python314/python3t.dll`(3.14t) 번들이었다. spec 은 빌드 인터프리터의 python3t.dll(`abi3t-compat` 또는 prefix 루트)로 교체하고 다른 free-threaded 런타임(`python3XXt.dll`)을 빼며, 사본이 없으면 빌드를 실패시킨다. UPX 는 `_rust.pyd`·Python/VC 런타임을 제외한다. `release.yml` 은 Python 3.15 로 빌드하고, GUI EXE 를 `&` 로 실행해 종료를 기다리지 않던 smoke 게이트를 `Start-Process -Wait` + JSON `ok` 판정으로 고쳤다.
+- **회귀**: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`, `tests/test_build_spec_contract.py`, `tests/test_release_workflow.py`, Chrome `tests/fallback-commit-reset.test.ts`
 
 ## 9. HWPX 기본 내보내기 추가 (2026-03-23)
 

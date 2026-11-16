@@ -17,6 +17,9 @@
 | Gap: 유실·지연 진단 신호 | Fixed | `CaptureQualityState.fallback_reset_flushes`, `fallback_max_wait_commits` | `tests/test_capture_quality.py` |
 | Phase 3: 후보 판정 순수 함수화 + parity 벡터 | Done | `core/fallback_commit.py` ↔ Chrome `src/core/subtitle-pipeline/fallback-commit-gate.ts` | 양쪽 parity 테스트 |
 | Chrome 확장 동일 결함 | Fixed (확장 저장소) | reset 분기·타이머 flush, `pendingSince` 최대 대기 | 확장 `tests/fallback-commit-reset.test.ts` (수정 전 코드에서 2건 모두 실패 확인) |
+| 양 저장소 동일성 (무작위 차등 검증) | Fixed | `scripts/parity_differential.py` 신설. 공백 문자 집합 차이(U+001C–U+001F·U+0085·U+FEFF)를 찾아 계약 `whitespace`로 통일, 시드 3개 약 12만 건 일치 | 양쪽 parity 테스트 `whitespace` + 벡터 |
+| 로컬 3.15 빌드 EXE 실행 실패 | Fixed | PATH 의 `C:\Python314\python3t.dll`(3.14t)이 번들되던 문제. spec 이 빌드 인터프리터 사본으로 교체하고 다른 free-threaded 런타임 제거, UPX 제외 | `tests/test_build_spec_contract.py`, `docs/BUILD_TROUBLESHOOTING.md` §2.2·§2.3 |
+| 릴리스 frozen smoke 게이트 무효 | Fixed | GUI EXE 를 `& $artifact` 로 실행해 종료를 기다리지 않던 문제(실패 EXE 도 `$LASTEXITCODE=0`). `Start-Process -Wait` + JSON `ok` 판정, 릴리스 빌드 Python 3.12 → 3.15 | `tests/test_release_workflow.py`, `docs/BUILD_TROUBLESHOOTING.md` §2.4 |
 | 문서 불일치 (§6) | Fixed | README·CLAUDE·GEMINI 의 "즉시 반영" 설명, PySide6 배지, 빌드 예시 버전, PyQt6 핀 메모 주석 | — |
 
 남은 항목: 실사이트 commit 지연·reset 타이밍 측정용 opt-in 스크립트(§7 Phase 3 두 번째 항목)와 §5 "추정" 두 건(stable/unstable 혼합 row, 본회의 raw 무제한)은 실제 생중계 관측이 필요해 이번에 구현하지 않았다. 새 진단 카운터가 실사이트 빈도 측정의 첫 근거가 된다.

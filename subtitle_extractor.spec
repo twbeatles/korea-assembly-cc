@@ -242,14 +242,50 @@ a = Analysis(
     noarchive=False,
 )
 
-# Python 3.15 abi3t: cryptography _rust.pyd links python3t.dll
-# (<prefix>\abi3t-compat), which PyInstaller does not auto-collect.
-# Without it the frozen exe dies with "DLL load failed while importing _rust".
-_py3t_dll = os.path.join(sys.base_prefix, 'abi3t-compat', 'python3t.dll')
+# Python 3.15 abi3t: cryptography _rust.pyd 는 python3t.dll 을 import 하는데
+# PyInstaller 가 자동으로 모으지 않거나, PATH 에 있는 다른 Python(예: C:\Python314,
+# 3.14 free-threaded → python314t.dll forward) 사본을 집어 온다. 그 사본은 3.15
+# 런타임에서 "DLL 초기화 루틴 실패/프로시저 없음"으로 _rust import 를 깨뜨린다.
+# 항상 빌드 인터프리터의 사본으로 교체하고, 함께 끌려온 free-threaded 런타임
+# DLL(python3XXt.dll)은 제거한다(이 앱은 GIL 인터프리터로 빌드한다).
+# 상세: docs/BUILD_TROUBLESHOOTING.md §2.1·§2.2
+_PY3T_CANDIDATES = [
+    # python.org 설치본 (actions/setup-python 포함)
+    os.path.join(sys.base_prefix, 'abi3t-compat', 'python3t.dll'),
+    # python-build-standalone(uv 등) 배포판은 루트에 둔다
+    os.path.join(sys.base_prefix, 'python3t.dll'),
+]
+_py3t_dll = next((path for path in _PY3T_CANDIDATES if os.path.isfile(path)), None)
 _py3t_dest = 'python3t.dll'
-if os.path.isfile(_py3t_dll) and not any(
-        (b[0] or '').lower() == _py3t_dest for b in a.binaries):
+_FOREIGN_FT_RUNTIME = re.compile(r'python3\d+t\.dll')
+
+
+def _binary_basename(entry) -> str:
+    return os.path.basename(str(entry[0] or '')).lower()
+
+
+def _binary_source(entry) -> str:
+    return os.path.normcase(os.path.abspath(str(entry[1] or '')))
+
+
+if _py3t_dll:
+    a.binaries = [
+        b for b in a.binaries
+        if _binary_basename(b) != _py3t_dest
+        and not _FOREIGN_FT_RUNTIME.fullmatch(_binary_basename(b))
+    ]
     a.binaries.append((_py3t_dest, _py3t_dll, 'BINARY'))
+else:
+    _foreign_py3t = [
+        _binary_source(b) for b in a.binaries if _binary_basename(b) == _py3t_dest
+    ]
+    if _foreign_py3t:
+        raise SystemExit(
+            'python3t.dll for the build interpreter was not found under '
+            f'{sys.base_prefix}, but PyInstaller collected {_foreign_py3t} from PATH. '
+            'That copy belongs to another Python and breaks cryptography._rust in the '
+            'frozen exe. See docs/BUILD_TROUBLESHOOTING.md section 2.2.'
+        )
 
 # 불필요한 바이너리 제거 (추가 경량화)
 a.binaries = [x for x in a.binaries if not any(
@@ -261,6 +297,20 @@ a.binaries = [x for x in a.binaries if not any(
 )]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+# UPX 압축 제외 목록 (basename 일치).
+# - cryptography `_rust.pyd`(Rust 확장, TLS 콜백 보유)와 Python 런타임/forwarder DLL,
+#   VC 런타임은 압축 이득이 작고 UPX 압축 시 로더 문제 위험만 있다. frozen 업데이트
+#   서명 검증이 `_rust` 를 쓰므로 여기서 깨지면 --smoke 가 dependency_import 로 죽는다.
+# UPX 가 설치되지 않은 환경(CI release runner)에서는 영향이 없다.
+_UPX_EXCLUDE = [
+    '_rust.pyd',
+    f'python{sys.version_info.major}{sys.version_info.minor}.dll',
+    'python3.dll',
+    'python3t.dll',
+    'vcruntime140.dll',
+    'vcruntime140_1.dll',
+]
 
 exe = EXE(
     pyz,
@@ -274,7 +324,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,  # Windows에서는 strip 비활성화
     upx=True,  # UPX 압축 사용 (설치되어 있다면)
-    upx_exclude=[],
+    upx_exclude=_UPX_EXCLUDE,
     runtime_tmpdir=None,
     console=False,  # 콘솔 창 숨김 (GUI 앱)
     disable_windowed_traceback=False,
