@@ -21,7 +21,7 @@
       "compact": "안녕하세요여러분"
     },
     {
-      "input": "​국회​ 본회의﻿",
+      "input": "​국회​ 본회의\ufeff",
       "normalized": "국회 본회의",
       "compact": "국회본회의"
     },
@@ -34,6 +34,41 @@
       "input": "줄1\r\n줄2\r줄3",
       "normalized": "줄1 줄2 줄3",
       "compact": "줄1줄2줄3"
+    },
+    {
+      "input": "가\u001c나",
+      "normalized": "가 나",
+      "compact": "가나"
+    },
+    {
+      "input": "가\u001f나",
+      "normalized": "가 나",
+      "compact": "가나"
+    },
+    {
+      "input": "가\u0085나",
+      "normalized": "가 나",
+      "compact": "가나"
+    },
+    {
+      "input": "가\u00a0나",
+      "normalized": "가 나",
+      "compact": "가나"
+    },
+    {
+      "input": "가\u3000나",
+      "normalized": "가 나",
+      "compact": "가나"
+    },
+    {
+      "input": "가\u2028나",
+      "normalized": "가 나",
+      "compact": "가나"
+    },
+    {
+      "input": "가\ufeff나",
+      "normalized": "가나",
+      "compact": "가나"
     }
   ],
   "extractIncremental": [
@@ -255,6 +290,31 @@
       "base": "숫자",
       "addition": "%",
       "expected": "숫자%"
+    },
+    {
+      "base": "가\u001c",
+      "addition": "\u001c나",
+      "expected": "가 나"
+    },
+    {
+      "base": "가\u0085",
+      "addition": "\u0085나",
+      "expected": "가 나"
+    },
+    {
+      "base": "가\ufeff",
+      "addition": "\ufeff나",
+      "expected": "가 나"
+    },
+    {
+      "base": "가\u00a0",
+      "addition": "\u00a0나",
+      "expected": "가 나"
+    },
+    {
+      "base": "가\u3000",
+      "addition": "\u3000나",
+      "expected": "가 나"
     }
   ],
   "committable": [
@@ -769,6 +829,29 @@
             "commitNow": false,
             "delayMs": 300,
             "observationCount": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "bom_and_separator_trim_matches_same_raw",
+      "steps": [
+        {
+          "raw": "오늘 회의",
+          "atMs": 0,
+          "expected": {
+            "commitNow": false,
+            "delayMs": 400,
+            "observationCount": 1
+          }
+        },
+        {
+          "raw": "오늘 회의\ufeff\u001c",
+          "atMs": 100,
+          "expected": {
+            "commitNow": true,
+            "delayMs": 0,
+            "observationCount": 2
           }
         }
       ]

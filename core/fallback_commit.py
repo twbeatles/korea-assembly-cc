@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 from core.config import Config
+from core.text_utils import strip_subtitle_whitespace
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +52,7 @@ def decide_fallback_commit(
 ) -> FallbackGateDecision:
     """새 관측(raw, now_ms)을 반영한 후보와 commit 여부/대기 시간을 돌려준다."""
     active = settings or FallbackGateSettings()
-    normalized = str(raw or "").strip()
+    normalized = strip_subtitle_whitespace(raw)
     if previous is not None and previous.raw == normalized:
         candidate = replace(previous, observation_count=previous.observation_count + 1)
         replaced = False

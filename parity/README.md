@@ -11,11 +11,11 @@
 
 ## 파일
 
-| 파일                    | 내용                                                                                                               | 각 저장소의 검증 테스트                                                           |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `capture-contract.json` | 사이트 호스트·DOM 셀렉터·화자색·미확정 판정·placeholder·파이프라인 상수, 의도적 차이 목록                          | Chrome `tests/parity-contract.test.ts` / 데스크톱 `tests/test_parity_contract.py` |
-| `pipeline-vectors.json` | 순수 함수 입력→기대값 벡터 (정규화, 증분 추출, 결합, commit 가능 판정, 병합, keepalive, 미확정 하이라이트, 샘플링) | 같은 테스트 파일                                                                  |
-| `README.md`             | 이 문서                                                                                                            | —                                                                                 |
+| 파일                    | 내용                                                                                                                                       | 각 저장소의 검증 테스트                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `capture-contract.json` | 사이트 호스트·DOM 셀렉터·화자색·미확정 판정·placeholder·파이프라인 상수·공백 문자 집합, 의도적 차이 목록                                   | Chrome `tests/parity-contract.test.ts` / 데스크톱 `tests/test_parity_contract.py` |
+| `pipeline-vectors.json` | 순수 함수 입력→기대값 벡터 (정규화, 증분 추출, 결합, commit 가능 판정, 병합, keepalive, 미확정 하이라이트, 샘플링, fallback commit 게이트) | 같은 테스트 파일                                                                  |
+| `README.md`             | 이 문서                                                                                                                                    | —                                                                                 |
 
 각 저장소의 테스트는 **자기 구현 상수/함수가 이 파일과 같은 값을 내는지** 검사합니다. 따라서 한쪽만 바꾸면 그쪽 테스트가 깨지거나, 사본이 달라져 동기화 검사가 실패합니다.
 
@@ -30,6 +30,16 @@ npm run check:parity            # KOREA_ASSEMBLY_CC_DIR 로 데스크톱 경로 
 # 데스크톱 저장소에서
 python scripts/check_parity_sync.py   # KOREA_ASSEMBLY_CC_CHROME_DIR 로 확장 경로 지정 가능
 ```
+
+## 차등 검증 (무작위 입력)
+
+벡터는 손으로 고른 사례만 봅니다. 데스크톱 저장소의 `python scripts/parity_differential.py`는 같은 무작위 입력을 두 구현에 넣어 결과를 비교합니다. 비교 대상은 정규화, 증분 추출, 결합, commit 판정, keepalive, 병합, 미확정 배경, 샘플링, fallback 게이트입니다.
+
+- Chrome 쪽 계산은 `tests/parity-differential.test.ts`가 맡습니다. 환경 변수가 없는 일반 `npm test`에서는 아무 일도 하지 않습니다.
+- 데스크톱에서 `python scripts/check_before_push.py --with-parity-differential`로도 실행할 수 있습니다.
+- 불일치가 나오면 원인을 고친 뒤 해당 입력을 이 폴더의 벡터에 사례로 추가합니다.
+
+2026-11-16 첫 실행에서 공백 문자 집합 차이를 찾았습니다. Python 공백은 U+001C–U+001F·U+0085를 포함하고, JS `trim`은 U+FEFF(BOM)를 포함합니다. 그래서 `capture-contract.json` `whitespace`에 두 집합의 합집합을 고정했습니다(`extraSeparators`, `trimIncludesBom`). 고친 뒤 시드 3개, 약 12만 건 비교에서 차이가 없었습니다.
 
 ## 변경 절차
 

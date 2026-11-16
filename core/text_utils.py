@@ -9,6 +9,30 @@ from pathlib import Path
 from typing import List, Optional, Union
 from core.config import Config
 
+# 공유 공백 규칙 (parity `whitespace`): Python 공백(`str.isspace`, U+001C–U+001F·U+0085 포함)에
+# BOM(U+FEFF)을 더한 집합을 양 끝에서 자른다. Chrome `trimSubtitleWhitespace` 와 같은 집합이다.
+_BOM = chr(0xFEFF)
+
+
+def strip_subtitle_whitespace(text: str) -> str:
+    return lstrip_subtitle_whitespace(rstrip_subtitle_whitespace(text))
+
+
+def rstrip_subtitle_whitespace(text: str) -> str:
+    value = str(text or "")
+    while value and (value[-1].isspace() or value[-1] == _BOM):
+        value = value[:-1]
+    return value
+
+
+def lstrip_subtitle_whitespace(text: str) -> str:
+    value = str(text or "")
+    index = 0
+    while index < len(value) and (value[index].isspace() or value[index] == _BOM):
+        index += 1
+    return value[index:]
+
+
 def clean_text(text: str) -> str:
     """자막 텍스트 정리 (성능 최적화: 사전 컴파일된 정규식 사용)"""
     if not text:

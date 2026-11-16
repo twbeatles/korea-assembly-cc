@@ -121,7 +121,7 @@ class MainWindowPipelineStateMixin(PipelineStateBase):
         `FALLBACK_COMMIT_STABLE_MS` 이상 유지되면 commit 한다.
         """
         self._ensure_capture_runtime_state()
-        normalized_raw = str(raw or "").strip()
+        normalized_raw = utils.strip_subtitle_whitespace(raw)
         if not normalized_raw:
             self._clear_fallback_commit_candidate()
             return False

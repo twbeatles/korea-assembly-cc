@@ -54,8 +54,8 @@ def _apply_source_meta(entry: SubtitleEntry, meta: Optional[PipelineSourceMeta])
         entry.speaker_channel = meta.speaker_channel
 
 def _join_stream_text(base: str, addition: str) -> str:
-    left = str(base or "").rstrip()
-    right = str(addition or "").lstrip()
+    left = utils.rstrip_subtitle_whitespace(base)
+    right = utils.lstrip_subtitle_whitespace(addition)
     if not left:
         return right
     if not right:

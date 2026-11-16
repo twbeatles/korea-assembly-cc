@@ -165,6 +165,26 @@
 
 회귀: 데스크톱 `tests/test_project_audit_20261116.py`, 확장 `tests/fallback-commit-reset.test.ts`, 양쪽 parity 테스트.
 
+## 4.3 무작위 차등 검증과 공백 규칙 (2026-11-16)
+
+공유 벡터만으로는 손으로 고른 사례밖에 보지 못한다. 그래서 `scripts/parity_differential.py`를 추가했다. 같은 무작위 입력을 데스크톱과 확장 구현에 넣어 함수 10개의 결과를 비교한다. 확장 쪽 계산은 `tests/parity-differential.test.ts`가 맡는다.
+
+- 제어·특수 공백 문자를 넣지 않은 첫 실행(6,311건)은 `joinStreamText` 7건만 달랐다. 원인은 U+FEFF였다.
+- 문자 범위를 넓히자 정규화·compact·증분 추출·결합·fallback 게이트의 raw 비교에서 차이가 수백 건 나왔다. 문자 하나씩 넣어 원인을 분리했다:
+
+  | 문자 | Python(데스크톱) | JS(확장) |
+  |---|---|---|
+  | U+001C–U+001F, U+0085 | 공백(`str.isspace`, 정규식 공백 클래스) | 공백 아님 |
+  | U+FEFF | `strip` 대상 아님 | `trim` 대상 |
+
+- 두 집합의 합집합을 공통 공백으로 정해 계약 `capture-contract.json` `whitespace`(`extraSeparators`, `trimIncludesBom`)에 고정했다.
+  - 확장: `text-normalizer.ts`의 정규화·compact·결합이 5개 제어문자를 공백으로 본다. 새 `trimSubtitleWhitespace*`가 이를 처리하고 fallback 게이트 trim도 같은 함수를 쓴다.
+  - 데스크톱: `core/text_utils.strip_subtitle_whitespace`/`lstrip_`/`rstrip_`가 U+FEFF도 자른다. 이 함수를 `_join_stream_text`와 fallback 게이트(`decide_fallback_commit`, `pipeline_state`)가 쓴다.
+- 고친 뒤 시드 3개, 약 12만 건 비교에서 차이가 없었다. 찾은 사례는 공유 벡터(`normalize`, `joinStreamText`, `fallbackCommitGate`)에 추가했다.
+- 실제 DOM 텍스트에 이 문자가 들어올 일은 드물다. 정규화가 zero-width 문자를 먼저 지우므로 운영 영향은 작다고 본다. 다만 계약상 같아야 하므로 고쳤다.
+
+실행: `python scripts/parity_differential.py [--cases N] [--seed S]`. 형제 저장소와 `npx`가 없으면 건너뛴다. `python scripts/check_before_push.py --with-parity-differential`로도 실행할 수 있다.
+
 ---
 
 ## 5. 사이트 변경 대응 절차

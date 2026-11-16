@@ -255,3 +255,16 @@ def test_fallback_commit_gate_vectors(case: dict[str, Any]) -> None:
         assert decision.delay_ms == expected["delayMs"], step
         assert decision.candidate.observation_count == expected["observationCount"], step
         candidate = None if decision.commit_now else decision.candidate
+
+
+def test_shared_whitespace_rule_matches_contract() -> None:
+    rule = CONTRACT["whitespace"]
+    bom = chr(0xFEFF)
+    for separator in rule["extraSeparators"]:
+        sample = "가" + separator + "나"
+        assert _normalize_runtime_text(sample, FLATTEN_SETTINGS) == "가 나"
+        assert utils.compact_subtitle_text(sample) == "가나"
+        assert utils.strip_subtitle_whitespace(separator + "가" + separator) == "가"
+    assert rule["trimIncludesBom"] is True
+    assert utils.strip_subtitle_whitespace(bom + " 가 " + bom) == "가"
+    assert _join_stream_text("가" + bom, bom + "나") == "가 나"

@@ -5,6 +5,7 @@
   python scripts/check_before_push.py
   python scripts/check_before_push.py --pyright-only
   python scripts/check_before_push.py --with-pytest
+  python scripts/check_before_push.py --with-parity-differential   # Chrome 구현과 무작위 차등 비교
 """
 
 from __future__ import annotations
@@ -112,6 +113,15 @@ def run_parity_sync() -> int:
     return int(proc.returncode)
 
 
+def run_parity_differential() -> int:
+    """데스크톱과 Chrome 구현에 같은 무작위 입력을 넣어 비교한다 (형제 저장소·npx 필요)."""
+    root = _repo_root()
+    cmd = [sys.executable, str(root / "scripts" / "parity_differential.py")]
+    print(">>", " ".join(cmd), flush=True)
+    proc = subprocess.run(cmd, cwd=str(root))
+    return int(proc.returncode)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="푸시 전 pyright/pytest 검사")
     parser.add_argument(
@@ -124,6 +134,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="pyright 통과 후 pytest 전체 실행",
     )
+    parser.add_argument(
+        "--with-parity-differential",
+        action="store_true",
+        help="parity 동기화 뒤 Chrome 구현과 무작위 차등 비교 (scripts/parity_differential.py)",
+    )
     args = parser.parse_args(argv)
 
     code = run_pyright()
@@ -132,6 +147,10 @@ def main(argv: list[str] | None = None) -> int:
     code = run_parity_sync()
     if code != 0:
         return code
+    if args.with_parity_differential:
+        code = run_parity_differential()
+        if code != 0:
+            return code
     if args.pyright_only and not args.with_pytest:
         return 0
     if args.with_pytest or not args.pyright_only:

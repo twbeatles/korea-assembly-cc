@@ -39,7 +39,10 @@ from core.text_utils import (
     is_placeholder_subtitle_text,
     is_redundant_text,
     is_similar_subtitle,
+    lstrip_subtitle_whitespace,
     normalize_subtitle_text,
+    rstrip_subtitle_whitespace,
     same_leading_context,
     slice_from_compact_index,
+    strip_subtitle_whitespace,
 )
