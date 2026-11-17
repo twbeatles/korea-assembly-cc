@@ -1,6 +1,15 @@
 # -*- coding: utf-8 -*-
 
-from ui.main_window_common import *
+import json
+
+from ui.main_window_common import (
+    Config,
+    QMessageBox,
+    SubtitleEntry,
+    datetime,
+    logger,
+    utils,
+)
 from ui.main_window_types import MainWindowHost
 
 

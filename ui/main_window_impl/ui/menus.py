@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ui.main_window_common import *
+from ui.main_window_common import QAction
 from ui.main_window_types import MainWindowHost
 
 

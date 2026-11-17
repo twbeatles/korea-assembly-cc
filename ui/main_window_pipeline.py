@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 
-from ui.main_window_common import *
+# explicit re-exports for test patch targets (were star-provided)
+from ui.main_window_common import (
+    QMessageBox as QMessageBox,
+)
 from ui.main_window_impl.pipeline_messages import MainWindowPipelineMessagesMixin
 from ui.main_window_impl.pipeline_queue import (
     COALESCED_WORKER_MESSAGE_ORDER,

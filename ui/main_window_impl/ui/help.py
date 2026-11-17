@@ -23,7 +23,13 @@ from core.update_manifest import (
     download_release_manifest,
     verify_release_manifest,
 )
-from ui.main_window_common import *
+from ui.main_window_common import (
+    Config,
+    QApplication,
+    QMessageBox,
+    Qt,
+    logger,
+)
 from ui.main_window_types import MainWindowHost
 
 

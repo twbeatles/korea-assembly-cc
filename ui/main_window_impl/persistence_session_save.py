@@ -8,7 +8,18 @@ from core.recovery_candidates import (
     inspect_recovery_candidate,
 )
 from ui.dialogs import RecoveryCandidateDialog
-from ui.main_window_common import *
+from ui.main_window_common import (
+    Any,
+    Callable,
+    Config,
+    Path,
+    QFileDialog,
+    QMessageBox,
+    SubtitleEntry,
+    datetime,
+    logger,
+    utils,
+)
 from ui.main_window_types import MainWindowHost
 
 

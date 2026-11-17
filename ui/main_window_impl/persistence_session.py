@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+# explicit re-exports for test patch targets (were star-provided)
 import uuid
 
 from core.file_io import canonical_path_key
@@ -8,18 +9,25 @@ from core.recovery_candidates import (
     inspect_recovery_candidate,
 )
 from ui.dialogs import RecoveryCandidateDialog
-from ui.main_window_common import *
+from ui.main_window_common import (
+    QMessageBox as QMessageBox,
+)
+from ui.main_window_impl.persistence_session_backup import (
+    MainWindowPersistenceSessionBackupMixin,
+)
+from ui.main_window_impl.persistence_session_deferred import (
+    MainWindowPersistenceSessionDeferredMixin,
+)
+from ui.main_window_impl.persistence_session_load import (
+    MainWindowPersistenceSessionLoadMixin,
+)
+from ui.main_window_impl.persistence_session_recovery import (
+    MainWindowPersistenceSessionRecoveryMixin,
+)
+from ui.main_window_impl.persistence_session_save import (
+    MainWindowPersistenceSessionSaveMixin,
+)
 from ui.main_window_types import MainWindowHost
-
-from ui.main_window_impl.persistence_session_deferred import MainWindowPersistenceSessionDeferredMixin
-
-from ui.main_window_impl.persistence_session_save import MainWindowPersistenceSessionSaveMixin
-
-from ui.main_window_impl.persistence_session_load import MainWindowPersistenceSessionLoadMixin
-
-from ui.main_window_impl.persistence_session_recovery import MainWindowPersistenceSessionRecoveryMixin
-
-from ui.main_window_impl.persistence_session_backup import MainWindowPersistenceSessionBackupMixin
 
 
 class MainWindowPersistenceSessionMixin(

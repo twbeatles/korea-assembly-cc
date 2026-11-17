@@ -3,7 +3,30 @@
 from __future__ import annotations
 
 from core.timestamp_blocks import format_interval_label
-from ui.main_window_common import *
+from ui.main_window_common import (
+    CAPTURE_START_BUTTON_TEXT,
+    CollapsibleGroupBox,
+    Config,
+    OverlayAnchor,
+    QCheckBox,
+    QComboBox,
+    QFont,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    Qt,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 from ui.main_window_types import MainWindowHost
 
 

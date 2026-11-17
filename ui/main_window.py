@@ -2,8 +2,40 @@
 
 from typing import TYPE_CHECKING, Any
 
-from ui.main_window_common import *
+import ui.main_window_capture as capture_mod
 from ui.main_window_capture import MainWindowCaptureMixin
+from ui.main_window_common import (
+    EC as EC,
+)
+
+# explicit re-exports for test/consumer attribute access (were star-provided)
+from ui.main_window_common import (
+    By as By,
+)
+from ui.main_window_common import (
+    Config as Config,
+)
+from ui.main_window_common import (
+    QApplication as QApplication,
+)
+from ui.main_window_common import (
+    QMainWindow as QMainWindow,
+)
+from ui.main_window_common import (
+    QMessageBox as QMessageBox,
+)
+from ui.main_window_common import (
+    RecoverableWebDriverError as RecoverableWebDriverError,
+)
+from ui.main_window_common import (
+    WebDriverWait as WebDriverWait,
+)
+from ui.main_window_common import (
+    utils as utils,
+)
+from ui.main_window_common import (
+    webdriver as webdriver,
+)
 from ui.main_window_database import MainWindowDatabaseMixin
 from ui.main_window_impl.runtime_driver import MainWindowRuntimeDriverMixin
 from ui.main_window_impl.runtime_lifecycle import MainWindowRuntimeLifecycleMixin
@@ -12,7 +44,6 @@ from ui.main_window_persistence import MainWindowPersistenceMixin
 from ui.main_window_pipeline import MainWindowPipelineMixin
 from ui.main_window_ui import MainWindowUIMixin
 from ui.main_window_view import MainWindowViewMixin
-import ui.main_window_capture as capture_mod
 
 MainWindowQtBase = object if TYPE_CHECKING else QMainWindow
 

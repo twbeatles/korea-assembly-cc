@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from ui.main_window_common import *
+import time
+
+from ui.main_window_common import (
+    CAPTURE_RUNNING_BUTTON_TEXT,
+    CAPTURE_START_BUTTON_TEXT,
+    Config,
+    set_state_property,
+)
 from ui.main_window_types import MainWindowHost
 
 

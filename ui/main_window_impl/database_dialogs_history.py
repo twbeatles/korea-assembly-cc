@@ -3,9 +3,19 @@
 from collections.abc import Iterable
 from typing import cast
 
-from ui.main_window_common import *
-from ui.main_window_types import MainWindowHost
 from core.resource_budget import ResourceBudget, ResourceBudgetLimits
+from ui.main_window_common import (
+    Any,
+    Config,
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+)
+from ui.main_window_types import MainWindowHost
 
 
 class MainWindowDatabaseDialogsHistoryMixin(MainWindowHost):

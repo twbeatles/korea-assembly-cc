@@ -4,9 +4,16 @@ from __future__ import annotations
 
 import unicodedata
 
-from ui.main_window_common import *
+from ui.main_window_common import (
+    DARK_THEME,
+    LIGHT_THEME,
+    Config,
+    QKeySequence,
+    QShortcut,
+    ToastWidget,
+    set_state_property,
+)
 from ui.main_window_types import MainWindowHost
-
 
 _STATUS_ICONS = {
     "info": "ℹ️",

@@ -1,7 +1,19 @@
 # -*- coding: utf-8 -*-
 
-from ui.main_window_common import *
+# explicit re-exports for test patch targets (were star-provided)
+from ui.main_window_common import (
+    Config as Config,
+)
+from ui.main_window_common import (
+    QFileDialog as QFileDialog,
+)
+from ui.main_window_common import (
+    QMessageBox as QMessageBox,
+)
 from ui.main_window_common import _import_optional_module
+from ui.main_window_common import (
+    utils as utils,
+)
 from ui.main_window_impl.persistence_exports import MainWindowPersistenceExportsMixin
 from ui.main_window_impl.persistence_runtime import MainWindowPersistenceRuntimeMixin
 from ui.main_window_impl.persistence_session import MainWindowPersistenceSessionMixin

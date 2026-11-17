@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
-import hashlib
 import bisect
+import hashlib
 import shutil
 from typing import Any, Iterable, cast
 from uuid import uuid4
@@ -10,7 +10,10 @@ from PySide6 import QtWidgets
 from PySide6.QtCore import Qt, QTimer
 
 from core.timestamp_blocks import DisplayLayout, iter_display_rows
-from ui.main_window_common import *
+from ui.main_window_common import (
+    Path,
+    SubtitleEntry,
+)
 from ui.main_window_types import MainWindowHost
 
 QProgressDialog = cast(Any, getattr(QtWidgets, "QProgressDialog"))

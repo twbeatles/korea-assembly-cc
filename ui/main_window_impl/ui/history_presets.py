@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from importlib import import_module
 
 from core.committee_catalog import canonical_committee_name
@@ -11,7 +12,12 @@ from core.url_policy import (
     sanitize_url_history,
     validate_assembly_url,
 )
-from ui.main_window_common import *
+from ui.main_window_common import (
+    Config,
+    QAction,
+    datetime,
+    logger,
+)
 from ui.main_window_types import MainWindowHost
 
 

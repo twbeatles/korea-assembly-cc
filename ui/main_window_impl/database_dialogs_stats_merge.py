@@ -3,9 +3,24 @@
 from collections.abc import Iterable
 from typing import cast
 
-from ui.main_window_common import *
-from ui.main_window_types import MainWindowHost
 from core.resource_budget import ResourceBudget, ResourceBudgetLimits
+from ui.main_window_common import (
+    Config,
+    Path,
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+    SubtitleEntry,
+)
+from ui.main_window_types import MainWindowHost
 
 
 class MainWindowDatabaseDialogsStatsMergeMixin(MainWindowHost):

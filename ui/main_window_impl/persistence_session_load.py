@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import json
 import uuid
 
 from core.file_io import canonical_path_key
@@ -8,7 +9,14 @@ from core.recovery_candidates import (
     inspect_recovery_candidate,
 )
 from ui.dialogs import RecoveryCandidateDialog
-from ui.main_window_common import *
+from ui.main_window_common import (
+    Config,
+    Path,
+    QFileDialog,
+    QMessageBox,
+    SubtitleEntry,
+    logger,
+)
 from ui.main_window_types import MainWindowHost
 
 
