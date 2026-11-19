@@ -75,6 +75,21 @@ def test_build_hwpx_lines_skips_empty_entries() -> None:
     assert "둘째 문장" in joined
 
 
+def test_build_hwpx_bytes_supports_ascii_only_strftime_locale() -> None:
+    class LegacyWindowsDatetime(datetime):
+        def strftime(self, fmt: str) -> str:
+            # Emulate Python 3.10 on Windows with LC_TIME=C.
+            fmt.encode("ascii")
+            return super().strftime(fmt)
+
+    generated = LegacyWindowsDatetime(2026, 3, 23, 8, 4, 5)
+    payload = build_hwpx_bytes([(generated, "자막")], generated)
+
+    with ZipFile(BytesIO(payload)) as archive:
+        for member in ("Preview/PrvText.txt", "Contents/content.hpf"):
+            assert "2026년 03월 23일 08:04:05" in archive.read(member).decode("utf-8")
+
+
 def test_build_hwpx_bytes_omits_stale_linesegarray_for_dynamic_paragraphs() -> None:
     entries = [
         (

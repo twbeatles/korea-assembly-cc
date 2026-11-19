@@ -82,7 +82,7 @@ def build_hwpx_lines(
 ) -> list[str]:
     total_chars = 0
     total_count = 0
-    lines = [_TITLE, f"생성 일시: {generated_at.strftime('%Y년 %m월 %d일 %H:%M:%S')}", ""]
+    lines = [_TITLE, f"생성 일시: {_format_human_date(generated_at)}", ""]
 
     active_layout = layout or DisplayLayout(merge_blocks=False)
     sanitized_rows = (
@@ -137,9 +137,18 @@ def build_section_xml(lines: Sequence[str]) -> str:
     return f"{_XML_DECL}<hs:sec {_SECTION_NAMESPACES}>{''.join(paragraphs)}</hs:sec>"
 
 
+def _format_human_date(value: datetime) -> str:
+    # Older Windows Python versions encode strftime formats using the locale.
+    # Keep Korean literals outside strftime so exports also work in the C locale.
+    return (
+        f"{value.year:04d}년 {value.month:02d}월 {value.day:02d}일 "
+        f"{value.hour:02d}:{value.minute:02d}:{value.second:02d}"
+    )
+
+
 def build_content_hpf(generated_at: datetime) -> str:
     created_utc = generated_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    human_date = generated_at.strftime("%Y년 %m월 %d일 %H:%M:%S")
+    human_date = _format_human_date(generated_at)
     return (
         f"{_XML_DECL}"
         '<opf:package xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app" '
