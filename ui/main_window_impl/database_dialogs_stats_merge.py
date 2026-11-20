@@ -19,6 +19,7 @@ from ui.main_window_common import (
     QPushButton,
     QVBoxLayout,
     SubtitleEntry,
+    logger,
 )
 from ui.main_window_types import MainWindowHost
 

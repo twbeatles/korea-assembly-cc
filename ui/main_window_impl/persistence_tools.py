@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+from pathlib import Path
 
 from ui.main_window_common import (
     Config,

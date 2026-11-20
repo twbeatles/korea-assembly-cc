@@ -11,6 +11,7 @@ from core.recovery_candidates import (
 from ui.dialogs import RecoveryCandidateDialog
 from ui.main_window_common import (
     QMessageBox as QMessageBox,
+    datetime as datetime,
 )
 from ui.main_window_impl.persistence_session_backup import (
     MainWindowPersistenceSessionBackupMixin,

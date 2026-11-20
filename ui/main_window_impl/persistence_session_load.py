@@ -1,15 +1,19 @@
 # -*- coding: utf-8 -*-
 
 import json
+import threading
 import uuid
+from typing import Any, Callable, cast
+
+from PySide6 import QtWidgets
+from PySide6.QtCore import Qt
 
 from core.file_io import canonical_path_key, read_limited_json_file
-from core.resource_budget import ResourceBudget, ResourceBudgetLimits, ResourceLimitExceeded
-from PySide6 import QtWidgets
 from core.recovery_candidates import (
     discover_recovery_candidates,
     inspect_recovery_candidate,
 )
+from core.resource_budget import ResourceBudget, ResourceBudgetLimits, ResourceLimitExceeded
 from ui.dialogs import RecoveryCandidateDialog
 from ui.main_window_common import (
     Config,
