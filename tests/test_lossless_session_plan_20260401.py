@@ -196,6 +196,10 @@ def test_prompt_session_recovery_starts_mark_dirty_load(tmp_path, monkeypatch):
     win._start_session_load_from_path = lambda path, **kwargs: started.append(
         (path, kwargs.get("mark_dirty", False), kwargs.get("recovery", False))
     ) or True
+    from core.recovery_candidates import inspect_recovery_candidate
+    win._start_recovery_scan = lambda **kwargs: win._present_recovery_candidates(
+        [inspect_recovery_candidate(session_file)], kwargs["recovery_state"],
+    )
 
     MainWindow._prompt_session_recovery_if_available(win)
 
@@ -217,6 +221,7 @@ def test_complete_loaded_recovery_marks_session_dirty():
 
 def test_confirm_dirty_session_action_save_uses_json_and_db_snapshot(monkeypatch, tmp_path):
     win = MainWindow.__new__(MainWindow)
+    win._build_session_save_context = lambda: ("", "", 0)
     win._session_dirty = True
     win._build_prepared_entries_snapshot = lambda: [SubtitleEntry("저장 전 자막")]
     captured: dict[str, object] = {}
@@ -282,6 +287,10 @@ def test_prompt_session_recovery_no_keeps_recovery_state_file(tmp_path, monkeypa
     win._session_load_in_progress = False
     win.is_running = False
     win._start_session_load_from_path = lambda path, **_kwargs: started.append(path) or True
+    from core.recovery_candidates import inspect_recovery_candidate
+    win._start_recovery_scan = lambda **kwargs: win._present_recovery_candidates(
+        [inspect_recovery_candidate(session_file)], kwargs["recovery_state"],
+    )
 
     MainWindow._prompt_session_recovery_if_available(win)
 

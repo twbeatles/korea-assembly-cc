@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.file_io import atomic_write_json
-from core.process_wait import is_process_alive
+from core.process_wait import is_process_alive, process_creation_marker
 
 OWNER_FILENAME = "owner.json"
 
@@ -28,6 +28,9 @@ def write_owner_file(
     }
     if run_id is not None:
         payload["run_id"] = int(run_id)
+    marker = process_creation_marker(int(pid))
+    if marker:
+        payload["process_marker"] = marker
     path = root / OWNER_FILENAME
     atomic_write_json(path, payload, ensure_ascii=False)
     return path
@@ -58,7 +61,15 @@ def is_archive_owner_alive(
     archive_dir: str | Path,
     *,
     alive_impl: Callable[[int], bool] | None = None,
+    marker_impl: Callable[[int], str | None] | None = None,
 ) -> bool:
+    """True only while the process that wrote the lease is still running.
+
+    PID liveness alone misreads a crashed owner whose PID was reused. When the
+    lease recorded a process start marker, a different current marker for the
+    same PID means the original owner is gone. Leases without a marker (older
+    versions) or an unreadable current marker keep the PID-only behaviour.
+    """
     payload = read_owner_file(archive_dir)
     if payload is None:
         return False
@@ -73,7 +84,17 @@ def is_archive_owner_alive(
         return False
     if alive_impl is not None:
         try:
-            return bool(alive_impl(pid))
+            alive = bool(alive_impl(pid))
         except Exception:
-            return True
-    return is_process_alive(pid)
+            alive = True
+    else:
+        alive = is_process_alive(pid)
+    if not alive:
+        return False
+    stored_marker = str(payload.get("process_marker", "") or "")
+    if not stored_marker:
+        return True
+    current_marker = process_creation_marker(pid, marker_impl=marker_impl)
+    if current_marker is None:
+        return True
+    return current_marker == stored_marker

@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 
 PROCESS_SYNCHRONIZE = 0x00100000
+PROCESS_QUERY_LIMITED_INFORMATION = 0x00001000
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 0x00000102
 ERROR_ACCESS_DENIED = 5
@@ -50,6 +51,74 @@ def is_process_alive(
         return True
     except OSError:
         return False
+
+
+def process_creation_marker(
+    pid: int,
+    *,
+    marker_impl: Callable[[int], str | None] | None = None,
+) -> str | None:
+    """Return an opaque per-process start marker, or None when unavailable.
+
+    A PID alone can be reused by an unrelated process after a crash or reboot.
+    Comparing this marker detects that reuse. Failures return None so callers
+    fall back to PID liveness instead of guessing.
+    """
+    if pid <= 0:
+        return None
+    impl = marker_impl if marker_impl is not None else _default_creation_marker
+    try:
+        marker = impl(int(pid))
+    except Exception:
+        return None
+    return str(marker) if marker else None
+
+
+def _default_creation_marker(pid: int) -> str | None:
+    if sys.platform == "win32":
+        return _windows_creation_marker(pid)
+    if sys.platform.startswith("linux"):
+        return _linux_creation_marker(pid)
+    return None
+
+
+def _windows_creation_marker(pid: int) -> str | None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
+        ctypes.POINTER(wintypes.FILETIME)
+    ] * 4
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(handle, *(ctypes.byref(item) for item in times)):
+            return None
+        created = times[0]
+        value = (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)
+        return f"win:{value}" if value else None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _linux_creation_marker(pid: int) -> str | None:
+    try:
+        with open(f"/proc/{int(pid)}/stat", "r", encoding="utf-8") as handle:
+            stat = handle.read()
+    except OSError:
+        return None
+    # Field 22 (starttime) follows the parenthesised command name.
+    fields = stat.rsplit(")", 1)[-1].split()
+    if len(fields) < 20:
+        return None
+    return f"linux:{fields[19]}"
 
 
 def _default_wait_for_exit(pid: int, timeout: float) -> bool:

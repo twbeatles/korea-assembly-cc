@@ -161,3 +161,42 @@ def test_concurrent_duplicate_save_is_exactly_once_and_survives_reopen(tmp_path)
             assert observer.execute("SELECT COUNT(*) FROM subtitles").fetchone()[0] == 1
     finally:
         reopened.close_all()
+
+
+def test_independent_managers_resolve_same_operation_race(tmp_path, monkeypatch):
+    managers = [DatabaseManager(str(tmp_path / "shared.db")) for _ in range(2)]
+    barrier = threading.Barrier(2)
+    class Cursor:
+        def __init__(self, cursor):
+            self.cursor = cursor
+        def __getattr__(self, name):
+            return getattr(self.cursor, name)
+        def execute(self, sql, *args):
+            self.cursor.execute(sql, *args)
+            if sql.startswith("SELECT id FROM sessions WHERE save_operation_id"):
+                barrier.wait(timeout=5)
+            return self
+    class Connection:
+        def __init__(self, connection):
+            self.connection = connection
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+        def cursor(self):
+            return Cursor(self.connection.cursor())
+    for manager in managers:
+        original = manager._get_connection
+        monkeypatch.setattr(manager, "_get_connection", lambda original=original: Connection(original()))
+    payload = {"save_operation_id": "cross-instance", "lineage_id": "lineage",
+               "subtitles": [{"text": "exactly once"}]}
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(manager.save_session, payload) for manager in managers]
+            ids = [future.result(timeout=10) for future in futures]
+        assert ids[0] == ids[1]
+        with sqlite3.connect(tmp_path / "shared.db") as conn:
+            assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+            assert conn.execute("SELECT COUNT(*) FROM subtitles").fetchone()[0] == 1
+            assert conn.execute("SELECT is_latest_in_lineage FROM sessions").fetchone()[0] == 1
+    finally:
+        for manager in managers:
+            manager.close_all()

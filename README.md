@@ -82,6 +82,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 - 저장 도중 편집·수집이 계속되어도 revision 기준으로 미저장 변경을 정확히 유지하고, DB 재시도는 operation ID로 중복 저장 방지
 - 대용량 JSON/runtime/DB 세션은 공통 byte·entry budget과 점진 DB 로드(progress/cancel)를 적용
 - 5분마다 자동 백업(일반 세션: `backup_*.json`, 장시간 추출: runtime manifest/tail 복구 포인터), 비정상 종료 후 재시작 시 여러 복구 후보를 비교·선택
+- 복구 포인터가 없거나 손상되면 `파일 → 백업에서 세션 복구...`에서 기존 백업을 검색합니다. 후보 검색은 백그라운드에서 실행하고 취소할 수 있으며, 취소·실패 시 현재 세션을 유지합니다. 정상 종료 후에는 자동 복구창을 반복 표시하지 않습니다.
 - DB 히스토리에서 같은 세션의 저장 계보 (`[최신]`, `[이전 저장본 n/N]`) 확인
 
 ### ⚙️ 편의 기능
@@ -111,7 +112,7 @@ TXT, SRT, VTT, DOCX, HWPX, HWP, RTF, JSON 세션
 
 ### 1. Python 설치
 
-Python **3.10 이상**에서 동작합니다. CI는 **3.15** 단일 버전, 로컬 개발은 3.10–3.15 범위를 지원합니다.  
+Python **3.10 이상**에서 동작합니다. 전체 CI는 Windows/Python **3.15**이며, 호환성 작업은 Windows/3.10과 macOS·Linux/3.15에서 핵심 회귀·격리 저장소 창 생성 smoke를 실행하도록 구성했습니다. 실제 CI 통과 여부는 해당 실행 결과로 확인하세요.
 개발·검증·빌드 시 `requirements-dev.txt` 핀을 그대로 설치하세요.  
 [Python 공식 사이트](https://www.python.org/downloads/)에서 다운로드하세요.
 
@@ -171,7 +172,7 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 
 ### 3단계: 옵션 설정
 
-추출 **시작 전**에만 변경할 수 있습니다.
+URL·선택자·실시간 저장·헤드리스 모드는 추출 **시작 전**에 설정합니다. 표시 옵션과 타임스탬프 간격은 수집 중에도 변경할 수 있습니다.
 
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
@@ -193,6 +194,8 @@ URL 입력창에 국회 의사중계 주소를 입력합니다.
 ### 5단계: 저장
 
 추출 완료 후 파일명이 자동으로 제안됩니다.
+
+HWP 저장이 실패하면 기존 파일은 유지됩니다. 세션 병합은 선택한 파일 중 읽을 수 없거나 손상된 파일이 있으면 현재 자막을 유지하고 원인을 안내합니다. 일반 세션 JSON과 runtime manifest를 병합할 수 있으며, 전체 입력에 공통 크기·자막 수 제한이 적용됩니다. 프리셋은 파일 저장에 성공한 뒤 반영되며, 이름 변경으로 다른 사용자 프리셋을 덮어쓸 때는 확인합니다.
 
 | 메뉴 | 단축키 | 형식 |
 |------|--------|------|
@@ -344,13 +347,18 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 
 업데이트 채널의 기본 manifest URL과 공개키는 배포 빌드에 내장됩니다. 개발 실행에서는 자동 설치를 하지 않으며, 업데이트 helper는 다음 시작 시 성공·rollback·실패 결과를 알려줍니다. 첫 updater 도입 이전 버전은 GitHub Releases에서 수동 설치가 필요합니다.
 
+업데이트 도중 전원 차단 등으로 기존 바로가기가 실행되지 않으면, 일반 설치는 `%LOCALAPPDATA%\AssemblySubtitle\Extractor\updates`, portable은 EXE 옆 `.updates`에서 해당 업데이트의 `recover-update-helper-*.cmd`를 실행하세요. 이 복구 진입점은 EXE 교체 전에 만들어지며, 설치 EXE가 없을 때만 같은 디렉터리의 백업을 복원하고 재실행합니다. 이미 설치 EXE가 있으면 덮어쓰지 않습니다. 이 복구 파일은 이번 개선을 포함해 빌드한 버전부터 생성됩니다.
+
+실시간 TXT는 새 자막을 시각과 함께 기록하고, 같은 자막의 확장은 `+ 추가 내용`, AI 정정은 `[정정 자막ID] 수정된 전체 내용`으로 남깁니다. 같은 관측·keepalive는 중복 기록하지 않습니다. 최종 정리본이 필요하면 수집 후 TXT 또는 세션 JSON을 저장하세요. 일반 JSON 불러오기는 공통 byte·entry 상한을 검사하며 진행 표시와 취소를 지원합니다. JSON 문법 파싱 자체는 완료 후 취소를 확인합니다.
+
+Windows가 기본 지원 대상입니다. Windows ARM64에서는 소스 GUI·Chrome과 frozen EXE 창 생성 smoke를 검증했습니다. 실제 한컴 COM, Windows x64 빌드와 macOS/Linux는 별도 실기기 검증이 필요합니다. QtWebEngine이 없는 테스트 환경에서는 DOM fixture만 skip됩니다. 설치된 Chrome으로 같은 오프라인 검증을 실행하려면 PowerShell에서 `$env:KACC_TEST_BROWSER='chrome'; python -m pytest tests/test_capture_chrome_parity_p1.py tests/test_audit_remediation_20261103.py -q`를 사용하세요. 이 경로는 Selenium Manager가 드라이버를 준비할 때 네트워크를 사용할 수 있습니다.
+
 자세한 아키텍처·개발 가이드·파이프라인 고정 규칙은 아래 문서를 참고하세요.
 
 | 문서 | 내용 |
 |------|------|
 | [CLAUDE.md](CLAUDE.md) | 아키텍처, 핵심 규칙, 개발 가이드 |
-| [PROJECT_AUDIT.md](PROJECT_AUDIT.md) | 기능 감사·리스크·조치 현황 |
-| [PROJECT_AUDIT_EXTENDED.md](PROJECT_AUDIT_EXTENDED.md) | 보안·동시성·성능·CI·패키징 확장 감사 |
+| [PROJECT_AUDIT.md](PROJECT_AUDIT.md) | 현재 감사·수정 상태, 실행한 검증과 남은 실기기 확인. 과거 개별 감사 문서는 Git 이력에 보존 |
 | [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) | 릴리스·서명·프라이버시·CI 배포 체크리스트 |
 | [docs/CHROME_EXTENSION_PARITY.md](docs/CHROME_EXTENSION_PARITY.md) | Chrome 확장과 수집 계약 정합 |
 | [docs/HWPX_EXPORT_ANALYSIS.md](docs/HWPX_EXPORT_ANALYSIS.md) | HWPX 내보내기 설계·스키마 방침 |
@@ -361,7 +369,7 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 
 ## 📝 변경 이력
 
-### v16.14.17 (2026-11-16)
+### v16.14.17 (2026-11-20)
 - **발언자 전환 직전 자막 유실 수정** — 자막 영역이 비워지기 직전 0.4초 안에 갱신된 마지막 어절이 저장되지 않던 문제. 화면 clear 신호를 받으면 대기 중인 텍스트를 먼저 저장한다
 - **연속 발언 저장 지연 상한** — 텍스트가 쉬지 않고 바뀌는 동안 저장·타임스탬프가 계속 밀리던 문제. 최대 2초 안에 저장한다
 - 위 두 규칙은 Chrome 확장과 같은 공유 계약(`parity/` `fallbackCommitMaxWaitMs`, `commitPendingFallbackOnReset`, `fallbackCommitGate` 벡터)으로 고정했고 확장도 함께 수정
@@ -371,6 +379,25 @@ python scripts/run_release_verification.py --skip-live --sign-thumbprint $env:KA
 - **Chrome 확장과 동일성 검증** — 같은 무작위 입력을 두 구현에 넣어 비교하는 `scripts/parity_differential.py` 추가. 찾아낸 공백 문자 처리 차이(제어문자·BOM)를 공유 계약 `whitespace`로 통일
 - **빌드·릴리스** — 로컬 3.15 빌드 EXE가 실행되지 않던 문제(다른 Python의 `python3t.dll` 번들) 수정, 릴리스 워크플로를 Python 3.15로 올리고 frozen smoke가 실제로 종료 코드를 확인하도록 수정. 기록: [`docs/BUILD_TROUBLESHOOTING.md`](docs/BUILD_TROUBLESHOOTING.md)
 - 회귀: `tests/test_project_audit_20261116.py`, `tests/test_parity_contract.py`, `tests/test_build_spec_contract.py`, `tests/test_release_workflow.py`
+
+### 감사 후속 수정 (2026-11-08, 배포 버전 유지)
+
+- 내부 메시지 큐가 가득 찬 직후 자막 화면이 지워지면(발언 교체), 이미 기록된 발언이 한 번 더 추가될 수 있던 문제를 고쳤습니다. 자막 관측·화면 지움·재연결 신호를 발생 순서대로 반영합니다.
+- 큐 포화로 실제로 메시지가 버려진 수집은 중지/완료 상태 메시지에 드롭 건수를 함께 표시합니다.
+- 로컬 전체 테스트 **728 passed / 20 skipped**(QtWebEngine이 없는 ARM64에서 브라우저 DOM 17건 skip), pyright **0 errors / 0 warnings**. 상세는 [감사 문서](PROJECT_AUDIT.md)를 참고하세요.
+
+### 감사 후속 수정 (2026-11-07, 배포 버전 유지)
+
+- 내부 메시지 큐가 가득 찬 직후 수집이 끝나면 마지막 발언이 빠질 수 있던 문제를 고쳤습니다. 순서가 어긋나 도착한 자막 관측도 버리지 않고 순서대로 반영합니다.
+- 비정상 종료된 장시간 세션 보관본이 다른 프로그램의 같은 프로세스 번호 때문에 `백업에서 세션 복구` 목록에서 사라지던 문제를 고쳤습니다.
+- 로컬 전체 테스트 **715 passed / 20 skipped**(QtWebEngine이 없는 ARM64에서 브라우저 DOM 17건 skip, Chrome으로 별도 통과), pyright **0 errors / 0 warnings**. 상세는 [감사 문서](PROJECT_AUDIT.md)를 참고하세요.
+
+### 감사 후속 수정 (2026-11-05, 배포 버전 유지)
+
+- 파일 선택 후 저장 데이터·archive manifest·revision을 함께 확보하고 메타데이터까지 고정하여, 저장 중 새 발언을 저장 완료로 오판하지 않도록 수정했습니다.
+- 종료 메시지 전에 대기 자막을 반영하고, 마지막 fallback의 실시간 기록·키워드 알림·미저장 상태·복구 정보를 갱신합니다. 이미 확정된 structured row의 중복 snapshot도 차단했습니다.
+- 포인터 없이 실행할 수 있는 수동 복구 메뉴와 취소 가능한 백그라운드 후보 검색을 추가했습니다. 후보 수·읽기 용량·탐색 경로에 전체 상한을 적용합니다.
+- 새 회귀를 CI·릴리스 검증기에 포함하고 최소 Python 및 다른 OS의 소스 호환성 작업을 추가했습니다. 로컬 전체 테스트는 **723 passed / 3 skipped**, pyright는 **202 files / 0 errors / 0 warnings**였습니다. 원격 CI·실기기 미확인 항목은 [감사 문서](PROJECT_AUDIT.md)에 구분했습니다.
 
 ### v16.14.16 (2026-10-22)
 - **Chrome 확장 수집 알고리즘 정합 2차 + 공유 계약 `parity/`** — 확장 저장소와 같은 내용의 `parity/capture-contract.json`·`pipeline-vectors.json` 으로 두 구현을 테스트(`tests/test_parity_contract.py`)와 `scripts/check_parity_sync.py` 로 대조

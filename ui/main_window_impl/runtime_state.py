@@ -270,7 +270,9 @@ class MainWindowRuntimeStateMixin(RuntimeStateBase):
         self._pending_deferred_action_name = ""
         self._pending_deferred_action_after_save = False
         self._session_load_in_progress = False
+        self._session_load_progress_enabled = True
         self._reflow_in_progress = False
+        self._reflow_source_entries = None
         self._hydrate_in_progress = False
         self._hydrate_cancel_event = threading.Event()
         self._hydrate_progress_dialog = None

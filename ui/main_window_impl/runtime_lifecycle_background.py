@@ -43,6 +43,9 @@ class MainWindowRuntimeLifecycleBackgroundMixin(RuntimeLifecycleBase):
     def _begin_background_shutdown(self) -> None:
         self._ensure_background_registry()
         self._exit_in_progress = True
+        load_cancel = self.__dict__.get("_session_load_cancel_event")
+        if load_cancel is not None:
+            load_cancel.set()
         with self._active_background_threads_lock:
             self._background_shutdown_initiated = True
 

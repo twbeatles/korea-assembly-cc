@@ -46,7 +46,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
         return left + " " + right
 
     def _write_realtime_line(self, line: str) -> None:
-        if not line or not self.realtime_file:
+        if not line or not self.__dict__.get("realtime_file"):
             return
         try:
             self.realtime_file.write(line)
@@ -339,6 +339,7 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
                 return 10_000_000
             return max(0, int(limit or 0) - drained)
 
+        queue_exhausted = False
         try:
             while _budget_remaining() > 0:
                 raw_item = self.message_queue.get_nowait()
@@ -350,17 +351,19 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
                 if self._process_preview_queue_message(msg_type, data):
                     drained += 1
                 else:
-                    pending.append(raw_item)
+                    pending.append(self._as_requeueable(raw_item))
         except queue.Empty:
-            pass
+            queue_exhausted = True
 
-        remaining = _budget_remaining()
-        if remaining > 0:
-            drained += self._drain_coalesced_worker_messages(
-                max_items=remaining,
-                allowed_types=set(self._PREVIEW_DRAIN_MESSAGE_TYPES),
-                handler=preview_handler,
-            )
+        if not queue_exhausted:
+            # Budget ran out with older messages still queued: replaying
+            # overflow/coalesced/held (newer) items now would reorder them.
+            if not unlimited and limit is not None and drained >= int(limit):
+                logger.warning("preview 큐 소진 제한 도달: max_items=%s", limit)
+            if requeue_others and pending:
+                for item in pending:
+                    self._requeue_message_item(item)
+            return
 
         remaining = _budget_remaining()
         if remaining > 0:
@@ -370,6 +373,21 @@ class MainWindowPipelineStreamMixin(PipelineStreamBase):
                 allowed_types=set(self._PREVIEW_DRAIN_MESSAGE_TYPES),
                 requeue_others=requeue_others,
             )
+
+        remaining = _budget_remaining()
+        if remaining > 0:
+            # The coalesced preview is the newest complete DOM snapshot; apply
+            # it after older overflow resets/segments, before terminal retire.
+            drained += self._drain_coalesced_worker_messages(
+                max_items=remaining,
+                allowed_types=set(self._PREVIEW_DRAIN_MESSAGE_TYPES),
+                handler=preview_handler,
+            )
+
+        # Stream messages held after a sequence gap are applied in order before
+        # the caller finalizes or retires the run, once overflow is drained.
+        if not self._has_overflow_stream_messages():
+            drained += self._drain_held_previews(handler=preview_handler)
 
         if not unlimited and limit is not None and drained >= int(limit):
             logger.warning("preview 큐 소진 제한 도달: max_items=%s", limit)

@@ -199,6 +199,9 @@ class MainWindowRuntimeLifecycleExtractionMixin(RuntimeLifecycleBase):
             self._clear_preview()
             self.start_time = time.time()
             self._capture_end_time = None
+            self._capture_run_queue_drops_baseline = int(
+                self._get_capture_quality_payload().get("queue_drops", 0) or 0
+            )
             self.reconnect_attempts = 0
             self._clear_session_dirty()
             self._clear_session_db_identity()

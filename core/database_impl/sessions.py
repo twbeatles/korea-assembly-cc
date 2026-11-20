@@ -124,6 +124,7 @@ class DatabaseSessionMixin(DatabaseMixinHost):
 
         with self.lock:
             conn = self._get_connection()
+            save_operation_id = ""
             try:
                 cursor = conn.cursor()
 
@@ -244,6 +245,16 @@ class DatabaseSessionMixin(DatabaseMixinHost):
 
             except Exception as e:
                 conn.rollback()
+                # Different app instances have different locks. If both saw
+                # no operation before writing, the unique index picks a winner.
+                # Return that committed operation after rolling our changes back.
+                if isinstance(e, sqlite3.IntegrityError) and save_operation_id:
+                    existing = conn.execute(
+                        "SELECT id FROM sessions WHERE save_operation_id = ? LIMIT 1",
+                        (save_operation_id,),
+                    ).fetchone()
+                    if existing is not None:
+                        return int(existing["id"])
                 logger.error(f"세션 저장 오류: {e}")
                 raise
 

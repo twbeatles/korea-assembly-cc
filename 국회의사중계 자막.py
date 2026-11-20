@@ -72,6 +72,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="--smoke 실행 시 offscreen 가능한 MainWindow() 생성/정리까지 검증합니다.",
     )
     parser.add_argument("--apply-update", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--recover-update", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--update-target", default="", help=argparse.SUPPRESS)
     parser.add_argument("--update-staged", default="", help=argparse.SUPPRESS)
     parser.add_argument("--update-backup", default="", help=argparse.SUPPRESS)
@@ -192,7 +193,8 @@ def _run_storage_preflight_for_cli(storage_dir: str = "") -> tuple[bool, str, di
 def _apply_cli_storage_override(config_class: Any, root: Path) -> None:
     config_class.STORAGE_DIR = str(root)
     config_class.STORAGE_MODE = "override"
-    config_class.SETTINGS_INI_PATH = ""
+    # Constructor smoke must isolate QSettings as well as JSON/DB files.
+    config_class.SETTINGS_INI_PATH = str(root / "settings.ini")
     config_class.LOG_DIR = str(root / "logs")
     config_class.SESSION_DIR = str(root / "sessions")
     config_class.REALTIME_DIR = str(root / "realtime_output")
@@ -351,6 +353,23 @@ def _run_storage_preflight_smoke(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     """메인 함수 - 예외 처리 강화"""
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+    if args.recover_update:
+        from core.update_installer import (
+            recover_update_backup, relaunch_updated_executable, write_update_result,
+        )
+        try:
+            restored = recover_update_backup(args.update_target, args.update_backup)
+            if restored and args.update_result_file:
+                write_update_result(args.update_result_file, {
+                    "status": "rolled_back", "target": args.update_target,
+                    "backup": args.update_backup, "error": "Interrupted update recovered by user",
+                })
+            if not args.update_no_relaunch:
+                relaunch_updated_executable(args.update_target)
+            return 0
+        except Exception as exc:
+            _print_json_line({"ok": False, "kind": "update_recovery", "error": str(exc)})
+            return 1
     if args.apply_update:
         from scripts.apply_update import main as apply_update_main
 

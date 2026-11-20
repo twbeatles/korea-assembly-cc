@@ -144,7 +144,12 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
         ) -> str | None:
             if not isinstance(expected, dict):
                 return None
-            if self._runtime_entries_fingerprint_matches(entries, expected):
+            entries = list(entries)
+            try:
+                count_matches = "entry_count" not in expected or len(entries) == int(expected["entry_count"])
+            except (ValueError, TypeError):
+                count_matches = False
+            if count_matches and self._runtime_entries_fingerprint_matches(entries, expected):
                 return None
             current = self._build_runtime_entries_fingerprint(entries)
             return (
@@ -303,6 +308,8 @@ class MainWindowRuntimeArchiveMixin(MainWindowHost):
             self._runtime_segment_cache_entries = []
             self._runtime_segment_cache_keys = []
             self._runtime_segment_cache_entries_by_key = {}
+            self._runtime_segment_cache_file_states = {}
+            self._runtime_segment_cache_metadata = {}
             self._runtime_segment_search_text_cache = {}
             self._runtime_segment_locator_starts = []
             self._runtime_segment_locator_ends = []

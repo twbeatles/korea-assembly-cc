@@ -102,7 +102,6 @@ class MainWindowPersistenceSessionDeferredMixin(MainWindowHost):
                     return False
                 if reply == QMessageBox.StandardButton.Save:
                     if callable(on_continue):
-                        runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
                         try:
                             path = self._choose_session_snapshot_path(dialog_title="세션 저장")
                         except Exception as e:
@@ -112,6 +111,8 @@ class MainWindowPersistenceSessionDeferredMixin(MainWindowHost):
                         if not path:
                             self._clear_pending_deferred_action()
                             return False
+                        prepared_entries = self._build_persistent_entries_snapshot()
+                        runtime_root, runtime_manifest = self._snapshot_runtime_stream_context()
                         return self._start_async_session_snapshot_save(
                             path,
                             prepared_entries,

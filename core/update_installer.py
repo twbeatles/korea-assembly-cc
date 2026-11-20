@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -12,7 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from core.config import Config
-from core.file_io import atomic_write_json
+from core.file_io import atomic_write_json, atomic_write_text
 from core.update_manifest import ReleaseManifest
 
 
@@ -237,6 +238,47 @@ def _recover_interrupted_replacement(target: Path, backup: Path) -> bool:
     return False
 
 
+def recover_update_backup(target: str | Path, backup: str | Path) -> bool:
+    """Explicit user recovery when an interrupted swap left no launch target.
+
+    Never overwrite an existing executable. The launcher lives alongside the
+    copied helper, so it is accessible even when the normal shortcut is broken.
+    """
+    target_path, backup_path = Path(target).resolve(), Path(backup).resolve()
+    if (target_path == backup_path or target_path.parent != backup_path.parent
+            or target_path.suffix.lower() != ".exe"):
+        raise ValueError("Recovery backup must be distinct and in the install directory")
+    if target_path.exists():
+        return False
+    if not backup_path.is_file():
+        raise FileNotFoundError("Recovery backup is missing")
+    if os.name == "nt":
+        os.rename(backup_path, target_path)  # Windows refuses an existing target.
+    else:
+        os.link(backup_path, target_path)  # Atomic no-clobber on POSIX too.
+        try:
+            backup_path.unlink()
+        except OSError:
+            pass
+    return True
+
+
+def write_update_recovery_launcher(
+    helper: Path, *, target: Path, backup: Path, result_file: Path,
+) -> Path:
+    """Write a Windows recovery entry before any installed EXE is moved."""
+    args = [str(helper.resolve()), "--recover-update", "--update-target", str(target.resolve()),
+            "--update-backup", str(backup.resolve()), "--update-result-file", str(result_file.resolve())]
+    if any(any(char in arg for char in ('"', '\r', '\n')) for arg in args):
+        raise ValueError("Invalid recovery launcher argument")
+    # Batch expands % even inside quotes. Delayed expansion is disabled for !.
+    command = " ".join('"' + arg.replace('%', '%%') + '"' for arg in args)
+    launcher = helper.with_name(f"recover-{helper.stem}.cmd")
+    atomic_write_text(launcher, "@echo off\nsetlocal DisableDelayedExpansion\nchcp 65001 >nul\n"
+                      + command + "\nif errorlevel 1 pause\n", encoding="utf-8", newline="\r\n")
+    return launcher
+
+
 def _hash_file(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -374,7 +416,6 @@ def apply_staged_update(
                 f"Update failed and rollback also failed: {rollback_exc}"
             ) from exc
         raise UpdateApplyError("Update failed and was rolled back") from exc
-    staged_path.unlink(missing_ok=True)
     try:
         if smoke_runner is None:
             completed = subprocess.run(
@@ -403,6 +444,14 @@ def apply_staged_update(
                 f"Update failed and rollback also failed: {rollback_exc}"
             ) from exc
         raise UpdateApplyError("Update failed and was rolled back") from exc
+    # Installation and smoke have succeeded. Cleanup must not change their
+    # outcome or skip the rollback boundary when Windows holds a sharing lock.
+    try:
+        staged_path.unlink(missing_ok=True)
+    except OSError as exc:
+        logging.getLogger("SubtitleExtractor").warning(
+            "Update applied; staged artifact cleanup deferred: %s", exc
+        )
 
 
 def launch_update_helper(
@@ -419,6 +468,10 @@ def launch_update_helper(
     staged_path = Path(staged).resolve()
     helper_path = staged_path.parent / f"update-helper-{uuid4().hex}.exe"
     shutil.copy2(Path(sys.executable).resolve(), helper_path)
+    if os.name == "nt":
+        write_update_recovery_launcher(
+            helper_path, target=Path(target), backup=Path(backup), result_file=Path(result_file),
+        )
     args = [
         str(helper_path),
         "--apply-update",

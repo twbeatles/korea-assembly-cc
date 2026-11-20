@@ -4,6 +4,14 @@
 
 ## 1. 프로젝트 개요
 
+2026-11-05 감사 후속: 세션 저장은 파일 선택 후 entries·manifest·revision을 확보하고, `SessionSaveSnapshot`으로 메타데이터까지 UI 스레드에서 고정한다. 종료 메시지는 pending preview 소진 후 run을 폐기하며, 최종 fallback은 일반 live commit의 기록·알림·dirty·tail 갱신 경로를 사용한다. structured preview는 이미 확정된 row이므로 snapshot/종료에서 suffix fallback으로 재생하지 않는다. 수동 복구 메뉴는 포인터 없이도 동작하고, 후보 검색은 취소 가능한 background worker에서 후보 수·경로 수·전체 읽기 budget을 적용한다. 회귀: `tests/test_audit_followup_20261105.py`. 최신 실행 결과와 외부 검증 한계는 `PROJECT_AUDIT.md`의 후속 구현 기록을 따른다.
+
+2026-11-08 감사 후속: `preview`·`subtitle_reset`·`reconnected`는 run별 하나의 stream sequence를 공유한다(`ORDERED_STREAM_MESSAGE_TYPES`, `keepalive`는 비순서). 큐 포화로 경로(큐/overflow/coalesced)가 갈려도 gap 뒤 메시지는 모두 보류했다가 sequence 순서로 재적용하므로 reset이 더 오래된 preview를 앞지르지 않는다. `_process_message_queue`는 worker 큐 → overflow → coalesced → held 순서로 처리하고, coalesced·held 재적용은 worker 큐와 overflow의 stream 메시지가 비었을 때만 수행한다(`_drain_pending_previews`도 예산 소진 시 재적용하지 않음). gap 뒤 full snapshot은 overflow/coalesced에 더 오래된 stream 메시지가 없을 때만 즉시 수용한다. 재큐잉은 `_as_requeueable`로 sequence를 지운다. `PREVIEW_HELD_MAX=1024`, held 초과 드롭은 `queue_drops`와 토스트로 알리고, 중지/완료 요약에 이번 run의 드롭 수를 표시한다. 회귀: `tests/test_audit_followup_20261108.py`.
+
+2026-11-07 감사 후속: worker preview는 매번 완전한 DOM 창 probe이므로, sequence gap 뒤 도착한 preview를 버리지 않고 `_preview_held_by_run`에 보관했다가 coalesced snapshot과 함께 sequence 순서로 적용한다(`_drain_held_previews`, 매 큐 tick·stop/terminal barrier). 이미 반영한 sequence보다 오래된 coalesced snapshot은 적용하지 않는다. runtime archive `owner.json`은 프로세스 생성 marker(`process_marker`, Windows `GetProcessTimes`/Linux `/proc` starttime)를 기록하고, PID가 살아 있어도 marker가 다르면 소유자 종료로 판정한다(marker 없는 기존 lease는 PID 판정 유지). legacy `error`/`subtitle_not_found` handler도 `finished`와 같은 `_finalize_terminal_capture_state`를 쓴다. 회귀: `tests/test_audit_followup_20261107.py`.
+
+최신 감사·검증 기준은 [PROJECT_AUDIT.md](PROJECT_AUDIT.md)의 후속 구현 기록을 참고한다. 과거 개별 감사 문서는 Git 이력에 보존하며, 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
+
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출하고 저장
 - **버전**: v16.14.17
 - **핵심 가치**: 
@@ -100,14 +108,15 @@ Raw Text(Observer/폴링) → preview 메시지 → _prepare_preview_raw(정규�
 - Worker는 Observer 버퍼를 우선 읽고, 미수집 시 structured probe fallback으로 자막을 읽는다.
 - Worker preview는 dict payload 계약을 유지하고, 내부 큐에서는 `run_id` envelope로 stale run을 구분한다.
 - 길이/간격 제한에 따라 기존 엔트리에 병합 또는 분리
-- 중지 시 `preview` 큐를 먼저 소진하고 마지막 버퍼를 확정해 누락 방지
+- 중지 시 `preview` 큐를 먼저 소진하고 마지막 버퍼를 확정해 누락 방지. 큐 포화로 sequence gap이 생긴 preview·`subtitle_reset`·`reconnected`도 보류 후 공유 sequence 순서로 적용한 뒤 run을 폐기한다(reset이 오래된 preview를 앞질러 확정 발언이 중복되지 않음)
 - 동일 자막이 유지되면 마지막 엔트리의 `end_time`을 주기적으로 갱신 (SRT/VTT 정확도)
 - `subtitle_segments`/`_drain_pending_previews` 경로도 동일 게이트를 거쳐 코어 알고리즘과 동기화
 - `capture_state.entries`가 단일 source of truth이고 `self.subtitles`는 alias로 유지된다.
 - append/tail update는 `PipelineResult` delta 기반으로 UI 통계/카운트/렌더링을 증분 반영하며, 마지막 visible row 수정은 tail patch를 사용한다.
 - 세션 저장/자동 백업은 `snapshot_clone()` + streaming JSON writer를 사용하고, recovery state 파일에 최신 복구 가능 스냅샷을 기록한다.
 - DB 세션 저장은 `SubtitleEntry`의 `entry_id`/`source_*`/`speaker_*`/timing 메타데이터까지 포함하는 lossless round-trip을 목표로 유지한다.
-- `_finalize_subtitle()`는 호환용 entry point로 유지되며, 실제 append/update는 `_add_text_to_subtitles()`와 shared helper를 사용한다.
+- dict preview는 `commit_live_row`/`apply_preview`의 delta를 적용하고 `_publish_capture_commit()`에서 실시간 기록·키워드 알림을 수행한다. `PipelineResult.previous_text`는 기록/알림용 변경 전 텍스트이며 코어 증분 추출 의미론을 바꾸지 않는다. `_finalize_subtitle()`와 `_add_text_to_subtitles()`는 레거시 string/segments 호환 경로다.
+- Worker는 raw와 row key/text/speaker/frame/selector/source mode를 함께 비교한다. 새 stable row identity는 별도 발언으로 보존하며, 기존 row 수정은 저장된 baseline, 초기/fallback handoff는 snapshot global baseline을 사용한다. fallback 글로벌 히스토리/suffix 알고리즘은 유지한다.
 - 렌더링은 live `SubtitleEntry` 대신 immutable snapshot clone을 사용한다.
 
 ### 4.3 예외 처리
@@ -285,7 +294,7 @@ korea-assembly-cc/
 - **회귀**: `tests/test_timestamp_blocks.py`
 
 ### 의존성 전면 업그레이드 + CI Python 3.15 (2026-10-13)
-- **`requirements-dev.txt` 전면 상향**: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다. (Qt 바인딩은 이후 v16.14.13에서 PySide6 6.12.0으로 통일)
+- **`requirements-dev.txt` 전면 상향**: PySide6 6.12.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
 - **cryptography ARM64 조건 핀**: 47+에 Windows ARM64 휠이 없어 ARM64에서 `pip install` 전체가 깨지므로 `platform_machine` 조건으로 ARM64만 46.0.3을 쓴다. x64 CI는 50.0.2 휠로 설치된다.
 - **CI 단일 버전 전환**: `.github/workflows/ci.yml`을 Python 3.15로 바꾸고 README/CLAUDE/GEMINI의 버전 표기를 맞췄다. 검증은 프로젝트 루트 `.venv` 격리 환경이 기준이다.
 - **`.venv` 스캔 제외**: 신규 `.venv`가 인코딩 위생 테스트에 걸려 `EXCLUDED_DIRS`와 `pytest.ini norecursedirs`에 venv 계열을 추가했다(의도는 그대로).
@@ -343,7 +352,7 @@ korea-assembly-cc/
 - **종료 가드**: `_exit_in_progress`로 종료 중 start/파괴적 액션 차단
 - **hydrate**: `HYDRATE_MAX_ENTRIES` 상한, 엔트리 단위 cancel, result_token 슬롯 전달
 - **검색 UI**: 결과 절단 시 `상위 N건+` 표시
-- **CI/문서**: `.github/workflows/ci.yml`, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT_EXTENDED.md`
+- **CI/문서**: `.github/workflows/ci.yml`, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT.md` (과거 확장 감사는 Git 이력)
 - **회귀 기준선**: `pytest -q` 332 pass / 2 skipped, `pyright` 0 errors
 - **회귀 파일**: `tests/test_project_audit_20260729.py`, `tests/test_project_audit_extended_20260729.py`
 
@@ -373,7 +382,7 @@ korea-assembly-cc/
 - **debounced full-session search**: inline search는 debounce + revision stale-drop으로 최신 query만 반영하고, segment-local normalized text cache를 재사용한다.
 - **streaming save/export**: 세션 저장과 TXT/SRT/VTT/DOCX/HWPX/HWP/RTF/통계 export는 archived segment + active tail iterator를 직접 사용해 full hydrate를 피한다.
 - **export path cleanup**: `persistence_exports.py`의 TXT/SRT/VTT/통계 export는 현재 스트리밍 구현만 runtime 경로로 유지하고, 함수 내부 dead legacy branch는 제거해 단일 동작 경로로 맞춘다.
-- **LiveBroadcastDialog 네트워크 경로**: daemon fetch thread를 제거하고 `QNetworkAccessManager` + single active reply 구조로 전환했으며, frozen build에서는 `PyQt6.QtNetwork`를 포함하도록 `subtitle_extractor.spec`를 갱신했다.
+- **LiveBroadcastDialog 네트워크 경로**: daemon fetch thread를 제거하고 `QNetworkAccessManager` + single active reply 구조로 전환했으며, frozen build에서는 `PySide6.QtNetwork`를 포함하도록 `subtitle_extractor.spec`를 갱신했다.
 - **회귀 기준선**: `pytest -q` 146 pass, `pyright` 0 errors.
 
 ### v16.14.7 코드 분할 리팩토링 정합화 메모 (2026-04-05)
@@ -395,7 +404,7 @@ korea-assembly-cc/
 - **best-effort recovery salvage**: runtime manifest JSON이 손상돼도 sibling `segment_*.json` + `tail_checkpoint.json`를 스캔해 salvage를 시도하고, 제외된 손상 파일/항목 수를 payload와 UI 요약에 함께 노출한다.
 - **metadata / recovery hygiene**: 빈 URL 세션 로드 시 stale `current_url`을 비우고, recovery pointer는 복구 거절/복구 성공 시 즉시 삭제하지 않으며 성공한 JSON 저장 또는 정상 종료에서만 정리한다.
 - **Pylance/Pyright 고정**: `pyrightconfig.json`은 `stubPath=typings`, `executionEnvironments[].extraPaths=["typings"]`, `.pytest_tmp` exclude, `reportMissingModuleSource=none`를 사용하고, `.vscode/settings.json`도 같은 기준으로 맞췄다.
-- **로컬 stub 보강**: `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance가 같은 결과를 낸다.
+- **로컬 stub 보강**: `typings/PySide6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance가 같은 결과를 낸다.
 - **회귀 기준선**: `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings.
 
 ### v16.14.7 저장소 / 세션 안전성 보강 메모 (2026-04-08)
@@ -653,7 +662,7 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - **푸시 전 (필수 권장)**:
   - `python scripts/install_git_hooks.py` (1회) → `git push` 시 pre-push 가 pyright 실행
   - 수동: `python scripts/check_before_push.py --pyright-only`
-- **GitHub CI** (`.github/workflows/ci.yml`): **pyright fail-fast → pytest** 순서 (Windows, Python 3.15)
+- **GitHub CI** (`.github/workflows/ci.yml`): 주 job은 **pyright fail-fast → pytest** 순서 (Windows, Python 3.15). 별도 `compatibility` matrix가 Windows Python 3.10, ubuntu·macOS Python 3.15에서 소스 호환성 테스트를 실행한다
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과 (기본 in-process smoke·pyright fallback 포함, `*_subprocess` 테스트는 환경에 따라 skip)
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - pyright suppression policy: `tests/test_pyright_suppression_policy.py`가 파일 단위 `# pyright:` directive 재도입을 차단
@@ -724,6 +733,16 @@ os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
 - **revision 저장**: 모든 세션 mutation은 `_session_revision`을 증가시킨다. 비동기 저장 완료는 시작 revision과 현재 revision이 같을 때만 dirty를 해제하며, 다르면 후속 종료/로드 action을 자동 실행하지 않는다.
 - **DB 저장 멱등성**: JSON snapshot header의 `save_operation_id`를 SQLite에도 전달한다. 동일 operation 재시도는 같은 DB 세션을 반환하며 persistence save는 임의 timeout으로 성공/실패를 오판하지 않는다.
 - **resource budget**: 일반 JSON, runtime manifest/segment/tail, salvage, DB hydrate는 `core/resource_budget.py`의 byte/entry 한도를 공유한다. DB row는 `fetchmany()` 기반으로 progress/cancel을 지원한다.
+- 일반 JSON도 bounded chunk reader와 변환 전 entry count 검사를 사용하고, 읽기/역직렬화 중 progress/cancel 및 종료 취소를 지원한다. 표준 JSON parser 실행 중에는 중단하지 않고 완료 후 취소를 확인한다. 완료 큐가 도착한 뒤 취소해도 기존 세션은 유지한다.
+- 일반 segment reader도 missing/skipped/count/digest 오류를 실패로 전달한다. 캐시는 file stat identity가 같을 때만 재사용하고 manifest fingerprint도 대조한다. 부분 복구는 명시적 salvage 경로로 구분한다. JSON 저장은 iterator 최종 count를 atomic replace 전에 검증한다.
+- 실시간 기록 정책: append는 timestamp, 확장은 `+ suffix`, 수정은 `[정정 entry_id] full text`. 변경 없는 관측·timing-only 갱신은 기록/알림을 반복하지 않는다. 수정에서 새로 도입된 알림 키워드만 다시 알린다.
+- updater staged 정리는 smoke/rollback 성공 경계 뒤 best-effort로 처리한다. Windows helper 생성 시 `recover-update-helper-*.cmd`도 미리 기록하며 `--recover-update`는 target이 없을 때만 backup을 복원한다. 기존 EXE를 덮어쓰지 않는다.
+- 추가 범위 감사: archive 검색의 index 0과 렌더 후 선택 영역을 보존한다. Python 검색 offset은 QTextCursor의 UTF-16 단위로 변환해 이모지 뒤 검색/DB focus도 정확하게 선택한다.
+- HWP COM 출력은 같은 디렉터리의 임시 `.hwp`에 저장하고 InsertText/SaveAs 실패·파일 크기를 확인한 뒤 교체한다. Quit 이후 교체하며 실패 시 원본을 보존한다. 한컴 실기기 호환성은 COM fake 회귀와 별개다.
+- 프리셋 추가/수정/삭제/가져오기는 새 사본을 저장하고 실패 시 메모리도 rollback한다. 사용자 프리셋 이름 충돌은 확인한다. `_save_committee_presets()`의 False는 실패이며 성공 알림/메뉴 갱신을 수행하지 않는다.
+- UI 병합은 `_merge_sessions(strict=True)`로 일부 파일/항목만 성공하는 결과를 적용하지 않는다. helper 기본값의 legacy tolerant 모드는 유지하되 resource budget 초과는 항상 실패한다. runtime manifest는 strict 복구 reader를 거친다.
+- background reflow 완료는 source entries identity와 revision을 확인하여 새 편집·세션 교체·수집을 덮어쓰지 않는다. 회귀: `tests/test_additional_audit_20261103.py`.
+- 감사 후속 회귀는 `tests/test_audit_remediation_20261103.py`와 세션/DB 통합 회귀를 CI 및 release verifier의 명시적 gate로 실행한다. 실제 Qt/오프라인 DOM 검증과 legacy fake host 테스트를 함께 유지한다.
 - **입력·Windows 계약**: 저장 중복 가드는 Windows case-insensitive canonical path key를 사용한다. 시작 URL/프리셋/히스토리는 HTTP/HTTPS와 각 기본 포트를 허용하고, 허용 player path·token·전체 길이를 검사한다. 업데이트 artifact URL은 HTTPS만 허용한다. history/preset/live payload도 크기를 제한한다.
 - **preview 복구·진단**: worker sequence gap 발생 시 최신 full DOM snapshot을 적용한다. drop/gap/salvage/reconnect 진단은 `CaptureQualityState`로 JSON/runtime/DB에 보존한다.
 - **복구 UX**: 자동 복구는 단일 최신 파일을 강제하지 않고 유효 후보를 정렬해 사용자 선택을 받는다. 취소와 로드 실패는 현재 세션을 변경하지 않는다.

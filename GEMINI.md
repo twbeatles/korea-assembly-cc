@@ -4,6 +4,14 @@
 
 ## 1. 프로젝트 개요
 
+최신 감사·검증 기준은 [PROJECT_AUDIT.md](PROJECT_AUDIT.md)의 후속 구현 기록을 참고한다. 과거 개별 감사 문서는 Git 이력에 보존하며, 아래 버전별 테스트 수치는 당시 기록이다. 2026-11-03 수정에는 실시간 commit 전달, archive 무결성, 관측 identity, JSON 제한·취소, updater 복구, HWP 원본 보존, 검색 UTF-16, 프리셋 rollback/충돌 확인, stale reflow 거절, strict 병합, 복구 사전검사가 포함된다. 파이프라인 suffix 코어 의미와 배포 버전은 유지한다.
+
+2026-11-05 후속 수정은 파일 선택 후 저장 snapshot·revision·메타데이터 고정, terminal 이전 pending preview 소진, 최종 fallback의 TXT·알림·dirty·tail 갱신, structured row의 snapshot 중복 방지다. `파일 → 백업에서 세션 복구...`는 포인터 없이도 동작하며, 백그라운드 후보 검색에 취소·후보 수·전체 읽기·경로 수 budget을 적용한다. 회귀는 `tests/test_audit_followup_20261105.py`, 파이프라인 계약은 `PIPELINE_LOCK.md`를 따른다. 로컬 전체 pytest는 723 passed / 3 skipped, pyright는 202 files / 0 errors / 0 warnings였다. 실제 중계 장시간 운용·HWP 저장·다른 OS의 원격 CI 결과는 별도 확인한다.
+
+2026-11-08 후속 수정: `preview`·`subtitle_reset`·`reconnected`가 run별 stream sequence를 공유하고, 큐 포화로 경로가 갈려도 gap 뒤 메시지를 보류했다가 sequence 순서로 재적용한다. 큐 처리 순서는 worker 큐 → overflow → coalesced → held이며 재적용은 큐·overflow가 비었을 때만 한다. 큐 포화 뒤 reset이 오래된 preview를 앞질러 확정 발언이 중복되던 문제를 고쳤다. 회귀는 `tests/test_audit_followup_20261108.py`.
+
+2026-11-07 후속 수정: sequence gap 뒤 도착한 preview(완전한 DOM 창)를 버리지 않고 보류했다가 coalesced snapshot과 함께 sequence 순서로 적용하며, 반영된 것보다 오래된 coalesced snapshot은 무시한다. runtime archive `owner.json`은 프로세스 생성 marker를 기록해 PID 재사용을 소유자 종료로 판정한다. legacy `error`/`subtitle_not_found` handler는 `finished`와 같은 종료 finalize를 공유한다. 회귀는 `tests/test_audit_followup_20261107.py`.
+
 - **목표**: 국회 의사중계 웹사이트에서 AI 자막을 실시간으로 추출
 - **버전**: v16.14.17
 - **핵심 가치**: 실시간 자막 캡처, 안정적 멀티스레딩, 모던 UI, SQLite 데이터베이스
@@ -22,7 +30,7 @@
 
 ## 2. 기술 스택
 
-- **언어**: Python 3.10+ (CI 3.15, 로컬 3.10–3.15)
+- **언어**: Python 3.10+ (전체 CI Windows/3.15, 소스 호환성 Windows/3.10·macOS/Linux/3.15; 원격 실행 결과는 별도 확인)
 - **GUI**: PySide6 (Qt)
 - **웹 자동화**: Selenium + Chrome WebDriver
 - **동시성**: threading, bounded `queue.Queue` wrapper (`MainWindowMessageQueue`)
@@ -231,7 +239,7 @@ pip install -r requirements-dev.txt
 ### 8.1 개발 품질 게이트
 - 정적 분석 기준: 루트 `pyrightconfig.json` 기준으로 `pyright` 실행 시 `0 errors` (`requirements-dev.txt` 핀)
 - **푸시 전**: `python scripts/install_git_hooks.py` (1회), `python scripts/check_before_push.py --pyright-only`
-- **CI**: `.github/workflows/ci.yml` — **pyright fail-fast → pytest** (Windows / Python 3.15)
+- **CI**: `.github/workflows/ci.yml` — **pyright fail-fast → pytest** (Windows / Python 3.15), `compatibility` matrix(Windows 3.10, ubuntu·macOS 3.15)
 - 테스트 기준: 루트에서 `pytest -q` 전체 통과
 - pyright 회귀 게이트: `tests/test_pyright_regression.py`가 워크스페이스 전체 `pyright --outputjson` 결과가 `0 errors`인지 확인
 - Import smoke check: `python -c "import ui.main_window as m; print(m.MainWindow.__name__)"`
@@ -474,7 +482,7 @@ pip install -r requirements-dev.txt
 - `pytest -q` 85 pass, `pyright` 0 errors
 
 ## 9.9.4f 의존성 전면 업그레이드 + CI Python 3.15 (2026-10-13)
-- `requirements-dev.txt` 전면 상향: PyQt6 6.11.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다. (Qt 바인딩은 이후 v16.14.13에서 PySide6 6.12.0으로 통일)
+- `requirements-dev.txt` 전면 상향: PySide6 6.12.0, selenium 4.51.0, pytest 9.1.1, pyright 1.1.414, pyinstaller 6.22.3, pywin32 312, cryptography 50.0.2. python-docx 1.2.0은 이미 최신이라 유지한다.
 - cryptography 47+에 Windows ARM64 휠이 없어 ARM64에서 `pip install` 전체가 깨지므로 `platform_machine` 조건 핀(ARM64만 46.0.3)으로 둔다. x64 CI는 50.0.2 휠로 설치된다.
 - CI(`.github/workflows/ci.yml`)를 Python 3.15 단일 버전으로 전환한다. 프로젝트 `.venv` 격리 검증을 기준으로 삼는다.
 - 회귀 기준선: `pytest -q` 486 pass / 2 skipped, `pyright` 0 errors / 0 warnings, `--smoke` 정상.
@@ -506,7 +514,7 @@ pip install -r requirements-dev.txt
 - soft_resync 정합 시 긴 compact 유지, orphan segment/runtime archive 연령 GC
 - 로그 INFO 기본·`safe_log_text`, 종료 중 `_exit_in_progress` 가드
 - hydrate 상한·result_token 전달, 검색 `상위 N건+` UI
-- GitHub Actions CI, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT_EXTENDED.md`
+- GitHub Actions CI, `docs/RELEASE_CHECKLIST.md`, `PROJECT_AUDIT.md` (과거 확장 감사는 Git 이력)
 - 회귀: `pytest -q` 332 pass / 2 skipped, `pyright` 0 errors
 
 ## 9.9.4a v16.14.8 PROJECT_AUDIT 후속 개선 (2026-07-22)
@@ -554,7 +562,7 @@ pip install -r requirements-dev.txt
 - runtime manifest 복구는 best-effort salvage로 동작하며, manifest JSON 손상 시 sibling `segment_*.json` + `tail_checkpoint.json`에서 복구를 시도하고 제외된 파일/항목 수를 사용자 요약에 노출한다.
 - 빈 URL 세션 로드 시 stale `current_url`을 비우고, recovery pointer는 복구 거절/복구 성공 시 즉시 지우지 않으며 성공한 JSON 저장 또는 정상 종료에서만 정리한다.
 - `pyrightconfig.json` / `.vscode/settings.json`은 `typings/`를 `stubPath`/`extraPaths`로 명시하고 `.pytest_tmp`를 분석 범위에서 제외하며, 로컬 stub 환경의 `reportMissingModuleSource` 경고를 끈다.
-- `typings/PyQt6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance에서 동일하게 해석된다.
+- `typings/PySide6/QtNetwork.pyi`를 추가해 `LiveBroadcastDialog`의 `QNetworkAccessManager` 경로까지 CLI `pyright`와 Pylance에서 동일하게 해석된다.
 - 당시 기준선은 `pytest -q` 158 pass, `pyright --outputjson` 0 errors / 0 warnings 이다.
 
 ## 9.9.8 v16.14.7 저장소 / 세션 안전성 보강 (2026-04-08)

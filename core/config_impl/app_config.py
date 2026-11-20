@@ -59,6 +59,10 @@ class Config:
     MESSAGE_QUEUE_MAX_SIZE = 500
     CONTROL_MESSAGE_QUEUE_MAX_SIZE = 200
     OVERFLOW_PASSTHROUGH_MAX = 128
+    # sequence gap 뒤 도착한 stream 메시지(preview/subtitle_reset/reconnected)를 순서대로
+    # 재적용하기 위해 보관하는 상한. 큐·overflow가 비워질 때까지 보관하므로
+    # MESSAGE_QUEUE_MAX_SIZE + OVERFLOW_PASSTHROUGH_MAX 보다 커야 정상 경로에서 드롭이 없다.
+    PREVIEW_HELD_MAX = 1024
     OVERFLOW_DROP_NOTICE_INTERVAL = 30.0
     WORKER_MESSAGE_PUT_TIMEOUT = 1.0
     PREVIEW_DRAIN_MAX_ITEMS = 2000

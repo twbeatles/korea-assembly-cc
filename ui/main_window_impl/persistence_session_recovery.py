@@ -2,9 +2,11 @@
 
 import json
 import uuid
+from PySide6 import QtWidgets
 
-from core.file_io import canonical_path_key
+from core.file_io import canonical_path_key, read_limited_json_file
 from core.recovery_candidates import (
+    RecoveryCandidate,
     discover_recovery_candidates,
     inspect_recovery_candidate,
 )
@@ -20,6 +22,8 @@ from ui.main_window_common import (
     utils,
 )
 from ui.main_window_types import MainWindowHost
+
+QProgressDialog = cast(Any, getattr(QtWidgets, "QProgressDialog"))
 
 
 class MainWindowPersistenceSessionRecoveryMixin(MainWindowHost):
@@ -60,7 +64,11 @@ class MainWindowPersistenceSessionRecoveryMixin(MainWindowHost):
             if not recovery_path.exists():
                 return None
             try:
-                data = json.loads(recovery_path.read_text(encoding="utf-8"))
+                data = read_limited_json_file(
+                    recovery_path,
+                    max_bytes=int(Config.URL_HISTORY_MAX_BYTES),
+                    label="recovery pointer",
+                )
             except Exception as e:
                 logger.warning(f"recovery state 파싱 오류: {e}")
                 self._clear_recovery_state()
@@ -81,28 +89,108 @@ class MainWindowPersistenceSessionRecoveryMixin(MainWindowHost):
             if self._session_load_in_progress or self.is_running:
                 return
 
+            had_pointer = Path(Config.RECOVERY_STATE_FILE).exists()
             recovery_state = self._load_recovery_state()
             if not recovery_state:
-                return
-
-            candidates = []
-            if Path(Config.RECOVERY_STATE_FILE).is_file():
-                candidates = discover_recovery_candidates(
-                    recovery_state_file=Config.RECOVERY_STATE_FILE,
-                    backup_dir=Config.BACKUP_DIR,
-                    runtime_session_dir=Config.RUNTIME_SESSION_DIR,
-                )
-            pointer_path = str(recovery_state.get("path", "") or "").strip()
-            candidate_keys = {canonical_path_key(item.path) for item in candidates}
-            if pointer_path and canonical_path_key(pointer_path) not in candidate_keys:
-                candidates.append(
-                    inspect_recovery_candidate(
-                        pointer_path,
-                        snapshot_type=str(
-                            recovery_state.get("snapshot_type", "session") or "session"
-                        ),
+                if had_pointer:
+                    self._show_toast(
+                        "복구 포인터를 읽을 수 없습니다. 파일 메뉴의 '백업에서 세션 복구'를 사용하세요.",
+                        "warning", 5000,
                     )
-                )
+                return
+            self._start_recovery_scan(recovery_state=recovery_state)
+
+    def _recover_session(self) -> None:
+            """Explicit recovery also works after a missing/corrupt pointer."""
+            if self._is_runtime_mutation_blocked("세션 복구"):
+                return
+            if self._session_load_in_progress or self._block_session_replacement_while_saving("세션 복구"):
+                return
+            self._start_recovery_scan(manual=True)
+
+    def _start_recovery_scan(
+            self, *, recovery_state: dict[str, Any] | None = None,
+            manual: bool = False,
+        ) -> bool:
+            if self.__dict__.get("_recovery_scan_in_progress", False):
+                self._show_toast("복구 후보를 검색하고 있습니다.", "info")
+                return False
+            if self._is_background_shutdown_active():
+                return False
+            token = uuid.uuid4().hex
+            cancelled = threading.Event()
+            dialog = QProgressDialog("복구 후보 검색 중...", "취소", 0, 0, self)
+            dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            dialog.canceled.connect(cancelled.set)
+            self._recovery_scan_token = token
+            self._recovery_scan_in_progress = True
+            self._recovery_scan_cancel = cancelled
+            self._recovery_scan_dialog = dialog
+            paths = dict(recovery_state_file=Config.RECOVERY_STATE_FILE,
+                         backup_dir=Config.BACKUP_DIR,
+                         runtime_session_dir=Config.RUNTIME_SESSION_DIR)
+            def worker() -> None:
+                result: dict[str, Any] = {"token": token, "manual": manual,
+                                          "state": dict(recovery_state or {})}
+                try:
+                    result["candidates"] = discover_recovery_candidates(
+                        recovery_state_file=paths["recovery_state_file"],
+                        backup_dir=paths["backup_dir"],
+                        runtime_session_dir=paths["runtime_session_dir"],
+                        cancel_check=lambda: cancelled.is_set() or self._is_background_shutdown_active(),
+                        progress=lambda count: self._emit_control_message(
+                            "recovery_scan_progress", {"token": token, "count": count}),
+                    )
+                except Exception as exc:
+                    result["error"] = str(exc)
+                self._emit_control_message("recovery_scan_done", result)
+            if not self._start_background_thread(worker, "RecoveryScanWorker"):
+                self._recovery_scan_in_progress = False
+                self._recovery_scan_token = None
+                self._recovery_scan_dialog = None
+                dialog.close()
+                dialog.deleteLater()
+                return False
+            dialog.show()
+            return True
+
+    def _handle_recovery_scan_progress(self, payload: dict[str, Any]) -> None:
+            if payload.get("token") != self.__dict__.get("_recovery_scan_token"):
+                return
+            dialog = self.__dict__.get("_recovery_scan_dialog")
+            if dialog is not None:
+                dialog.setLabelText(f"복구 후보 {payload.get('count', 0)}개 확인 중...")
+
+    def _handle_recovery_scan_done(self, payload: dict[str, Any]) -> None:
+            if not self.__dict__.get("_recovery_scan_in_progress", False) or (
+                payload.get("token") != self.__dict__.get("_recovery_scan_token")
+            ):
+                return
+            self._recovery_scan_in_progress = False
+            self._recovery_scan_token = None
+            cancelled = self.__dict__.get("_recovery_scan_cancel")
+            was_cancelled = cancelled is not None and cancelled.is_set()
+            dialog = self.__dict__.get("_recovery_scan_dialog")
+            self._recovery_scan_dialog = None
+            if dialog is not None:
+                dialog.close()
+                dialog.deleteLater()
+            if was_cancelled or self._is_background_shutdown_active():
+                return
+            if payload.get("error"):
+                self._show_toast(f"복구 후보 검색 실패: {payload['error']}", "warning", 5000)
+                return
+            if self.is_running or self._session_load_in_progress:
+                return
+            self._present_recovery_candidates(
+                payload.get("candidates", []), payload.get("state", {}),
+                manual=bool(payload.get("manual", False)),
+            )
+
+    def _present_recovery_candidates(
+            self, candidates: list[RecoveryCandidate], recovery_state: dict[str, Any],
+            *, manual: bool = False,
+        ) -> None:
             usable_candidates = [
                 candidate for candidate in candidates if candidate.integrity != "invalid"
             ]
@@ -131,6 +219,9 @@ class MainWindowPersistenceSessionRecoveryMixin(MainWindowHost):
                     "사용 가능한 세션 복구본이 없습니다.",
                     toast=False,
                 )
+                return
+            else:
+                self._show_toast("사용 가능한 세션 복구본이 없습니다.", "info")
                 return
 
             snapshot_path = str(recovery_state.get("path", "") or "")
@@ -165,15 +256,17 @@ class MainWindowPersistenceSessionRecoveryMixin(MainWindowHost):
             reply = QMessageBox.question(
                 self,
                 "세션 복구",
-                "이전에 정상 종료되지 않은 것으로 보입니다.\n"
+                ("백업에서 세션을 복구합니다.\n" if manual else "이전에 정상 종료되지 않은 것으로 보입니다.\n") +
                 f"최신 {description}을 복구하시겠습니까?\n"
                 f"파일: {snapshot_path}{created_suffix}{detail}{priority_hint}",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
-            self._start_session_load_from_path(
-                snapshot_path,
-                mark_dirty=True,
-                recovery=True,
-            )
+            def load() -> None:
+                self._start_session_load_from_path(
+                    snapshot_path, mark_dirty=True, recovery=True,
+                )
+            if self.is_running or self._session_load_in_progress or self._is_background_shutdown_active():
+                return
+            self._run_after_dirty_session_action("세션 복구", load)

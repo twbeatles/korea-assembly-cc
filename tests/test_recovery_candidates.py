@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
+from typing import Any
 
 from core.recovery_candidates import discover_recovery_candidates
+from core.recovery_candidates import inspect_recovery_candidate
+from core.config import Config
+import pytest
 from ui.dialogs import RecoveryCandidateDialog
 from PySide6.QtWidgets import QApplication
 
@@ -120,3 +124,53 @@ def test_recovery_dialog_selects_only_non_invalid_candidate(tmp_path) -> None:
     assert dialog.selected_candidate.integrity != "invalid"
     dialog.deleteLater()
     app.processEvents()
+
+
+@pytest.mark.parametrize("resource", ["tail_checkpoint", "segment"])
+@pytest.mark.parametrize("absolute", [False, True])
+def test_recovery_inspection_rejects_resources_outside_archive(
+    tmp_path, monkeypatch, resource, absolute
+) -> None:
+    from core import recovery_candidates
+
+    root = tmp_path / "archive"
+    root.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"entry_count": 25}', encoding="utf-8")
+    name = str(outside) if absolute else "../outside.json"
+    manifest = root / "manifest.json"
+    payload = {"format": "runtime_session_manifest_v1", "segments": []}
+    if resource == "segment":
+        payload["segments"] = [{"path": name, "entry_count": 25}]
+    else:
+        payload["tail_checkpoint"] = name
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    reads = []
+    original = recovery_candidates.read_limited_json_file
+
+    def recorded_read(path, **kwargs):
+        reads.append(path.resolve())
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(recovery_candidates, "read_limited_json_file", recorded_read)
+    candidate = inspect_recovery_candidate(manifest)
+    assert candidate.integrity == "invalid"
+    assert outside.resolve() not in reads
+
+
+def test_recovery_pointer_respects_size_limit(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+    from ui.main_window_impl.persistence_session_recovery import (
+        MainWindowPersistenceSessionRecoveryMixin,
+    )
+
+    session = tmp_path / "session.json"
+    session.write_text('{}', encoding="utf-8")
+    pointer = tmp_path / "recovery.json"
+    pointer.write_text(json.dumps({"path": str(session), "padding": "x" * 256}), encoding="utf-8")
+    monkeypatch.setattr(Config, "RECOVERY_STATE_FILE", pointer)
+    monkeypatch.setattr(Config, "URL_HISTORY_MAX_BYTES", 64)
+    cleared = []
+    host: Any = SimpleNamespace(_clear_recovery_state=lambda: cleared.append(True))
+    assert MainWindowPersistenceSessionRecoveryMixin._load_recovery_state(host) is None
+    assert cleared == [True]

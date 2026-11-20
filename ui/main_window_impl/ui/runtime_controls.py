@@ -54,7 +54,24 @@ class MainWindowUIRuntimeControlsMixin(MainWindowHost):
                 return ""
             h, r = divmod(max(0, elapsed), 3600)
             m, sec = divmod(r, 60)
-            return f"{count:,}문장 · {chars:,}자 · {h:02d}:{m:02d}:{sec:02d}"
+            summary = f"{count:,}문장 · {chars:,}자 · {h:02d}:{m:02d}:{sec:02d}"
+            drops = self._get_capture_run_queue_drops()
+            if drops > 0:
+                summary += f" · ⚠ 내부 큐 포화로 메시지 {drops:,}건 드롭(일부 자막 누락 가능)"
+            return summary
+
+    def _get_capture_run_queue_drops(self) -> int:
+            """이번 수집 run 동안 늘어난 queue_drops 수 (세션 누적값에서 시작 기준을 뺀다)."""
+            try:
+                total = int(
+                    self._get_capture_quality_payload().get("queue_drops", 0) or 0
+                )
+            except Exception:
+                return 0
+            baseline = int(
+                self.__dict__.get("_capture_run_queue_drops_baseline", total) or 0
+            )
+            return max(0, total - baseline)
 
     def _reset_ui(self):
             self.is_running = False

@@ -49,6 +49,9 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 return True
             if bool(self.__dict__.get("_coalesced_worker_messages", {})):
                 return True
+            held = self.__dict__.get("_preview_held_by_run")
+            if isinstance(held, dict) and any(bool(items) for items in held.values()):
+                return True
             control_queue = self.__dict__.get("app_control_queue")
             control_qsize = getattr(control_queue, "qsize", None)
             if callable(control_qsize) and int(cast(Any, control_qsize)()) > 0:
@@ -183,6 +186,21 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
             logger.info("세션 불러오기 완료: created_at=%s", created_at)
         return True
 
+    def _finalize_terminal_capture_state(self) -> None:
+        """Shared worker-terminal finalize: pending fallback, timing, legacy buffer."""
+        self._cancel_scheduled_subtitle_reset()
+        self._materialize_pending_preview()
+        finalize_session(
+            self.capture_state,
+            datetime.now(),
+            self._current_capture_settings(),
+        )
+        self._sync_capture_state_entries(force_refresh=False)
+        if self.last_subtitle:
+            self._finalize_subtitle(self.last_subtitle)
+            self.last_subtitle = ""
+            self._stream_start_time = None
+
     def _process_message_queue(self):
         """메시지 큐 처리 (100ms마다 호출) - 예외 처리 강화"""
         try:
@@ -193,10 +211,11 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 processed += self._drain_terminal_worker_messages(
                     max_items=50,
                 )
-            if processed < 50 and time.perf_counter() <= deadline:
-                processed += self._drain_overflow_passthrough_items(
-                    max_items=50 - processed,
-                )
+            # Order: worker queue → overflow → coalesced → held. Overflow and
+            # coalesced items were stashed while the queue was full, so they
+            # are newer than what is still queued; draining them first would
+            # let a reset overtake older previews (ordered by shared sequence).
+            worker_queue_exhausted = False
             while processed < 50 and time.perf_counter() <= deadline:
                 drained_control = False
                 control_queue = self.__dict__.get("app_control_queue")
@@ -220,17 +239,39 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     self._handle_message(msg_type, data)
                     processed += 1
                 except queue.Empty:
+                    worker_queue_exhausted = True
                     break
+            if not worker_queue_exhausted:
+                worker_queue_exhausted = self._is_worker_queue_empty()
+            if (
+                worker_queue_exhausted
+                and processed < 50
+                and time.perf_counter() <= deadline
+            ):
+                processed += self._drain_overflow_passthrough_items(
+                    max_items=50 - processed,
+                )
             remaining_budget = max(0, 50 - processed)
             if remaining_budget > 0 and time.perf_counter() <= deadline:
                 processed += self._drain_coalesced_control_messages(
                     max_items=remaining_budget,
                 )
+            stream_backlog_clear = (
+                worker_queue_exhausted and not self._has_overflow_stream_messages()
+            )
             remaining_budget = max(0, 50 - processed)
-            if remaining_budget > 0 and time.perf_counter() <= deadline:
+            if (
+                stream_backlog_clear
+                and remaining_budget > 0
+                and time.perf_counter() <= deadline
+            ):
                 processed += self._drain_coalesced_worker_messages(
                     max_items=remaining_budget,
                 )
+            # Out-of-order stream messages are held for ordered replay. Apply
+            # them once nothing older can still be waiting in queue/overflow.
+            if stream_backlog_clear:
+                self._drain_held_previews()
             if self._has_pending_message_backlog():
                 self._schedule_followup_message_queue_drain()
         except Exception as e:
@@ -239,6 +280,18 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
     def _handle_message(self, msg_type, data):
         pipeline_mod = _pipeline_public()
         try:
+            # Terminal delivery is a barrier for the active run's data, even
+            # when it bypassed the full worker queue. Keep the run alive until
+            # normal, overflow and coalesced previews have reached the state.
+            if msg_type in {"finished", "error", "subtitle_not_found"} and (
+                self.__dict__.get("message_queue") is not None
+            ):
+                was_stopping = self._is_stopping
+                self._is_stopping = True
+                try:
+                    self._drain_pending_previews(requeue_others=True)
+                finally:
+                    self._is_stopping = was_stopping
             # stop 중에도 finished/error는 멱등 흡수한다(큐에서 dequeue 후 유실 방지).
             if self._is_stopping and msg_type not in (
                 "db_task_result",
@@ -252,8 +305,12 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 "session_save_done",
                 "session_save_failed",
                 "session_load_done",
+                "session_load_cancelled",
+                "session_load_progress",
                 "session_load_failed",
                 "session_load_json_error",
+                "recovery_scan_done",
+                "recovery_scan_progress",
             ):
                 return
             if msg_type == "preview" and isinstance(data, dict):
@@ -326,6 +383,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     self._retire_capture_run()
                     self.worker = None
                     return
+                self._finalize_terminal_capture_state()
                 self._retire_capture_run()
                 self.worker = None
                 self.progress.hide()
@@ -357,18 +415,7 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self._retire_capture_run()
                 self.worker = None
                 if finalize_preview:
-                    self._cancel_scheduled_subtitle_reset()
-                    self._materialize_pending_preview()
-                    finalize_session(
-                        self.capture_state,
-                        datetime.now(),
-                        self._current_capture_settings(),
-                    )
-                    self._sync_capture_state_entries(force_refresh=False)
-                    if self.last_subtitle:
-                        self._finalize_subtitle(self.last_subtitle)
-                        self.last_subtitle = ""
-                        self._stream_start_time = None
+                    self._finalize_terminal_capture_state()
                 self._clear_preview()
                 self._reset_ui()
                 self._update_tray_status("⚪ 대기 중")
@@ -384,6 +431,12 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                     f"수집 완료 — {summary}" if summary else "수집 완료",
                     "success",
                 )
+
+            elif msg_type == "recovery_scan_done":
+                self._handle_recovery_scan_done(data)
+
+            elif msg_type == "recovery_scan_progress":
+                self._handle_recovery_scan_progress(data)
 
             elif msg_type == "session_save_done":
                 self._session_save_in_progress = False
@@ -443,14 +496,17 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 pipeline_mod.QMessageBox.critical(self, "오류", f"세션 저장 실패: {err}")
 
             elif msg_type == "session_load_done":
-                self._session_load_in_progress = False
+                if self._finish_session_load():
+                    self._set_status("세션 불러오기를 취소했습니다.", "warning")
+                    return
                 payload = data if isinstance(data, dict) else {}
                 if not self._complete_loaded_session(payload):
                     if not payload.get("_cancelled"):
                         self._set_status("세션 불러오기 실패", "error")
 
             elif msg_type == "session_load_json_error":
-                self._session_load_in_progress = False
+                if self._finish_session_load():
+                    return
                 info = data if isinstance(data, dict) else {}
                 path = str(info.get("path", ""))
                 err = str(info.get("error", "JSON 파싱 오류"))
@@ -488,14 +544,32 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
                 self._set_status("세션 불러오기 실패 (JSON 오류)", "error")
 
             elif msg_type == "session_load_failed":
-                self._session_load_in_progress = False
+                if self._finish_session_load():
+                    return
                 err = data.get("error") if isinstance(data, dict) else str(data)
                 self._set_status(f"세션 불러오기 실패: {err}", "error")
                 pipeline_mod.QMessageBox.critical(self, "오류", f"불러오기 실패: {err}")
 
+            elif msg_type == "session_load_progress":
+                self._handle_session_load_progress(data if isinstance(data, dict) else {})
+
+            elif msg_type == "session_load_cancelled":
+                self._finish_session_load()
+                self._set_status("세션 불러오기를 취소했습니다.", "warning")
+
             elif msg_type == "reflow_done":
                 self._reflow_in_progress = False
                 payload = data if isinstance(data, dict) else {}
+                source_entries = self.__dict__.get("_reflow_source_entries")
+                self._reflow_source_entries = None
+                if "snapshot_revision" in payload and (
+                    self.is_running
+                    or source_entries is not self.__dict__.get("subtitles")
+                    or int(payload["snapshot_revision"]) != self._get_session_revision()
+                ):
+                    self._set_status("자막이 변경되어 이전 줄넘김 정리 결과를 적용하지 않았습니다.", "warning")
+                    self._show_toast("자막이 변경되었습니다. 줄넘김 정리를 다시 실행하세요.", "warning")
+                    return
                 new_subtitles = payload.get("subtitles", [])
                 old_count = int(payload.get("old_count", len(self.subtitles)) or 0)
                 if not isinstance(new_subtitles, list) or not new_subtitles:
@@ -515,11 +589,17 @@ class MainWindowPipelineMessagesMixin(PipelineMessagesBase):
 
             elif msg_type == "reflow_failed":
                 self._reflow_in_progress = False
+                self._reflow_source_entries = None
                 err = data.get("error") if isinstance(data, dict) else str(data)
                 self._set_status(f"줄넘김 정리 실패: {err}", "error")
                 self._show_toast(f"줄넘김 정리 실패: {err}", "error", 4000)
 
             elif msg_type == "subtitle_not_found":
+                if bool(self.__dict__.get("_is_stopping", False)):
+                    self._retire_capture_run()
+                    self.worker = None
+                    return
+                self._finalize_terminal_capture_state()
                 self._retire_capture_run()
                 self.worker = None
                 self.progress.hide()

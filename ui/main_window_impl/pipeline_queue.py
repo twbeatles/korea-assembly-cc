@@ -35,6 +35,11 @@ TERMINAL_WORKER_MESSAGE_TYPES = {
     "finished",
     "subtitle_not_found",
 }
+# Capture-data messages whose relative order matters. They share one run-scoped
+# sequence so a reset can never overtake an older preview (and vice versa) when
+# queue saturation sends them through different paths (queue/overflow/coalesced).
+# keepalive only extends the last entry's end_time and stays unsequenced.
+ORDERED_STREAM_MESSAGE_TYPES = frozenset({"preview", "subtitle_reset", "reconnected"})
 COALESCED_WORKER_MESSAGE_ORDER = (
     "resolved_url",
     "status",
@@ -45,6 +50,8 @@ COALESCED_WORKER_MESSAGE_ORDER = (
     "keepalive",
 )
 COALESCED_CONTROL_MESSAGE_TYPES = {
+    "recovery_scan_done",
+    "recovery_scan_progress",
     "db_task_error",
     "db_task_result",
     "hydrate_cancelled",
@@ -59,6 +66,8 @@ COALESCED_CONTROL_MESSAGE_TYPES = {
     "runtime_segment_flush_done",
     "runtime_segment_flush_failed",
     "session_load_done",
+    "session_load_progress",
+    "session_load_cancelled",
     "session_load_failed",
     "session_load_json_error",
     "session_save_done",
@@ -103,36 +112,225 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         self._preview_awaiting_full_snapshot_runs = awaiting
 
     def _accept_preview_sequence(self, item: WorkerQueueMessage) -> bool:
+        """Accept in-order stream messages; hold out-of-order ones for replay.
+
+        `preview`, `subtitle_reset` and `reconnected` share one run-scoped
+        sequence (ORDERED_STREAM_MESSAGE_TYPES). Every worker preview is a
+        complete DOM-window probe, so a message that arrives after a sequence
+        gap is still part of the newest observed state. It is held (not
+        dropped) and applied in sequence order together with any coalesced
+        message by `_drain_held_previews`. A reset therefore never overtakes an
+        older preview that was coalesced, held or still queued.
+        """
         sequence = item.sequence
         if sequence is None:
             return True
         run_id = int(item.run_id)
+        msg_type = str(item.msg_type or "preview")
         payload = item.payload if isinstance(item.payload, dict) else {}
-        is_full_snapshot = bool(payload.get("full_snapshot", False))
+        is_full_snapshot = msg_type == "preview" and bool(
+            payload.get("full_snapshot", False)
+        )
         received = dict(
             self.__dict__.get("_preview_last_received_sequence_by_run", {})
         )
         previous = int(received.get(run_id, 0))
-        if is_full_snapshot:
+        if int(sequence) <= previous:
+            if msg_type != "preview":
+                logger.info(
+                    "이미 반영한 sequence 이후 도착한 %s 무시: seq=%s last=%s",
+                    msg_type,
+                    sequence,
+                    previous,
+                )
+            return False
+        if self._has_held_previews(run_id):
+            # Keep strict order behind messages already waiting for replay.
+            self._hold_out_of_order_preview(
+                run_id, int(sequence), item.payload, msg_type=msg_type
+            )
+            return False
+        if int(sequence) == previous + 1:
             received[run_id] = int(sequence)
             self._preview_last_received_sequence_by_run = received
-            awaiting = set(
-                self.__dict__.get("_preview_awaiting_full_snapshot_runs", set())
-            )
-            awaiting.discard(run_id)
-            self._preview_awaiting_full_snapshot_runs = awaiting
+            if is_full_snapshot:
+                self._clear_preview_awaiting_full_snapshot(run_id)
             return True
-        if int(sequence) <= previous:
+        if is_full_snapshot and not self._has_stashed_stream_messages(run_id):
+            # Resync snapshot after a gap whose missing messages are gone for
+            # good (overwritten coalesced previews): nothing older can arrive.
+            received[run_id] = int(sequence)
+            self._preview_last_received_sequence_by_run = received
+            self._clear_preview_awaiting_full_snapshot(run_id)
+            return True
+        self._mark_preview_resync_requested(run_id)
+        increment = getattr(type(self), "_increment_capture_quality", None)
+        if callable(increment):
+            increment(self, "preview_gaps")
+        self._hold_out_of_order_preview(
+            run_id, int(sequence), item.payload, msg_type=msg_type
+        )
+        return False
+
+    def _clear_preview_awaiting_full_snapshot(self, run_id: int) -> None:
+        awaiting = set(
+            self.__dict__.get("_preview_awaiting_full_snapshot_runs", set())
+        )
+        awaiting.discard(int(run_id))
+        self._preview_awaiting_full_snapshot_runs = awaiting
+
+    def _has_stashed_stream_messages(self, run_id: int) -> bool:
+        """True when an ordered stream message of the run waits outside the queue."""
+        lock = getattr(self, "_worker_message_lock", None)
+        pending = getattr(self, "_coalesced_worker_messages", None)
+        if isinstance(pending, dict):
+            keys = [(int(run_id), msg_type) for msg_type in ORDERED_STREAM_MESSAGE_TYPES]
+            if lock is not None:
+                with lock:
+                    if any(key in pending for key in keys):
+                        return True
+            elif any(key in pending for key in keys):
+                return True
+        return self._has_overflow_stream_messages(run_id)
+
+    def _has_overflow_stream_messages(self, run_id: int | None = None) -> bool:
+        """True when a sequenced stream message of the run waits in overflow."""
+        if run_id is None:
+            active_run_id = self.__dict__.get("_active_capture_run_id")
+            if active_run_id is None:
+                return False
+            run_id = int(active_run_id)
+        overflow_lock = self.__dict__.get("_overflow_passthrough_lock")
+        overflow = self.__dict__.get("_overflow_passthrough_messages")
+        if not isinstance(overflow, list) or not overflow:
             return False
-        if previous and int(sequence) != previous + 1:
-            self._mark_preview_resync_requested(run_id)
-            increment = getattr(type(self), "_increment_capture_quality", None)
-            if callable(increment):
-                increment(self, "preview_gaps")
+
+        def _matches(item: object) -> bool:
+            return (
+                isinstance(item, WorkerQueueMessage)
+                and int(item.run_id) == int(run_id)
+                and item.msg_type in ORDERED_STREAM_MESSAGE_TYPES
+                and item.sequence is not None
+            )
+
+        if overflow_lock is not None:
+            with overflow_lock:
+                return any(_matches(item) for item in overflow)
+        return any(_matches(item) for item in overflow)
+
+    def _held_preview_map(self) -> dict[int, list[tuple[float, str, Any]]]:
+        held = self.__dict__.get("_preview_held_by_run")
+        if not isinstance(held, dict):
+            held = {}
+            self._preview_held_by_run = held
+        return held
+
+    def _has_held_previews(self, run_id: int | None = None) -> bool:
+        held = self.__dict__.get("_preview_held_by_run")
+        if not isinstance(held, dict):
             return False
-        received[run_id] = int(sequence)
-        self._preview_last_received_sequence_by_run = received
-        return True
+        if run_id is None:
+            return any(bool(items) for items in held.values())
+        return bool(held.get(int(run_id)))
+
+    def _hold_out_of_order_preview(
+        self,
+        run_id: int,
+        sequence: float,
+        payload: Any,
+        *,
+        msg_type: str = "preview",
+    ) -> None:
+        items = self._held_preview_map().setdefault(int(run_id), [])
+        if any(existing == sequence for existing, _type, _payload in items):
+            return
+        items.append((float(sequence), str(msg_type), payload))
+        items.sort(key=lambda entry: entry[0])
+        overflow = len(items) - max(1, int(Config.PREVIEW_HELD_MAX))
+        if overflow > 0:
+            del items[:overflow]
+            record = getattr(type(self), "_record_overflow_drop", None)
+            if callable(record):
+                record(self, overflow, reason="held_stream_trim")
+
+    def _pop_coalesced_stream_messages_for_run(
+        self, run_id: int
+    ) -> list[tuple[str, Any]]:
+        lock = getattr(self, "_worker_message_lock", None)
+        if lock is None:
+            return []
+        collected: list[tuple[str, Any]] = []
+        with lock:
+            pending = getattr(self, "_coalesced_worker_messages", {})
+            for msg_type in COALESCED_WORKER_MESSAGE_ORDER:
+                if msg_type not in ORDERED_STREAM_MESSAGE_TYPES:
+                    continue
+                key = (int(run_id), msg_type)
+                if key in pending:
+                    collected.append((msg_type, pending.pop(key)))
+        return collected
+
+    @staticmethod
+    def _coalesced_stream_sequence(payload: Any) -> float:
+        sequence = payload.get("worker_sequence") if isinstance(payload, dict) else None
+        if sequence is None:
+            return float("inf")
+        try:
+            return float(sequence)
+        except (TypeError, ValueError):
+            return float("inf")
+
+    def _drain_held_previews(
+        self,
+        handler: Callable[[str, Any], object] | None = None,
+    ) -> int:
+        """Apply held stream messages (plus pending coalesced ones) in sequence order.
+
+        Callers must only invoke this once every older queued/overflow message
+        of the run has been seen; otherwise a newer held message would be
+        applied before an older one that is still in the queue.
+        """
+        active_run_id = self.__dict__.get("_active_capture_run_id")
+        if active_run_id is None or not self._has_held_previews(int(active_run_id)):
+            return 0
+        run_id = int(active_run_id)
+        for msg_type, payload in self._pop_coalesced_stream_messages_for_run(run_id):
+            self._hold_out_of_order_preview(
+                run_id,
+                self._coalesced_stream_sequence(payload),
+                payload,
+                msg_type=msg_type,
+            )
+        items = self._held_preview_map().pop(run_id, [])
+        drain_handler = handler or self._process_preview_queue_message
+        received = dict(
+            self.__dict__.get("_preview_last_received_sequence_by_run", {})
+        )
+        previous = float(received.get(run_id, 0))
+        applied = 0
+        for sequence, msg_type, payload in items:
+            if sequence != float("inf"):
+                if sequence <= previous:
+                    continue
+                previous = sequence
+                received[run_id] = int(sequence)
+                self._preview_last_received_sequence_by_run = dict(received)
+            if (
+                msg_type == "preview"
+                and isinstance(payload, dict)
+                and payload.get("full_snapshot")
+            ):
+                self._clear_preview_awaiting_full_snapshot(run_id)
+            try:
+                handled = drain_handler(msg_type, payload)
+                if handled is False:
+                    # Stream handlers only cover capture data; route the rest
+                    # (e.g. reconnected) through the general message handler.
+                    self._handle_message(msg_type, payload)
+            except Exception as exc:
+                logger.error("보류 %s 적용 오류: %s", msg_type, exc)
+            applied += 1
+        return applied
 
     def _ensure_overflow_passthrough_state(self) -> None:
         state = getattr(self, "__dict__", {})
@@ -262,8 +460,9 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             run_id if run_id is not None else self._ensure_active_capture_run()
         )
         sequence: int | None = None
-        if str(msg_type) == "preview":
+        if str(msg_type) in ORDERED_STREAM_MESSAGE_TYPES:
             sequence = self._next_preview_sequence(int(resolved_run_id))
+        if str(msg_type) == "preview":
             requested = set(
                 self.__dict__.get("_preview_resync_requested_runs", set())
             )
@@ -308,6 +507,9 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
                 data = dict(data)
                 data["full_snapshot"] = True
                 data["worker_sequence"] = sequence
+            elif msg_type in ORDERED_STREAM_MESSAGE_TYPES and isinstance(data, dict):
+                data = dict(data)
+                data["worker_sequence"] = sequence
             self._coalesced_worker_messages[(int(resolved_run_id), str(msg_type))] = data
             self._ensure_queue_backpressure_state()
             self._worker_message_coalesce_total = int(
@@ -324,7 +526,10 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         if isinstance(item, WorkerQueueMessage):
             if not self._is_active_capture_run(item.run_id):
                 return None
-            if item.msg_type == "preview" and not self._accept_preview_sequence(item):
+            if (
+                item.msg_type in ORDERED_STREAM_MESSAGE_TYPES
+                and not self._accept_preview_sequence(item)
+            ):
                 return None
             return item.msg_type, item.payload
         if isinstance(item, tuple) and len(item) == 2:
@@ -466,6 +671,31 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
             processed += 1
         return processed
 
+    def _is_worker_queue_empty(self) -> bool:
+        qsize = getattr(self.__dict__.get("message_queue"), "qsize", None)
+        if not callable(qsize):
+            return True
+        try:
+            size: Any = qsize()
+            return int(size) <= 0
+        except Exception:
+            return True
+
+    @staticmethod
+    def _as_requeueable(item: object) -> object:
+        """Strip the stream sequence of an already accepted message before requeue.
+
+        A requeued message was already counted by `_accept_preview_sequence`;
+        unwrapping it again with its sequence would drop it as a duplicate.
+        """
+        if (
+            isinstance(item, WorkerQueueMessage)
+            and item.sequence is not None
+            and item.msg_type in ORDERED_STREAM_MESSAGE_TYPES
+        ):
+            return WorkerQueueMessage(item.run_id, item.msg_type, item.payload, None)
+        return item
+
     def _pop_overflow_passthrough_items(self, *, max_items: int) -> list[object]:
         if max_items <= 0:
             return []
@@ -493,7 +723,7 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
                 continue
             msg_type, data = decoded
             if allowed_types is not None and msg_type not in allowed_types:
-                requeue.append(raw_item)
+                requeue.append(self._as_requeueable(raw_item))
                 continue
             drain_handler(msg_type, data)
             processed += 1
@@ -577,13 +807,45 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         handler: Callable[[str, Any], None] | None = None,
     ) -> int:
         processed = 0
+        held_any = False
         drain_handler = handler or self._handle_message
         for msg_type, data in self._pop_coalesced_worker_messages(
             max_items=max_items,
             allowed_types=allowed_types,
         ):
+            active_run_id = self.__dict__.get("_active_capture_run_id")
+            sequence = data.get("worker_sequence") if isinstance(data, dict) else None
+            if (
+                msg_type in ORDERED_STREAM_MESSAGE_TYPES
+                and active_run_id is not None
+                and (msg_type == "preview" or sequence is not None)
+            ):
+                # Coalesced stream messages carry worker_sequence. Order them
+                # with held out-of-order messages; never let an older one win.
+                received = self.__dict__.get(
+                    "_preview_last_received_sequence_by_run", {}
+                )
+                if (
+                    sequence is not None
+                    and int(sequence) <= int(received.get(int(active_run_id), 0))
+                ):
+                    processed += 1
+                    continue
+                # Hold first; replay once after every popped item is held so a
+                # coalesced reconnected/preview pair is applied in sequence order.
+                self._hold_out_of_order_preview(
+                    int(active_run_id),
+                    self._coalesced_stream_sequence(data),
+                    data,
+                    msg_type=msg_type,
+                )
+                held_any = True
+                processed += 1
+                continue
             drain_handler(msg_type, data)
             processed += 1
+        if held_any:
+            self._drain_held_previews(handler=drain_handler)
         return processed
 
     def _clear_message_queue(self, *, preserve_control_messages: bool = True) -> None:
@@ -597,6 +859,9 @@ class MainWindowPipelineQueueMixin(PipelineQueueBase):
         if lock is not None:
             with lock:
                 getattr(self, "_coalesced_worker_messages", {}).clear()
+        held = self.__dict__.get("_preview_held_by_run")
+        if isinstance(held, dict):
+            held.clear()
         self._ensure_control_message_state()
         if not preserve_control_messages:
             control_queue = self.__dict__.get("app_control_queue")
